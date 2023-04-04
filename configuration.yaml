@@ -1,0 +1,23 @@
+automation:
+config:
+energy:
+frontend:
+history:
+logbook:
+zone:
+
+#demo:
+
+logger:
+  default: info
+  logs:
+#    custom_components.givenergy: debug
+#    givenergy_modbus: debug
+#    givenergy_modbus.client.client: debug
+#    givenergy_modbus.framer: info
+#    givenergy_modbus.model: info
+#    givenergy_modbus.model.plant: debug
+#    homeassistant.config_entries: debug
+    homeassistant.setup: warning
+    homeassistant.loader: warning
+

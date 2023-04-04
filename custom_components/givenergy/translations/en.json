@@ -1,0 +1,51 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "description": "If you need help with the configuration have a look here: https://github.com/dewet22/givenergy-hass",
+                "data": {
+                    "host": "Hostname or IP address",
+                    "port": "Port",
+                    "refresh_interval": "Refresh interval for fast-moving data (seconds)",
+                    "full_refresh_interval": "Refresh interval for other data (minutes)"
+                }
+            }
+        },
+        "error": {
+            "connection": "Unable to connect to the device.",
+            "unknown": "Unknown error occurred."
+        }
+    },
+    "entity": {
+        "sensor": {
+            "inverter_status": {
+                "name": "Inverter status",
+                "state": {
+                    "0": "Waiting",
+                    "1": "Normal",
+                    "2": "Warning",
+                    "3": "Fault",
+                    "4": "Flashing firmware"
+                }
+            },
+            "charge_status": {
+                "name": "Charge status",
+                "state": {
+                    "0": "zero",
+                    "1": "one",
+                    "2": "Charging?",
+                    "3": "three",
+                    "4": "four",
+                    "5": "Discharging?"
+                }
+            },
+            "system_mode": {
+                "name": "System mode",
+                "state": {
+                    "0": "Offline",
+                    "1": "Grid-tied"
+                }
+            }
+        }
+    }
+}

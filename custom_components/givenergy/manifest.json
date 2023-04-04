@@ -1,0 +1,14 @@
+{
+  "domain": "givenergy",
+  "name": "GivEnergy",
+  "codeowners": [
+    "@dewet22"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/dewet22/givenergy-hass",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/dewet22/givenergy-hass/issues",
+  "requirements":[],
+  "version": "0.0.1"
+}
