@@ -29,13 +29,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up this integration using UI."""
     hass.data.setdefault(DOMAIN, {})
     client = Client(host=entry.data[CONF_HOST], port=entry.data[CONF_PORT])
-    await client.connect()
 
     hass.data[DOMAIN][entry.entry_id] = coordinator = GivEnergyCoordinator(
         hass=hass,
         client=client,
-        # update_interval=timedelta(seconds=entry.data.get('CONF_REFRESH_INTERVAL', 30)),
-        update_interval=timedelta(seconds=10),
+        update_interval=timedelta(seconds=entry.data.get('CONF_REFRESH_INTERVAL', 10)),
         full_refresh_interval=timedelta(minutes=entry.data.get('CONF_FULL_REFRESH_INTERVAL', 60)),
     )
     # https://developers.home-assistant.io/docs/integration_fetching_data#coordinated-single-api-poll-for-data-for-all-entities
@@ -49,9 +47,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Handle removal of an entry."""
-    if unloaded := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        await hass.data[DOMAIN].pop(entry.entry_id).close()
-    return unloaded
+    await hass.data[DOMAIN].pop(entry.entry_id).close()
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "givenergy-hass"
+version = "0.1.0"
+description = "Custom component for Home Assistant to control a GivEnergy system via the local network"
+authors = ["Dewet Diener <givenergy-modbus@dewet.org>"]
+license = "Apache-2.0"
+readme = "README.md"
+packages = [{include = "givenergy_hass"}]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.12"
+givenergy-modbus = {git = "https://github.com/dewet22/givenergy-modbus.git", rev = "v0.99.0"}
+
+
+[tool.poetry.group.dev.dependencies]
+homeassistant = "^2023.4.3"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
