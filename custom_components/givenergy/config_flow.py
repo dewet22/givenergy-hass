@@ -16,7 +16,8 @@ from .const import DOMAIN, LOGGER, CONF_REFRESH_INTERVAL, CONF_FULL_REFRESH_INTE
 
 OPTIONS_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_HOST): selector.TextSelector(selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)),
+        vol.Required(CONF_HOST): selector.TextSelector(
+            selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)),
         vol.Optional(CONF_PORT, default=8899): int,
         vol.Optional(CONF_REFRESH_INTERVAL, default=30): int,
         vol.Optional(CONF_FULL_REFRESH_INTERVAL, default=60): int,
@@ -61,6 +62,7 @@ class ConfigFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         await client.close()
         return p
 
+
 class OptionsFlowHandler(config_entries.OptionsFlow):
     """Options flow handler for GivEnergy."""
 
@@ -70,7 +72,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         self.options = dict(config_entry.options)
 
     async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
+            self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage the options."""
         if user_input is not None:

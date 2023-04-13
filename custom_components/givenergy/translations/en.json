@@ -31,12 +31,11 @@
             "charge_status": {
                 "name": "Charge status",
                 "state": {
-                    "0": "zero",
-                    "1": "one",
-                    "2": "Charging?",
-                    "3": "three",
-                    "4": "four",
-                    "5": "Discharging?"
+                    "0": "Idle",
+                    "1": "Slow start",
+                    "2": "Charging",
+                    "3": "Finishing",
+                    "5": "Discharging"
                 }
             },
             "system_mode": {

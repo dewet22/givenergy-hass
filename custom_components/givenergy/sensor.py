@@ -93,10 +93,10 @@ INVERTER_ENTITIES = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
     ),
 
-    # Energy - PV
+    # Energy - Solar
     SensorEntityDescription(
         key="e_pv1_day",
-        name="Solar energy produced today (chain 1)",
+        name="Solar energy produced today (string 1)",
         icon=Icon.SOLAR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -104,7 +104,15 @@ INVERTER_ENTITIES = (
     ),
     SensorEntityDescription(
         key="e_pv2_day",
-        name="Solar energy produced today (chain 2)",
+        name="Solar energy produced today (string 2)",
+        icon=Icon.SOLAR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+    ),
+    SensorEntityDescription(
+        key="e_pv_day",
+        name="Solar energy produced today",
         icon=Icon.SOLAR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -212,7 +220,7 @@ INVERTER_ENTITIES = (
     ),
     SensorEntityDescription(
         key="p_pv1",
-        name="Solar array power (chain 1)",
+        name="Solar array power (string 1)",
         icon=Icon.SOLAR,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
@@ -220,7 +228,15 @@ INVERTER_ENTITIES = (
     ),
     SensorEntityDescription(
         key="p_pv2",
-        name="Solar array power (chain 2)",
+        name="Solar array power (string 2)",
+        icon=Icon.SOLAR,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement=UnitOfPower.WATT,
+    ),
+    SensorEntityDescription(
+        key="p_pv",
+        name="Solar array power",
         icon=Icon.SOLAR,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
@@ -246,7 +262,7 @@ INVERTER_ENTITIES = (
     ),
     SensorEntityDescription(
         key="v_pv1",
-        name="Solar array voltage (chain 1)",
+        name="Solar array voltage (string 1)",
         icon=Icon.SOLAR,
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
@@ -254,7 +270,7 @@ INVERTER_ENTITIES = (
     ),
     SensorEntityDescription(
         key="v_pv2",
-        name="Solar array voltage (chain 2)",
+        name="Solar array voltage (string 2)",
         icon=Icon.GRID_IMPORT,
         device_class=SensorDeviceClass.VOLTAGE,
         state_class=SensorStateClass.MEASUREMENT,
@@ -296,7 +312,7 @@ INVERTER_ENTITIES = (
     ),
     SensorEntityDescription(
         key="i_pv1",
-        name="Solar array current (chain 1)",
+        name="Solar array current (string 1)",
         icon=Icon.SOLAR,
         device_class=SensorDeviceClass.CURRENT,
         state_class=SensorStateClass.MEASUREMENT,
@@ -304,7 +320,7 @@ INVERTER_ENTITIES = (
     ),
     SensorEntityDescription(
         key="i_pv2",
-        name="Solar array current (chain 2)",
+        name="Solar array current (string 2)",
         icon=Icon.SOLAR,
         device_class=SensorDeviceClass.CURRENT,
         state_class=SensorStateClass.MEASUREMENT,
@@ -424,7 +440,7 @@ BATTERY_ENTITIES = (
     ),
     SensorEntityDescription(
         key="full_capacity",
-        name="Actual charge capacity",
+        name="Calibrated charge capacity",
         icon=Icon.BATTERY,
         # device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
@@ -476,8 +492,8 @@ class InverterSensor(InverterEntity, SensorEntity):
     def __init__(self, coordinator: GivEnergyCoordinator, entity_description: SensorEntityDescription):
         """Initialize the sensor class."""
         super().__init__(coordinator)
-        self._attr_unique_id = f"{self.coordinator.data.inverter_serial_number}_{entity_description.key}"
-        self._attr_name = f'Inverter {self.coordinator.data.inverter_serial_number} {entity_description.name}'
+        self._attr_unique_id = f"{self.coordinator.plant.inverter_serial_number}_{entity_description.key}"
+        self._attr_name = f'Inverter {self.coordinator.plant.inverter_serial_number} {entity_description.name}'
         self.entity_description = entity_description
 
     @property
@@ -490,10 +506,14 @@ class BatterySensor(BatteryEntity, SensorEntity):
     def __init__(self, coordinator: GivEnergyCoordinator, entity_description: SensorEntityDescription, battery_id: int):
         """Initialize the sensor class."""
         super().__init__(coordinator, battery_id)
-        self.battery = self.coordinator.data.batteries[battery_id]
+        self.battery_id = battery_id
         self._attr_unique_id = f"{self.battery.battery_serial_number}_{entity_description.key}"
         self._attr_name = f'Battery {self.battery.battery_serial_number} {entity_description.name}'
         self.entity_description = entity_description
+
+    @property
+    def battery(self):
+        return self.coordinator.batteries[self.battery_id]
 
     @property
     def native_value(self) -> str:

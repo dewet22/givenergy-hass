@@ -26,19 +26,19 @@ class GivEnergyCoordinator(DataUpdateCoordinator[Plant]):
     """Class to coordinate data refreshes using the givenergy_modbus library."""
 
     config_entry: ConfigEntry
+    last_full_refresh = datetime.min
+    last_refresh = datetime.min
 
     def __init__(self, hass: HomeAssistant, client: Client, update_interval: timedelta,
                  full_refresh_interval: timedelta) -> None:
         """Initialize."""
         self.client = client
         self.full_refresh_interval = full_refresh_interval
-        self.last_full_refresh = datetime.min
-        self.last_refresh = datetime.min
-        super().__init__(hass=hass, logger=LOGGER, name="Plant", update_interval=update_interval)
+        super().__init__(hass=hass, logger=LOGGER, name="GivEnergy Plant", update_interval=update_interval)
 
     @property
     def plant(self) -> Plant:
-        return self.client.plant
+        return self.data
 
     @property
     def inverter(self) -> Inverter:
@@ -49,16 +49,14 @@ class GivEnergyCoordinator(DataUpdateCoordinator[Plant]):
         return self.plant.batteries
 
     async def _async_update_data(self):
-        """Update data via library."""
+        """Update data via client library."""
         utcnow = datetime.utcnow()
-        # await self.connect()
+        await self.ensure_connected()
 
         try:
             if self.last_full_refresh + self.full_refresh_interval < utcnow:
-                LOGGER.info('Doing full refresh')
-                await self.client.execute(
-                    commands.refresh_plant_data(True),
-                    timeout=1.0, retries=3)
+                LOGGER.debug('Doing full refresh')
+                await self.client.execute(commands.refresh_plant_data(True), timeout=1.0, retries=3)
                 self.last_full_refresh = utcnow
             else:
                 LOGGER.debug('Doing quick refresh')
@@ -66,30 +64,26 @@ class GivEnergyCoordinator(DataUpdateCoordinator[Plant]):
                     commands.refresh_plant_data(False, number_batteries=self.plant.number_batteries),
                     timeout=1.0, retries=2)
         except CommunicationError as e:
+            await self.close()
             raise UpdateFailed(e) from e
         except asyncio.TimeoutError as e:
             data_age = utcnow - self.last_refresh
-            if data_age > self.update_interval * 5:
-                # LOGGER.error('Data fetching seems broken.')
-                raise UpdateFailed(e) from e
-            LOGGER.warning(
-                f'Timeout refreshing data, will retry. Current data is {data_age.seconds} seconds stale.')
+            if data_age > self.update_interval * 3:
+                LOGGER.error('Unable to fetch data: 3 successive update cycles have failed, attempting to reconnect')
+                await self.close()
+                raise UpdateFailed("Client reconnecting") from e
+            LOGGER.info(
+                f'Timeout fetching data, will retry at next update. Current cached data is {data_age.seconds}s old')
         else:
             self.last_refresh = utcnow
-        # finally:
-        #     LOGGER.info(
-        #         f'qsize={self.client.tx_queue.qsize()} '
-        #         f'network_producer={self.client.network_producer_task._state}:{self.client.network_producer_task.get_stack()[0].f_lineno} '
-        #         f'network_consumer={self.client.network_consumer_task._state}:{self.client.network_consumer_task.get_stack()[0].f_lineno} '
-        #         f'last_message_consumed@{self.client.last_message_consumed.strftime("%H:%M:%S")}={self.client.network_consumer_task.get_stack()[0].f_locals["message"]} '
-        #         f'last_message_produced@{self.client.last_message_produced.strftime("%H:%M:%S")} '
-        #     )
-        #     # await self.close()
 
         return self.plant
 
-    async def connect(self):
-        await self.client.connect()
+    async def ensure_connected(self):
+        if not self.client.connected:
+            await self.client.connect()
+            self.last_full_refresh = datetime.min
+            self.last_refresh = datetime.min
 
     async def close(self):
         await self.client.close()
