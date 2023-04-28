@@ -481,9 +481,10 @@ BATTERY_ENTITIES = (
 async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
     """Set up the sensor platform."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]
-    async_add_entities(InverterSensor(coordinator=coordinator, entity_description=e) for e in INVERTER_ENTITIES)
+    entities = [InverterSensor(coordinator=coordinator, entity_description=e) for e in INVERTER_ENTITIES]
     for i in range(coordinator.plant.number_batteries):
-        async_add_entities(BatterySensor(coordinator=coordinator, entity_description=e, battery_id=i) for e in BATTERY_ENTITIES)
+        entities += [BatterySensor(coordinator=coordinator, entity_description=e, battery_id=i) for e in BATTERY_ENTITIES]
+    async_add_entities(entities)
 
 
 class InverterSensor(InverterEntity, SensorEntity):
@@ -492,7 +493,7 @@ class InverterSensor(InverterEntity, SensorEntity):
     def __init__(self, coordinator: GivEnergyCoordinator, entity_description: SensorEntityDescription):
         """Initialize the sensor class."""
         super().__init__(coordinator)
-        self._attr_unique_id = f"{self.coordinator.plant.inverter_serial_number}_{entity_description.key}"
+        self._attr_unique_id = f"{self.coordinator.plant.inverter_serial_number}_{entity_description.key}".lower()
         self._attr_name = f'Inverter {self.coordinator.plant.inverter_serial_number} {entity_description.name}'
         self.entity_description = entity_description
 
@@ -500,6 +501,8 @@ class InverterSensor(InverterEntity, SensorEntity):
     def native_value(self) -> str:
         """Return the native value of the sensor."""
         return getattr(self.coordinator.inverter, self.entity_description.key)
+
+
 class BatterySensor(BatteryEntity, SensorEntity):
     """GivEnergy battery entity class."""
 
@@ -507,7 +510,8 @@ class BatterySensor(BatteryEntity, SensorEntity):
         """Initialize the sensor class."""
         super().__init__(coordinator, battery_id)
         self.battery_id = battery_id
-        self._attr_unique_id = f"{self.battery.battery_serial_number}_{entity_description.key}"
+        self.battery = self.coordinator.batteries[battery_id]
+        self._attr_unique_id = f"{self.battery.battery_serial_number}_{entity_description.key}".lower()
         self._attr_name = f'Battery {self.battery.battery_serial_number} {entity_description.name}'
         self.entity_description = entity_description
 
