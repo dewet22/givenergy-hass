@@ -56,7 +56,7 @@ class GivEnergyCoordinator(DataUpdateCoordinator[Plant]):
         try:
             if self.last_full_refresh + self.full_refresh_interval < utcnow:
                 LOGGER.debug('Doing full refresh')
-                await self.client.execute(commands.refresh_plant_data(True), timeout=1.0, retries=3)
+                await self.client.execute(commands.refresh_plant_data(True), timeout=2.0, retries=3)
                 self.last_full_refresh = utcnow
             else:
                 LOGGER.debug('Doing quick refresh')
@@ -69,10 +69,10 @@ class GivEnergyCoordinator(DataUpdateCoordinator[Plant]):
         except asyncio.TimeoutError as e:
             data_age = utcnow - self.last_refresh
             if data_age > self.update_interval * 3:
-                LOGGER.error('Unable to fetch data: 3 successive update cycles have failed, attempting to reconnect')
+                LOGGER.info('3 successive data fetches failed, attempting to reconnect')
                 await self.close()
                 raise UpdateFailed("Client reconnecting") from e
-            LOGGER.info(
+            LOGGER.debug(
                 f'Timeout fetching data, will retry at next update. Current cached data is {data_age.seconds}s old')
         else:
             self.last_refresh = utcnow

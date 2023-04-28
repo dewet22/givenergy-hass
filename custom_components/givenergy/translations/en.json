@@ -35,7 +35,8 @@
                     "1": "Slow start",
                     "2": "Charging",
                     "3": "Finishing",
-                    "5": "Discharging"
+                    "5": "Discharging",
+                    "7": "Battery disconnected?"
                 }
             },
             "system_mode": {
