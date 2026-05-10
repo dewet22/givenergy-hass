@@ -1,11 +1,15 @@
 [project]
 name = "givenergy-local"
-version = "0.1.0"
 description = "Home Assistant custom component for GivEnergy inverters via local Modbus TCP"
 requires-python = ">=3.13"
 dependencies = [
     "givenergy-modbus>=1.1.0",
 ]
+# Version is not declared here. The integration is distributed via HACS,
+# which reads `custom_components/givenergy_local/manifest.json` as the
+# single source of truth. `[tool.uv] package = false` means uv never
+# builds this project, so a pyproject version would just drift.
+dynamic = ["version"]
 
 [dependency-groups]
 dev = [

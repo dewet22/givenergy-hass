@@ -1910,7 +1910,6 @@ wheels = [
 
 [[package]]
 name = "givenergy-local"
-version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "givenergy-modbus" },
