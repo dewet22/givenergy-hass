@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "GivEnergy Local",
+        "description": "Connect to your GivEnergy inverter via local Modbus TCP.",
+        "data": {
+          "host": "Inverter IP Address",
+          "port": "Modbus Port",
+          "scan_interval": "Scan Interval (seconds)",
+          "max_batteries": "Number of Batteries"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the inverter. Check the IP address and port."
+    },
+    "abort": {
+      "already_configured": "This inverter is already configured."
+    }
+  }
+}
