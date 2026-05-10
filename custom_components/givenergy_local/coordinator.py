@@ -13,6 +13,11 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+# Target interval between full holding-register refreshes in active mode.
+# Holding registers contain largely static config (firmware, charge slots, …)
+# so polling them every tick is wasteful.
+_FULL_REFRESH_INTERVAL = 300  # seconds (~5 minutes)
+
 
 class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
     def __init__(
@@ -39,6 +44,8 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self.consecutive_failures: int = 0
         self._last_inverter_time: datetime | None = None
         self._unchanged_ticks: int = 0
+        self._active_tick: int = 0
+        self._full_refresh_every: int = max(1, round(_FULL_REFRESH_INTERVAL / scan_interval))
 
     # ------------------------------------------------------------------
     # DataUpdateCoordinator entry point
@@ -78,9 +85,16 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
     # ------------------------------------------------------------------
 
     async def _active_update(self) -> Plant:
-        """Issue a full Modbus refresh on every tick and return the updated plant."""
+        """Alternate between full and partial Modbus refreshes.
+
+        Holding registers (config, charge slots, …) are re-read only every
+        _full_refresh_every ticks; input registers (real-time data) are read
+        every tick.
+        """
+        full_refresh = (self._active_tick % self._full_refresh_every == 0)
+        self._active_tick += 1
         await self._client.refresh_plant(
-            full_refresh=True,
+            full_refresh=full_refresh,
             max_batteries=self.max_batteries,
         )
         return self._client.plant
@@ -133,6 +147,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         await self._client.connect()
         self._last_inverter_time = None
         self._unchanged_ticks = 0
+        self._active_tick = 0
 
     async def _reset_client(self) -> None:
         """Close and discard the client so the next tick triggers a reconnect."""

@@ -223,6 +223,102 @@ async def test_active_mode_always_refreshes(hass, mock_plant):
     assert client.refresh_plant.call_count == 3
 
 
+async def test_active_mode_first_tick_is_full_refresh(hass, mock_plant):
+    """Tick 0 must always be a full refresh regardless of interval."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, passive=False
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh_plant = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+        coordinator._client = client
+
+        await coordinator._async_update_data()
+
+    client.refresh_plant.assert_called_once_with(full_refresh=True, max_batteries=1)
+
+
+async def test_active_mode_intermediate_ticks_are_partial(hass, mock_plant):
+    """Ticks 1 … (n-1) must use full_refresh=False."""
+    # scan_interval=30 → _full_refresh_every = round(300/30) = 10
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, passive=False
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh_plant = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+        coordinator._client = client
+
+        for _ in range(3):  # ticks 0, 1, 2
+            await coordinator._async_update_data()
+
+    calls = client.refresh_plant.call_args_list
+    assert calls[0].kwargs["full_refresh"] is True   # tick 0 — full
+    assert calls[1].kwargs["full_refresh"] is False  # tick 1 — partial
+    assert calls[2].kwargs["full_refresh"] is False  # tick 2 — partial
+
+
+async def test_active_mode_nth_tick_is_full_refresh(hass, mock_plant):
+    """Every _full_refresh_every ticks a full refresh must be issued again."""
+    # scan_interval=30 → _full_refresh_every = 10; tick 10 is the next full refresh
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, passive=False
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh_plant = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+        coordinator._client = client
+
+        for _ in range(11):  # ticks 0–10
+            await coordinator._async_update_data()
+
+    calls = client.refresh_plant.call_args_list
+    assert calls[0].kwargs["full_refresh"] is True   # tick 0
+    assert calls[10].kwargs["full_refresh"] is True  # tick 10
+    for i in range(1, 10):
+        assert calls[i].kwargs["full_refresh"] is False
+
+
+async def test_active_mode_reconnect_resets_refresh_cycle(hass, mock_plant):
+    """After a reconnect the full-refresh cycle must restart from tick 0."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, passive=False
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh_plant = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+        coordinator._client = client
+
+        # Advance a few ticks so _active_tick > 0
+        for _ in range(3):
+            await coordinator._async_update_data()
+
+        # Simulate a reconnect by resetting the client
+        coordinator._client = None
+
+        await coordinator._async_update_data()
+
+    # The post-reconnect call should be a full refresh (tick 0 of new cycle)
+    last_call = client.refresh_plant.call_args_list[-1]
+    assert last_call.kwargs["full_refresh"] is True
+
+
 async def test_passive_stale_cache_raises_after_two_unchanged_ticks(hass, mock_plant):
     """Cache is only considered stale after two consecutive unchanged ticks."""
     coordinator = GivEnergyUpdateCoordinator(
