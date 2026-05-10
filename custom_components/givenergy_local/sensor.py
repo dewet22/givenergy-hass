@@ -43,6 +43,11 @@ class GivEnergyBatterySensorDescription(SensorEntityDescription):
     value_fn: Callable[[Battery], Any] = field(default=lambda _: None)
 
 
+@dataclass(frozen=True, kw_only=True)
+class GivEnergyCoordinatorSensorDescription(SensorEntityDescription):
+    value_fn: Callable[[GivEnergyUpdateCoordinator], Any] = field(default=lambda _: None)
+
+
 INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     # --- Status ---
     GivEnergyInverterSensorDescription(
@@ -400,6 +405,24 @@ BATTERY_SENSORS: tuple[GivEnergyBatterySensorDescription, ...] = (
 )
 
 
+COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
+    GivEnergyCoordinatorSensorDescription(
+        key="last_successful_refresh",
+        name="Last Successful Refresh",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        value_fn=lambda coord: coord.last_successful_refresh,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyCoordinatorSensorDescription(
+        key="consecutive_failures",
+        name="Consecutive Refresh Failures",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda coord: coord.consecutive_failures,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -417,6 +440,11 @@ async def async_setup_entry(
             GivEnergyBatterySensor(coordinator, description, battery_index)
             for description in BATTERY_SENSORS
         )
+
+    entities.extend(
+        GivEnergyCoordinatorSensor(coordinator, description)
+        for description in COORDINATOR_SENSORS
+    )
 
     async_add_entities(entities)
 
@@ -479,3 +507,35 @@ class GivEnergyBatterySensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Sens
         if self._battery_index >= len(batteries):
             return None
         return self.entity_description.value_fn(batteries[self._battery_index])
+
+
+class GivEnergyCoordinatorSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
+    """Diagnostic sensor that reflects coordinator-level state (not plant data).
+
+    Remains available even when the coordinator's last update failed, so
+    the failure count and last-success timestamp are visible during outages.
+    """
+
+    _attr_has_entity_name = True
+    entity_description: GivEnergyCoordinatorSensorDescription
+
+    def __init__(
+        self,
+        coordinator: GivEnergyUpdateCoordinator,
+        description: GivEnergyCoordinatorSensorDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        serial = coordinator.data.inverter_serial_number
+        self._attr_unique_id = f"{serial}_{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, serial)},
+        )
+
+    @property
+    def available(self) -> bool:
+        return True
+
+    @property
+    def native_value(self) -> Any:
+        return self.entity_description.value_fn(self.coordinator)

@@ -3,7 +3,11 @@ import pytest
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.givenergy_local.const import DOMAIN
-from custom_components.givenergy_local.sensor import BATTERY_SENSORS, INVERTER_SENSORS
+from custom_components.givenergy_local.sensor import (
+    BATTERY_SENSORS,
+    COORDINATOR_SENSORS,
+    INVERTER_SENSORS,
+)
 
 
 def _entity_id(hass, platform: str, unique_id: str) -> str:
@@ -17,8 +21,9 @@ async def test_expected_sensor_count(hass, setup_integration):
     registry = er.async_get(hass)
     entries = er.async_entries_for_config_entry(registry, setup_integration.entry_id)
     sensors = [e for e in entries if e.domain == "sensor"]
-    # 1 battery → len(INVERTER_SENSORS) + len(BATTERY_SENSORS)
-    assert len(sensors) == len(INVERTER_SENSORS) + len(BATTERY_SENSORS)
+    # 1 battery → inverter sensors + battery sensors + coordinator diagnostics
+    expected = len(INVERTER_SENSORS) + len(BATTERY_SENSORS) + len(COORDINATOR_SENSORS)
+    assert len(sensors) == expected
 
 
 async def test_pv_power_sensor(hass, setup_integration):
@@ -73,3 +78,45 @@ async def test_battery_device_linked_to_inverter(hass, setup_integration):
     assert battery_device is not None
     # Battery device must be linked via the inverter device
     assert battery_device.via_device_id is not None
+
+
+async def test_consecutive_failures_starts_at_zero(hass, setup_integration):
+    state = hass.states.get(
+        _entity_id(hass, "sensor", "SA1234G123_consecutive_failures")
+    )
+    assert state.state == "0"
+
+
+async def test_last_successful_refresh_set_after_setup(hass, setup_integration):
+    state = hass.states.get(
+        _entity_id(hass, "sensor", "SA1234G123_last_successful_refresh")
+    )
+    # After a successful first refresh the timestamp should be populated
+    assert state.state not in ("unknown", "unavailable")
+
+
+async def test_diagnostic_sensors_available_during_coordinator_failure(
+    hass, mock_client, mock_config_entry
+):
+    """Coordinator diagnostic sensors must remain available even when updates fail."""
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Make subsequent refreshes time out
+    mock_client.refresh_plant.side_effect = TimeoutError()
+    from custom_components.givenergy_local.const import DOMAIN as _DOMAIN
+    coordinator = hass.data[_DOMAIN][mock_config_entry.entry_id]
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    failures_id = registry.async_get_entity_id(
+        "sensor", DOMAIN, "SA1234G123_consecutive_failures"
+    )
+    refresh_id = registry.async_get_entity_id(
+        "sensor", DOMAIN, "SA1234G123_last_successful_refresh"
+    )
+
+    assert hass.states.get(failures_id).state == "1"
+    assert hass.states.get(refresh_id).state != "unavailable"
