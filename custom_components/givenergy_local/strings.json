@@ -11,13 +11,26 @@
           "max_batteries": "Number of Batteries",
           "passive": "Passive mode (listen only — another client drives refreshes)"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure GivEnergy Local",
+        "description": "Update the connection or refresh settings for this inverter. The integration reloads automatically when you save.",
+        "data": {
+          "host": "Inverter IP Address",
+          "port": "Modbus Port",
+          "scan_interval": "Scan Interval (seconds)",
+          "max_batteries": "Number of Batteries",
+          "passive": "Passive mode (listen only — another client drives refreshes)"
+        }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to the inverter. Check the IP address and port."
+      "cannot_connect": "Failed to connect to the inverter. Check the IP address and port.",
+      "wrong_inverter": "The inverter at that address has a different serial number from the one originally configured. Remove and re-add the integration if you want to switch inverters."
     },
     "abort": {
-      "already_configured": "This inverter is already configured."
+      "already_configured": "This inverter is already configured.",
+      "reconfigure_successful": "Reconfiguration was successful."
     }
   }
 }

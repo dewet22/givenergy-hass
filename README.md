@@ -45,6 +45,8 @@ Add the integration via **Settings → Devices & Services → Add Integration �
 | Number of Batteries | `1` | Number of battery units connected |
 | [Passive mode](#passive-mode) | off | Listen only — use when another Modbus client (e.g. the GivEnergy app) is already polling and this integration should just observe |
 
+To change any of these later, open the integration's **⋮** menu in **Settings → Devices & Services → GivEnergy Local** and choose **Reconfigure**. The integration reloads automatically when you save.
+
 ### Passive mode
 
 When enabled, the integration connects to the inverter but does not send any Modbus read requests after the initial connection. Instead, it reads the library's register cache on each scan interval tick. This is useful when you have another client (e.g. GivTCP or a mobile app) already polling the inverter — having multiple clients requesting large register bank reads tend to get the inverter confused by stepping on each other. This is also useful if you are migrating from GivTCP and want to keep both running for the time being.

@@ -59,6 +59,39 @@ class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-
             errors=errors,
         )
 
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Update an existing entry's settings (scan interval, passive mode, …)."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            host = user_input[CONF_HOST]
+            port = user_input[CONF_PORT]
+            connection_changed = host != entry.data[CONF_HOST] or port != entry.data[CONF_PORT]
+
+            if connection_changed:
+                serial, err = await self._test_connection(host, port)
+                if err:
+                    errors["base"] = err
+                elif serial != entry.unique_id:
+                    # Connecting to a different inverter would corrupt the
+                    # entity registry; require a fresh integration instead.
+                    errors["base"] = "wrong_inverter"
+
+            if not errors:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates=user_input,
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=self.add_suggested_values_to_schema(STEP_USER_DATA_SCHEMA, entry.data),
+            errors=errors,
+        )
+
     async def _test_connection(self, host: str, port: int) -> tuple[str, str | None]:
         client = Client(host=host, port=port)
         try:
