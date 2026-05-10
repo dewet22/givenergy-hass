@@ -1,4 +1,5 @@
 """Tests for the GivEnergy Local coordinator."""
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -174,9 +175,11 @@ async def test_passive_mode_skips_refresh_on_subsequent_ticks(hass, mock_plant):
         mock_cls.return_value = client
         coordinator._client = client  # already connected
 
-        await coordinator._async_update_data()
-        await coordinator._async_update_data()
-        await coordinator._async_update_data()
+        from datetime import timedelta
+        base = datetime(2026, 5, 10, 12, 0, 0)
+        for tick in range(3):
+            mock_plant.inverter.system_time = base + timedelta(seconds=tick * 30)
+            await coordinator._async_update_data()
 
     # refresh_plant must never be called — client was already connected
     client.refresh_plant.assert_not_called()
@@ -218,3 +221,110 @@ async def test_active_mode_always_refreshes(hass, mock_plant):
             await coordinator._async_update_data()
 
     assert client.refresh_plant.call_count == 3
+
+
+async def test_passive_stale_cache_raises_after_two_unchanged_ticks(hass, mock_plant):
+    """Cache is only considered stale after two consecutive unchanged ticks."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, passive=True
+    )
+    fixed_time = datetime(2026, 5, 10, 12, 0, 0)
+    mock_plant.inverter.system_time = fixed_time
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        mock_cls.return_value = client
+        coordinator._client = client
+
+        await coordinator._async_update_data()  # tick 1: seeds _last_inverter_time
+        await coordinator._async_update_data()  # tick 2: first unchanged — tolerated
+        with pytest.raises(UpdateFailed, match="2 consecutive ticks"):
+            await coordinator._async_update_data()  # tick 3: second unchanged — stale
+
+    assert coordinator.consecutive_failures == 1
+
+
+async def test_passive_one_unchanged_tick_is_tolerated(hass, mock_plant):
+    """A single unchanged tick is allowed before the stale error is raised."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, passive=True
+    )
+    fixed_time = datetime(2026, 5, 10, 12, 0, 0)
+    mock_plant.inverter.system_time = fixed_time
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        mock_cls.return_value = client
+        coordinator._client = client
+
+        await coordinator._async_update_data()  # seed
+        await coordinator._async_update_data()  # first unchanged — must not raise
+
+    assert coordinator.consecutive_failures == 0
+
+
+async def test_passive_advancing_system_time_succeeds(hass, mock_plant):
+    """If system_time advances the cache is live and no error is raised."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, passive=True
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        mock_cls.return_value = client
+        coordinator._client = client
+
+        mock_plant.inverter.system_time = datetime(2026, 5, 10, 12, 0, 0)
+        await coordinator._async_update_data()
+
+        mock_plant.inverter.system_time = datetime(2026, 5, 10, 12, 0, 30)
+        await coordinator._async_update_data()
+
+    assert coordinator.consecutive_failures == 0
+
+
+async def test_passive_reconnect_resets_stale_detection(hass, mock_plant):
+    """Reconnecting clears _last_inverter_time so the first passive tick never fires stale."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, passive=True
+    )
+    fixed_time = datetime(2026, 5, 10, 12, 0, 0)
+    mock_plant.inverter.system_time = fixed_time
+    coordinator._last_inverter_time = fixed_time  # same as what the plant will return
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        mock_cls.return_value = client
+        # _client is None → reconnecting=True → _last_inverter_time is reset before the check
+
+        await coordinator._async_update_data()
+
+    assert coordinator.consecutive_failures == 0
+
+
+async def test_passive_none_system_time_skips_stale_check(hass, mock_plant):
+    """If system_time is None (register not yet populated) the stale check is skipped."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, passive=True
+    )
+    mock_plant.inverter.system_time = None
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        mock_cls.return_value = client
+        coordinator._client = client
+
+        await coordinator._async_update_data()
+        await coordinator._async_update_data()  # would raise if check wasn't skipped
+
+    assert coordinator.consecutive_failures == 0

@@ -37,6 +37,8 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self._client: Client | None = None
         self.last_successful_refresh: datetime | None = None
         self.consecutive_failures: int = 0
+        self._last_inverter_time: datetime | None = None
+        self._unchanged_ticks: int = 0
 
     async def _async_update_data(self) -> Plant:
         try:
@@ -44,6 +46,8 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             if reconnecting:
                 self._client = Client(host=self.host, port=self.port)
                 await self._client.connect()
+                self._last_inverter_time = None
+                self._unchanged_ticks = 0
 
             # Always issue a full refresh on (re)connect to seed the cache.
             # In passive mode subsequent ticks just read the library's cache,
@@ -54,9 +58,36 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                     max_batteries=self.max_batteries,
                 )
 
+            plant = self._client.plant
+
+            # In passive mode, use the inverter's RTC as a cache-freshness
+            # signal. Two consecutive ticks with an identical system_time means
+            # the register cache hasn't been updated — the peer client has
+            # stopped refreshing or is absent. One unchanged tick is tolerated
+            # to absorb timing skew between our poll interval and the peer's.
+            if self.passive and not reconnecting:
+                inverter_time = plant.inverter.system_time
+                if (
+                    inverter_time is not None
+                    and self._last_inverter_time is not None
+                    and inverter_time == self._last_inverter_time
+                ):
+                    self._unchanged_ticks += 1
+                    if self._unchanged_ticks >= 2:
+                        self.consecutive_failures += 1
+                        raise UpdateFailed(
+                            "Register cache unchanged for 2 consecutive ticks — "
+                            "no peer client appears to be refreshing the inverter"
+                        )
+                else:
+                    self._unchanged_ticks = 0
+
+            self._last_inverter_time = plant.inverter.system_time
             self.last_successful_refresh = dt_util.utcnow()
             self.consecutive_failures = 0
-            return self._client.plant
+            return plant
+        except UpdateFailed:
+            raise
         except TimeoutError as err:
             # Keep the client alive — timeouts are transient and the TCP
             # connection is likely still valid.

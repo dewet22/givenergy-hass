@@ -1,5 +1,5 @@
 """Shared fixtures for GivEnergy Local tests."""
-from datetime import time
+from datetime import datetime, time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -65,6 +65,7 @@ def mock_inverter() -> MagicMock:
     inv.battery_discharge_limit = 50
     inv.battery_discharge_min_power_reserve = 4
     inv.battery_power_mode = BatteryPowerMode.SELF_CONSUMPTION
+    inv.system_time = datetime(2026, 5, 10, 12, 0, 0)
     inv.charge_slot_1 = TimeSlot(start=time(0, 30), end=time(4, 30))
     inv.charge_slot_2 = TimeSlot(start=time(0, 0), end=time(0, 0))
     inv.discharge_slot_1 = TimeSlot(start=time(17, 0), end=time(22, 0))
