@@ -1,17 +1,27 @@
-# GivEnergy Local
+# GivEnergy Local Home Assistant custom component
 
-A Home Assistant custom integration for GivEnergy hybrid inverters and batteries, communicating directly over local Modbus TCP — no cloud, no GivEnergy portal account required.
+A Home Assistant custom integration for GivEnergy plants (combination of inverter, solar/photovoltaic and batteries) which communicates directly over local Modbus TCP — no cloud, no GivEnergy portal account required.
 
-Built on top of the [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) Python library.
+Uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) for the underlying communication and state management.
 
 ## Requirements
 
-- A GivEnergy inverter with the Modbus TCP port reachable on your local network (default port **8899**)
-- Home Assistant 2024.1 or later
+- A [supported GivEnergy inverter](#supported-inverters) connected to your local network (wifi or ethernet), with the Modbus TCP port reachable from your Home Assistant server (default port **8899**)
+- Home Assistant 2025.4 or later
+
+## Supported inverters
+
+The underlying [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) library knows the following inverter families: Hybrid (1ph/3ph), AC, EMS, Gateway, and All-in-One. However, **this integration has only been tested by the author on a Hybrid Gen 1**. If you have a different model and would like to help validate the integration against it, please [open an issue](https://github.com/dewet22/givenergy-hass/issues) — bug reports, register dumps, and PRs are all very welcome.
+
+Older Gen 2 units with the `EA` serial prefix are not currently supported by the underlying library — again, any owners willing to help test are very welcome!
 
 ## Installation
 
 ### HACS (recommended)
+
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=dewet22&repository=givenergy-hass&category=integration)
+
+Or if that doesn't work:
 
 1. In HACS, go to **Integrations → Custom repositories**
 2. Add `https://github.com/dewet22/givenergy-hass` and select category **Integration**
@@ -19,7 +29,9 @@ Built on top of the [`givenergy-modbus`](https://github.com/dewet22/givenergy-mo
 
 ### Manual
 
-Copy the `custom_components/givenergy_local/` directory into your HA `config/custom_components/` folder and restart.
+1. Download [`givenergy_local.zip`](https://github.com/dewet22/givenergy-hass/releases/latest/download/givenergy_local.zip) from the latest release
+2. Extract its contents into your Home Assistant `config/custom_components/givenergy_local/` folder
+3. Restart Home Assistant
 
 ## Configuration
 
@@ -31,17 +43,17 @@ Add the integration via **Settings → Devices & Services → Add Integration �
 | Modbus Port | `8899` | Modbus TCP port |
 | Scan Interval | `30` s | How often HA polls for updated values |
 | Number of Batteries | `1` | Number of battery units connected |
-| Passive mode | off | Listen only — use when another Modbus client (e.g. the GivEnergy app) is already polling and this integration should just observe |
+| [Passive mode](#passive-mode) | off | Listen only — use when another Modbus client (e.g. the GivEnergy app) is already polling and this integration should just observe |
 
 ### Passive mode
 
-When enabled, the integration connects to the inverter but does not send any Modbus read requests after the initial connection. Instead, it reads the library's register cache on each scan interval tick. This is useful when you have another client (e.g. the GivEnergy MQTT bridge or the official app) already polling the inverter and you don't want two clients issuing requests simultaneously.
+When enabled, the integration connects to the inverter but does not send any Modbus read requests after the initial connection. Instead, it reads the library's register cache on each scan interval tick. This is useful when you have another client (e.g. GivTCP or a mobile app) already polling the inverter — having multiple clients requesting large register bank reads tend to get the inverter confused by stepping on each other. This is also useful if you are migrating from GivTCP and want to keep both running for the time being.
 
 ## Entities
 
 ### Inverter device
 
-**Sensors**
+#### Sensors
 
 | Entity | Unit | Notes |
 |---|---|---|
@@ -52,7 +64,7 @@ When enabled, the integration connects to the inverter but does not send any Mod
 | PV Energy Today | kWh | |
 | PV Energy Total | kWh | |
 | Battery SOC | % | |
-| Battery Power | W | Positive = charging, negative = discharging |
+| Battery Power | W | Positive = discharging, negative = charging |
 | Battery Voltage / Current | V / A | |
 | Battery Temperature | °C | |
 | Battery Charge Today | kWh | |
@@ -73,7 +85,7 @@ When enabled, the integration connects to the inverter but does not send any Mod
 | Last Successful Refresh | timestamp | Diagnostic |
 | Consecutive Refresh Failures | — | Diagnostic; resets to 0 on next success |
 
-**Controls**
+#### Controls
 
 | Entity | Type | Notes |
 |---|---|---|
@@ -100,6 +112,47 @@ Each battery appears as a separate device linked to the inverter.
 | Remaining Capacity | Ah |
 | Design Capacity | Ah |
 | Charge Cycles | — |
+
+## Energy dashboard
+
+All cumulative-energy entities (kWh) are exposed with `device_class=energy` and `state_class=total_increasing`, so Home Assistant generates long-term statistics for them automatically and they show up directly in the Energy dashboard's entity picker.
+
+### Required: energy sensors (kWh, for the dashboard graphs)
+
+| Dashboard slot | Entity |
+|---|---|
+| Solar production | `PV Energy Today` (or per-string `PV String 1/2 Energy Today` if you'd rather track MPPTs individually) |
+| Grid consumption | `Grid Import Today` |
+| Return to grid | `Grid Export Today` |
+| Home battery — energy going IN | `Battery Charge Today` |
+| Home battery — energy coming OUT | `Battery Discharge Today` |
+
+The dashboard derives household consumption automatically from the above. If you'd like to track it directly as a sanity check, `Load Energy Today` measures the total household demand fed by the inverter and can be added under "Individual devices".
+
+### Optional: power sensors (W, for the "Now" live view)
+
+The dashboard's live view shows current power flow between solar, grid, battery and load. Wire these in once the energy mappings above are in place:
+
+| Dashboard slot | Entity | Sign convention |
+|---|---|---|
+| Solar power | `PV Power` | Positive when producing |
+| Grid power | `Grid Export Power` | Positive = exporting, negative = importing |
+| Battery power | `Battery Power` | Positive = discharging, negative = charging |
+| Household demand | `Load Power` | This would be universally positive, unless you have another generation source |
+
+The daily counters reset at midnight; Home Assistant's recorder detects the reset automatically thanks to the `total_increasing` state class, so deltas across day boundaries are accounted for correctly.
+
+## Troubleshooting
+
+- **Transient connection drops are normal.** TCP-level timeouts and the occasional connection reset get logged at WARNING level and the next scan tick re-establishes the connection. The `Last Successful Refresh` and `Consecutive Refresh Failures` diagnostic sensors will tell you if something more persistent is going on.
+- **"Register cache unchanged" failures in passive mode** mean no peer client is refreshing the inverter. Switch back to active mode, or start the other client that's supposed to be driving the bus.
+- **Conflicts with another Modbus client** (GivTCP, the GivEnergy app, etc.) — the inverter doesn't always cope well with two clients issuing large reads concurrently. Use [passive mode](#passive-mode).
+
+For anything else, please [open an issue](https://github.com/dewet22/givenergy-hass/issues) with the relevant HA log lines and your inverter model.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).
 
 ## Development
 
