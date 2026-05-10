@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # Python deps from pyproject.toml + uv.lock.
+  # Restrict to direct deps so the pytest-homeassistant-custom-component
+  # transitive stack (HA core + aiohttp + pillow + …) doesn't generate
+  # update PRs — those track upstream HA cadence, not anything we control.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      pip-direct:
+        patterns: ["*"]
+    allow:
+      - dependency-type: "direct"
+
+  # Pin GitHub Actions versions; quiet cadence since these rarely change.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
