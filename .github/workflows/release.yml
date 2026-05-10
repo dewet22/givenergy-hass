@@ -52,7 +52,7 @@ jobs:
           zip -r ../../givenergy_local.zip .
 
       - name: Upload zip and update release notes
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: givenergy_local.zip
           body: ${{ steps.notes.outputs.body }}
