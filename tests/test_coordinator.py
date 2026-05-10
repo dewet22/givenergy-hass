@@ -140,3 +140,81 @@ async def test_non_timeout_error_closes_client(hass):
 
         client.close.assert_called_once()
         assert coordinator._client is None
+
+
+async def test_passive_mode_initial_connect_does_full_refresh(hass, mock_plant):
+    """Even in passive mode the first connect must seed the cache with a full refresh."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, passive=True
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh_plant = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+
+        await coordinator._async_update_data()
+
+    client.refresh_plant.assert_called_once_with(full_refresh=True, max_batteries=1)
+
+
+async def test_passive_mode_skips_refresh_on_subsequent_ticks(hass, mock_plant):
+    """After the initial connect, passive mode must not send any Modbus requests."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, passive=True
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh_plant = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+        coordinator._client = client  # already connected
+
+        await coordinator._async_update_data()
+        await coordinator._async_update_data()
+        await coordinator._async_update_data()
+
+    # refresh_plant must never be called — client was already connected
+    client.refresh_plant.assert_not_called()
+
+
+async def test_passive_mode_reconnect_does_full_refresh(hass, mock_plant):
+    """If the connection drops in passive mode, reconnecting must re-seed the cache."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, passive=True
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = False  # simulate a dropped connection
+        client.plant = mock_plant
+        client.refresh_plant = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+
+        await coordinator._async_update_data()
+
+    client.refresh_plant.assert_called_once_with(full_refresh=True, max_batteries=1)
+
+
+async def test_active_mode_always_refreshes(hass, mock_plant):
+    """In active (default) mode every tick issues a refresh_plant request."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, passive=False
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh_plant = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+        coordinator._client = client
+
+        for _ in range(3):
+            await coordinator._async_update_data()
+
+    assert client.refresh_plant.call_count == 3

@@ -22,6 +22,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         port: int,
         scan_interval: int,
         max_batteries: int,
+        passive: bool = False,
     ) -> None:
         super().__init__(
             hass,
@@ -32,23 +33,30 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self.host = host
         self.port = port
         self.max_batteries = max_batteries
+        self.passive = passive
         self._client: Client | None = None
         self.last_successful_refresh: datetime | None = None
         self.consecutive_failures: int = 0
 
     async def _async_update_data(self) -> Plant:
         try:
-            if self._client is None or not self._client.connected:
+            reconnecting = self._client is None or not self._client.connected
+            if reconnecting:
                 self._client = Client(host=self.host, port=self.port)
                 await self._client.connect()
 
-            plant = await self._client.refresh_plant(
-                full_refresh=True,
-                max_batteries=self.max_batteries,
-            )
+            # Always issue a full refresh on (re)connect to seed the cache.
+            # In passive mode subsequent ticks just read the library's cache,
+            # which the shared-bus peer keeps fresh via its own requests.
+            if reconnecting or not self.passive:
+                await self._client.refresh_plant(
+                    full_refresh=True,
+                    max_batteries=self.max_batteries,
+                )
+
             self.last_successful_refresh = dt_util.utcnow()
             self.consecutive_failures = 0
-            return plant
+            return self._client.plant
         except TimeoutError as err:
             # Keep the client alive — timeouts are transient and the TCP
             # connection is likely still valid.

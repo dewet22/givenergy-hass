@@ -102,6 +102,7 @@ def mock_plant(mock_inverter, mock_battery) -> MagicMock:
 def mock_client(mock_plant) -> AsyncMock:
     client = AsyncMock()
     client.connected = True
+    client.plant = mock_plant
     client.refresh_plant = AsyncMock(return_value=mock_plant)
     client.connect = AsyncMock()
     client.close = AsyncMock()
@@ -122,6 +123,7 @@ def mock_config_entry() -> MockConfigEntry:
             "port": 8899,
             "scan_interval": 30,
             "max_batteries": 1,
+            "passive": False,
         },
         unique_id="SA1234G123",
     )

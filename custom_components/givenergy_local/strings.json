@@ -8,7 +8,8 @@
           "host": "Inverter IP Address",
           "port": "Modbus Port",
           "scan_interval": "Scan Interval (seconds)",
-          "max_batteries": "Number of Batteries"
+          "max_batteries": "Number of Batteries",
+          "passive": "Passive mode (listen only — another client drives refreshes)"
         }
       }
     },
