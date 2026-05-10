@@ -13,6 +13,30 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0  # need full tag history for the changelog step
+
+      - name: Generate release notes from git log
+        id: notes
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          previous_tag="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
+          if [ -n "$previous_tag" ]; then
+            range="${previous_tag}..${tag}"
+            compare="**Full Changelog**: https://github.com/${{ github.repository }}/compare/${previous_tag}...${tag}"
+          else
+            range="$tag"
+            compare=""
+          fi
+          {
+            echo "body<<NOTES_EOF"
+            echo "## Changes"
+            echo
+            git log "$range" --no-merges --reverse --pretty=format:'- %s (%h)'
+            echo
+            echo
+            [ -n "$compare" ] && echo "$compare"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Patch manifest.json with release tag
         run: |
@@ -27,7 +51,8 @@ jobs:
           cd custom_components/givenergy_local
           zip -r ../../givenergy_local.zip .
 
-      - name: Upload zip to release
+      - name: Upload zip and update release notes
         uses: softprops/action-gh-release@v2
         with:
           files: givenergy_local.zip
+          body: ${{ steps.notes.outputs.body }}
