@@ -1,5 +1,5 @@
 """Tests for the GivEnergy Local sensor platform."""
-import pytest
+
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.givenergy_local.const import DOMAIN
@@ -55,6 +55,7 @@ async def test_inverter_device_info(hass, setup_integration):
     entry = registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_p_pv")
     entity_entry = registry.async_get(entry)
     from homeassistant.helpers import device_registry as dr
+
     dev_registry = dr.async_get(hass)
     device = dev_registry.async_get(entity_entry.device_id)
     assert device is not None
@@ -73,6 +74,7 @@ async def test_battery_device_linked_to_inverter(hass, setup_integration):
     entry = registry.async_get_entity_id("sensor", DOMAIN, "BT1234A001_soc")
     entity_entry = registry.async_get(entry)
     from homeassistant.helpers import device_registry as dr
+
     dev_registry = dr.async_get(hass)
     battery_device = dev_registry.async_get(entity_entry.device_id)
     assert battery_device is not None
@@ -81,16 +83,12 @@ async def test_battery_device_linked_to_inverter(hass, setup_integration):
 
 
 async def test_consecutive_failures_starts_at_zero(hass, setup_integration):
-    state = hass.states.get(
-        _entity_id(hass, "sensor", "SA1234G123_consecutive_failures")
-    )
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_consecutive_failures"))
     assert state.state == "0"
 
 
 async def test_last_successful_refresh_set_after_setup(hass, setup_integration):
-    state = hass.states.get(
-        _entity_id(hass, "sensor", "SA1234G123_last_successful_refresh")
-    )
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_last_successful_refresh"))
     # After a successful first refresh the timestamp should be populated
     assert state.state not in ("unknown", "unavailable")
 
@@ -106,14 +104,13 @@ async def test_diagnostic_sensors_available_during_coordinator_failure(
     # Make subsequent refreshes time out
     mock_client.refresh_plant.side_effect = TimeoutError()
     from custom_components.givenergy_local.const import DOMAIN as _DOMAIN
+
     coordinator = hass.data[_DOMAIN][mock_config_entry.entry_id]
     await coordinator.async_refresh()
     await hass.async_block_till_done()
 
     registry = er.async_get(hass)
-    failures_id = registry.async_get_entity_id(
-        "sensor", DOMAIN, "SA1234G123_consecutive_failures"
-    )
+    failures_id = registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_consecutive_failures")
     refresh_id = registry.async_get_entity_id(
         "sensor", DOMAIN, "SA1234G123_last_successful_refresh"
     )

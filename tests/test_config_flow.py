@@ -1,4 +1,5 @@
 """Tests for the GivEnergy Local config flow."""
+
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PORT
 
@@ -31,9 +32,7 @@ async def test_successful_setup_creates_entry(hass, mock_client):
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], VALID_USER_INPUT
-    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], VALID_USER_INPUT)
     await hass.async_block_till_done()
 
     assert result["type"] == "create_entry"
@@ -47,9 +46,7 @@ async def test_cannot_connect_shows_error(hass, mock_client):
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], VALID_USER_INPUT
-    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], VALID_USER_INPUT)
 
     assert result["type"] == "form"
     assert result["errors"] == {"base": "cannot_connect"}
@@ -61,9 +58,7 @@ async def test_duplicate_entry_aborted(hass, mock_client, mock_config_entry):
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], VALID_USER_INPUT
-    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], VALID_USER_INPUT)
 
     assert result["type"] == "abort"
     assert result["reason"] == "already_configured"

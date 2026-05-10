@@ -1,9 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import time as dt_time
-from collections.abc import Callable
-from typing import Any
 
 from givenergy_modbus.client import commands
 from givenergy_modbus.model import TimeSlot
@@ -101,8 +100,7 @@ async def async_setup_entry(
 ) -> None:
     coordinator: GivEnergyUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        GivEnergyTimeEntity(coordinator, description)
-        for description in TIME_DESCRIPTIONS
+        GivEnergyTimeEntity(coordinator, description) for description in TIME_DESCRIPTIONS
     )
 
 

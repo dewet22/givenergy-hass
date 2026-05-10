@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from collections.abc import Callable
-from typing import Any
+from dataclasses import dataclass, field
 
 from givenergy_modbus.client import commands
-from givenergy_modbus.model.inverter import Inverter, BatteryPowerMode
+from givenergy_modbus.model.inverter import BatteryPowerMode, Inverter
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -52,8 +51,7 @@ async def async_setup_entry(
 ) -> None:
     coordinator: GivEnergyUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        GivEnergySelectEntity(coordinator, description)
-        for description in SELECT_DESCRIPTIONS
+        GivEnergySelectEntity(coordinator, description) for description in SELECT_DESCRIPTIONS
     )
 
 

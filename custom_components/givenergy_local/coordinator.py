@@ -91,7 +91,8 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         _full_refresh_every ticks; input registers (real-time data) are read
         every tick.
         """
-        full_refresh = (self._active_tick % self._full_refresh_every == 0)
+        assert self._client is not None  # _async_update_data ensures this
+        full_refresh = self._active_tick % self._full_refresh_every == 0
         self._active_tick += 1
         await self._client.refresh_plant(
             full_refresh=full_refresh,
@@ -105,6 +106,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         The library's register cache is kept fresh by a peer client on the
         shared Modbus bus.  Raises UpdateFailed if the cache appears frozen.
         """
+        assert self._client is not None  # _async_update_data ensures this
         if reconnecting:
             await self._client.refresh_plant(
                 full_refresh=True,

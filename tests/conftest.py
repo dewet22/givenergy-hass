@@ -1,4 +1,5 @@
 """Shared fixtures for GivEnergy Local tests."""
+
 from datetime import datetime, time
 from unittest.mock import AsyncMock, MagicMock, patch
 

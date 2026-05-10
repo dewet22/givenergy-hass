@@ -1,4 +1,5 @@
 """Tests for the GivEnergy Local select platform."""
+
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.givenergy_local.const import DOMAIN

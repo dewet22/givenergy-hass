@@ -1,4 +1,5 @@
 """Tests for the GivEnergy Local number platform."""
+
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.givenergy_local.const import DOMAIN
@@ -29,9 +30,7 @@ async def test_set_charge_target_soc_sends_command(hass, mock_client, setup_inte
     mock_client.one_shot_command.assert_called_once()
 
 
-async def test_set_battery_discharge_limit_sends_command(
-    hass, mock_client, setup_integration
-):
+async def test_set_battery_discharge_limit_sends_command(hass, mock_client, setup_integration):
     entity_id = _entity_id(hass, "SA1234G123_battery_discharge_limit")
     await hass.services.async_call(
         "number", "set_value", {"entity_id": entity_id, "value": 25}, blocking=True

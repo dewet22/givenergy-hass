@@ -1,12 +1,8 @@
 """Tests for the GivEnergy Local time platform (charge/discharge slots)."""
-from datetime import time
 
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.givenergy_local.const import DOMAIN
-from givenergy_modbus.model import TimeSlot
-
-from unittest.mock import call
 
 
 def _entity_id(hass, unique_id: str) -> str:
@@ -62,10 +58,14 @@ async def test_set_charge_slot_1_end_preserves_start(
 
 async def test_all_time_slot_entities_created(hass, setup_integration):
     expected_keys = [
-        "charge_slot_1_start", "charge_slot_1_end",
-        "charge_slot_2_start", "charge_slot_2_end",
-        "discharge_slot_1_start", "discharge_slot_1_end",
-        "discharge_slot_2_start", "discharge_slot_2_end",
+        "charge_slot_1_start",
+        "charge_slot_1_end",
+        "charge_slot_2_start",
+        "charge_slot_2_end",
+        "discharge_slot_1_start",
+        "discharge_slot_1_end",
+        "discharge_slot_2_start",
+        "discharge_slot_2_end",
     ]
     for key in expected_keys:
         entity_id = _entity_id(hass, f"SA1234G123_{key}")

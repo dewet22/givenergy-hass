@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from collections.abc import Callable, Awaitable
-from typing import Any
 
 from givenergy_modbus.client import commands
 from givenergy_modbus.model.inverter import Inverter
@@ -21,7 +20,7 @@ from .coordinator import GivEnergyUpdateCoordinator
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyNumberEntityDescription(NumberEntityDescription):
     value_fn: Callable[[Inverter], float | None] = field(default=lambda _: None)
-    set_value_cmd: Callable[[int], list] = field(default=lambda _: [])
+    set_value_cmd: Callable[[float], list] = field(default=lambda _: [])
 
 
 NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
@@ -95,8 +94,7 @@ async def async_setup_entry(
 ) -> None:
     coordinator: GivEnergyUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        GivEnergyNumberEntity(coordinator, description)
-        for description in NUMBER_DESCRIPTIONS
+        GivEnergyNumberEntity(coordinator, description) for description in NUMBER_DESCRIPTIONS
     )
 
 

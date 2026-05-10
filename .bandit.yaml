@@ -1,0 +1,4 @@
+# B101: `assert` is fine here — used purely for type narrowing under mypy strict,
+# never as a security guard, and we don't run with `python -O`.
+skips:
+  - B101

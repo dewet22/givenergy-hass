@@ -6,7 +6,6 @@ from typing import Any
 
 from givenergy_modbus.model.battery import Battery
 from givenergy_modbus.model.inverter import Inverter
-from givenergy_modbus.model.plant import Plant
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -431,8 +430,7 @@ async def async_setup_entry(
     coordinator: GivEnergyUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     entities: list[SensorEntity] = [
-        GivEnergyInverterSensor(coordinator, description)
-        for description in INVERTER_SENSORS
+        GivEnergyInverterSensor(coordinator, description) for description in INVERTER_SENSORS
     ]
 
     for battery_index, battery in enumerate(coordinator.data.batteries):
@@ -442,8 +440,7 @@ async def async_setup_entry(
         )
 
     entities.extend(
-        GivEnergyCoordinatorSensor(coordinator, description)
-        for description in COORDINATOR_SENSORS
+        GivEnergyCoordinatorSensor(coordinator, description) for description in COORDINATOR_SENSORS
     )
 
     async_add_entities(entities)

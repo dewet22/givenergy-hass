@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from collections.abc import Callable, Awaitable
 from typing import Any
 
 from givenergy_modbus.client import commands
@@ -9,7 +9,7 @@ from givenergy_modbus.model.inverter import Inverter
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo, EntityCategory
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -49,8 +49,7 @@ async def async_setup_entry(
 ) -> None:
     coordinator: GivEnergyUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        GivEnergySwitchEntity(coordinator, description)
-        for description in SWITCH_DESCRIPTIONS
+        GivEnergySwitchEntity(coordinator, description) for description in SWITCH_DESCRIPTIONS
     )
 
 
