@@ -40,53 +40,28 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self._last_inverter_time: datetime | None = None
         self._unchanged_ticks: int = 0
 
+    # ------------------------------------------------------------------
+    # DataUpdateCoordinator entry point
+    # ------------------------------------------------------------------
+
     async def _async_update_data(self) -> Plant:
         try:
             reconnecting = self._client is None or not self._client.connected
             if reconnecting:
-                self._client = Client(host=self.host, port=self.port)
-                await self._client.connect()
-                self._last_inverter_time = None
-                self._unchanged_ticks = 0
+                await self._connect()
 
-            # Always issue a full refresh on (re)connect to seed the cache.
-            # In passive mode subsequent ticks just read the library's cache,
-            # which the shared-bus peer keeps fresh via its own requests.
-            if reconnecting or not self.passive:
-                await self._client.refresh_plant(
-                    full_refresh=True,
-                    max_batteries=self.max_batteries,
-                )
-
-            plant = self._client.plant
-
-            # In passive mode, use the inverter's RTC as a cache-freshness
-            # signal. Two consecutive ticks with an identical system_time means
-            # the register cache hasn't been updated — the peer client has
-            # stopped refreshing or is absent. One unchanged tick is tolerated
-            # to absorb timing skew between our poll interval and the peer's.
-            if self.passive and not reconnecting:
-                inverter_time = plant.inverter.system_time
-                if (
-                    inverter_time is not None
-                    and self._last_inverter_time is not None
-                    and inverter_time == self._last_inverter_time
-                ):
-                    self._unchanged_ticks += 1
-                    if self._unchanged_ticks >= 2:
-                        self.consecutive_failures += 1
-                        raise UpdateFailed(
-                            "Register cache unchanged for 2 consecutive ticks — "
-                            "no peer client appears to be refreshing the inverter"
-                        )
-                else:
-                    self._unchanged_ticks = 0
+            plant = (
+                await self._passive_update(reconnecting)
+                if self.passive
+                else await self._active_update()
+            )
 
             self._last_inverter_time = plant.inverter.system_time
             self.last_successful_refresh = dt_util.utcnow()
             self.consecutive_failures = 0
             return plant
         except UpdateFailed:
+            self.consecutive_failures += 1
             raise
         except TimeoutError as err:
             # Keep the client alive — timeouts are transient and the TCP
@@ -95,12 +70,75 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             raise UpdateFailed(f"Timed out communicating with inverter: {err}") from err
         except Exception as err:
             self.consecutive_failures += 1
-            if self._client is not None:
-                await self._client.close()
-                self._client = None
+            await self._reset_client()
             raise UpdateFailed(f"Error communicating with inverter: {err}") from err
 
-    async def async_close(self) -> None:
+    # ------------------------------------------------------------------
+    # Update strategies
+    # ------------------------------------------------------------------
+
+    async def _active_update(self) -> Plant:
+        """Issue a full Modbus refresh on every tick and return the updated plant."""
+        await self._client.refresh_plant(
+            full_refresh=True,
+            max_batteries=self.max_batteries,
+        )
+        return self._client.plant
+
+    async def _passive_update(self, reconnecting: bool) -> Plant:
+        """Seed the cache on (re)connect; on subsequent ticks read the cached plant.
+
+        The library's register cache is kept fresh by a peer client on the
+        shared Modbus bus.  Raises UpdateFailed if the cache appears frozen.
+        """
+        if reconnecting:
+            await self._client.refresh_plant(
+                full_refresh=True,
+                max_batteries=self.max_batteries,
+            )
+            return self._client.plant
+
+        plant = self._client.plant
+        self._check_cache_freshness(plant)
+        return plant
+
+    def _check_cache_freshness(self, plant: Plant) -> None:
+        """Raise UpdateFailed if system_time hasn't advanced for two consecutive ticks.
+
+        One unchanged tick is tolerated to absorb timing skew between our poll
+        interval and the peer's refresh cadence.
+        """
+        inverter_time = plant.inverter.system_time
+        if (
+            inverter_time is not None
+            and self._last_inverter_time is not None
+            and inverter_time == self._last_inverter_time
+        ):
+            self._unchanged_ticks += 1
+            if self._unchanged_ticks >= 2:
+                raise UpdateFailed(
+                    "Register cache unchanged for 2 consecutive ticks — "
+                    "no peer client appears to be refreshing the inverter"
+                )
+        else:
+            self._unchanged_ticks = 0
+
+    # ------------------------------------------------------------------
+    # Connection helpers
+    # ------------------------------------------------------------------
+
+    async def _connect(self) -> None:
+        """Open a fresh TCP connection and reset all staleness tracking."""
+        self._client = Client(host=self.host, port=self.port)
+        await self._client.connect()
+        self._last_inverter_time = None
+        self._unchanged_ticks = 0
+
+    async def _reset_client(self) -> None:
+        """Close and discard the client so the next tick triggers a reconnect."""
         if self._client is not None:
             await self._client.close()
             self._client = None
+
+    async def async_close(self) -> None:
+        await self._reset_client()
