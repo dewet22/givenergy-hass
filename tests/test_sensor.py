@@ -82,6 +82,56 @@ async def test_battery_device_linked_to_inverter(hass, setup_integration):
     assert battery_device.via_device_id is not None
 
 
+async def test_per_cell_voltage_sensors_created(hass, setup_integration):
+    """All 16 per-cell voltage entities should be registered."""
+    registry = er.async_get(hass)
+    for i in range(1, 17):
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"BT1234A001_v_cell_{i:02d}")
+        assert entity_id is not None, f"Cell {i} voltage entity not registered"
+        state = hass.states.get(entity_id)
+        assert state.attributes["unit_of_measurement"] == "V"
+
+
+async def test_cell_voltage_value(hass, setup_integration):
+    """Cell voltages report the underlying battery value verbatim."""
+    state = hass.states.get(_entity_id(hass, "sensor", "BT1234A001_v_cell_01"))
+    # mock_battery sets v_cell_01 to 3.275 + 1*0.001 = 3.276
+    assert float(state.state) == 3.276
+
+
+async def test_cell_temperature_groups_created(hass, setup_integration):
+    """All 4 cell-group temperature entities should be registered."""
+    registry = er.async_get(hass)
+    for a, b in [(1, 4), (5, 8), (9, 12), (13, 16)]:
+        entity_id = registry.async_get_entity_id(
+            "sensor", DOMAIN, f"BT1234A001_t_cells_{a:02d}_{b:02d}"
+        )
+        assert entity_id is not None
+        state = hass.states.get(entity_id)
+        assert state.attributes["unit_of_measurement"] == "°C"
+
+
+async def test_bms_internal_sensors_present(hass, setup_integration):
+    """BMS MOSFET temperature, cell voltage sum, and cell count are exposed."""
+    assert hass.states.get(_entity_id(hass, "sensor", "BT1234A001_t_bms_mosfet")).state == "28.4"
+    assert (
+        float(hass.states.get(_entity_id(hass, "sensor", "BT1234A001_v_cells_sum")).state) == 52.412
+    )
+    assert hass.states.get(_entity_id(hass, "sensor", "BT1234A001_num_cells")).state == "16"
+
+
+async def test_cell_voltages_attached_to_battery_device(hass, setup_integration):
+    """Per-cell sensors live on the battery device, not the inverter device."""
+    from homeassistant.helpers import device_registry as dr
+
+    registry = er.async_get(hass)
+    dev_registry = dr.async_get(hass)
+    entity_id = registry.async_get_entity_id("sensor", DOMAIN, "BT1234A001_v_cell_01")
+    entity_entry = registry.async_get(entity_id)
+    device = dev_registry.async_get(entity_entry.device_id)
+    assert device.serial_number == "BT1234A001"
+
+
 async def test_consecutive_failures_starts_at_zero(hass, setup_integration):
     state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_consecutive_failures"))
     assert state.state == "0"

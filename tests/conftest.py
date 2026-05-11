@@ -86,6 +86,16 @@ def mock_battery() -> MagicMock:
     bat.cap_design = 9.5
     bat.num_cycles = 42
     bat.bms_firmware_version = 3005
+    # BMS internals
+    bat.num_cells = 16
+    bat.v_cells_sum = 52.412
+    bat.t_bms_mosfet = 28.4
+    for i in range(1, 17):
+        setattr(bat, f"v_cell_{i:02d}", 3.275 + i * 0.001)  # ~3.276–3.291 V
+    bat.t_cells_01_04 = 22.1
+    bat.t_cells_05_08 = 22.4
+    bat.t_cells_09_12 = 22.6
+    bat.t_cells_13_16 = 22.3
     return bat
 
 

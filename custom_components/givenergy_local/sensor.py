@@ -42,6 +42,16 @@ class GivEnergyBatterySensorDescription(SensorEntityDescription):
     value_fn: Callable[[Battery], Any] = field(default=lambda _: None)
 
 
+def _battery_attr(name: str) -> Callable[[Battery], Any]:
+    """Return a value_fn that reads `name` off the battery.
+
+    Used by the bulk-defined per-cell entities so each closure captures
+    its own attribute name explicitly (and so mypy can infer the type
+    of the resulting Callable).
+    """
+    return lambda bat: getattr(bat, name)
+
+
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyCoordinatorSensorDescription(SensorEntityDescription):
     value_fn: Callable[[GivEnergyUpdateCoordinator], Any] = field(default=lambda _: None)
@@ -346,8 +356,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
 
 BATTERY_SENSORS: tuple[GivEnergyBatterySensorDescription, ...] = (
     GivEnergyBatterySensorDescription(
+        # Entity name is just "SOC" because the device is already named
+        # "GivEnergy Battery <serial>"; "Battery SOC" would be redundant.
         key="soc",
-        name="Battery SOC",
+        name="SOC",
         native_unit_of_measurement=PERCENTAGE,
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
@@ -400,6 +412,62 @@ BATTERY_SENSORS: tuple[GivEnergyBatterySensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda bat: bat.num_cycles,
         entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    # --- BMS internals (pack health monitoring) ---
+    GivEnergyBatterySensorDescription(
+        key="num_cells",
+        name="Cell Count",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda bat: bat.num_cells,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyBatterySensorDescription(
+        key="v_cells_sum",
+        name="Cell Voltages Sum",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=3,
+        value_fn=lambda bat: bat.v_cells_sum,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyBatterySensorDescription(
+        key="t_bms_mosfet",
+        name="BMS MOSFET Temperature",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda bat: bat.t_bms_mosfet,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    # Per-cell voltages — 16 entities; unused cells in smaller packs read ~0.
+    # `attr` default-arg captures the loop variable to avoid the closure trap.
+    *(
+        GivEnergyBatterySensorDescription(
+            key=f"v_cell_{i:02d}",
+            name=f"Cell {i} Voltage",
+            native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+            device_class=SensorDeviceClass.VOLTAGE,
+            state_class=SensorStateClass.MEASUREMENT,
+            suggested_display_precision=3,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn=_battery_attr(f"v_cell_{i:02d}"),
+        )
+        for i in range(1, 17)
+    ),
+    # Cell temperatures are reported in 4-cell groups (the BMS only samples one
+    # thermistor per group, not per cell).
+    *(
+        GivEnergyBatterySensorDescription(
+            key=f"t_cells_{a:02d}_{b:02d}",
+            name=f"Cells {a}-{b} Temperature",
+            native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+            device_class=SensorDeviceClass.TEMPERATURE,
+            state_class=SensorStateClass.MEASUREMENT,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn=_battery_attr(f"t_cells_{a:02d}_{b:02d}"),
+        )
+        for a, b in [(1, 4), (5, 8), (9, 12), (13, 16)]
     ),
 )
 

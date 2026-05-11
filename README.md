@@ -107,14 +107,21 @@ When enabled, the integration connects to the inverter but does not send any Mod
 
 Each battery appears as a separate device linked to the inverter.
 
-| Entity | Unit |
-|---|---|
-| Battery SOC | % |
-| Voltage | V |
-| Temperature Max / Min | °C |
-| Remaining Capacity | Ah |
-| Design Capacity | Ah |
-| Charge Cycles | — |
+| Entity | Unit | Notes |
+|---|---|---|
+| SOC | % | |
+| Voltage | V | Pack output voltage |
+| Temperature Max / Min | °C | |
+| Remaining Capacity | Ah | |
+| Design Capacity | Ah | |
+| Charge Cycles | — | |
+| Cell Count | — | Diagnostic; number of cells the BMS reports |
+| Cell Voltages Sum | V | Diagnostic; sanity-check against Voltage |
+| BMS MOSFET Temperature | °C | Diagnostic |
+| Cell 1 … 16 Voltage | V | Diagnostic; per-cell. Unused positions in smaller packs read ~0 |
+| Cells 1-4 / 5-8 / 9-12 / 13-16 Temperature | °C | Diagnostic; the BMS samples one thermistor per 4-cell group |
+
+Cell-level entities are tagged as diagnostic, so they're hidden from the default device view but available for dashboards and pack-health monitoring (cell voltage spread, temperature deltas, etc.).
 
 ## Energy dashboard
 
