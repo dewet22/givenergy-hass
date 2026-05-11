@@ -1,0 +1,96 @@
+name: Bump givenergy-modbus
+
+# Triggered by a repository_dispatch event from dewet22/givenergy-modbus's
+# release workflow. Also exposed as workflow_dispatch for manual runs.
+on:
+  repository_dispatch:
+    types: [givenergy-modbus-release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to bump givenergy-modbus to (e.g. 1.2.0)"
+        required: true
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Determine target version
+        id: ver
+        env:
+          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          NEW="${DISPATCH_VERSION:-$MANUAL_VERSION}"
+          if [ -z "$NEW" ]; then
+            echo "::error::no version supplied via client_payload.version or workflow inputs"
+            exit 1
+          fi
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+
+      - name: Bump pin in pyproject.toml and manifest.json
+        env:
+          NEW: ${{ steps.ver.outputs.new }}
+        run: |
+          python3 - <<'PY'
+          import os, re, pathlib, glob
+          new = os.environ["NEW"]
+          # Match "givenergy-modbus>=<version>" capturing the version as a
+          # separate group that stops at the next comma or closing quote;
+          # this handles pre-release suffixes (e.g. "1.2.0a1") in the
+          # existing pin without leaving the suffix glued to the new version.
+          pattern = re.compile(r'("givenergy-modbus>=)[^",]+(.*?")')
+
+          targets = ["pyproject.toml", *glob.glob("custom_components/*/manifest.json")]
+          for path in targets:
+              p = pathlib.Path(path)
+              if not p.exists():
+                  continue
+              text = p.read_text()
+              updated, n = pattern.subn(rf'\g<1>{new}\g<2>', text)
+              if n == 0:
+                  print(f"warning: no givenergy-modbus pin found in {path}")
+                  continue
+              p.write_text(updated)
+              print(f"bumped {n} pin(s) in {path}")
+          PY
+
+      - name: Refresh uv.lock
+        run: uv lock --upgrade-package givenergy-modbus
+
+      - name: Commit, push, open PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW: ${{ steps.ver.outputs.new }}
+        run: |
+          if git diff --quiet; then
+            echo "nothing to bump (pin already at ${NEW}?)"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          branch="bump/givenergy-modbus-${NEW}"
+          git checkout -B "$branch"
+          git add -A
+          git commit -m "fix(deps): bump givenergy-modbus to ${NEW}"
+          git push -f origin "$branch"
+
+          existing=$(gh pr list --head "$branch" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "PR #${existing} already open for ${branch}; updated branch in place"
+          else
+            gh pr create \
+              --title "fix(deps): bump givenergy-modbus to ${NEW}" \
+              --body "Automated bump triggered by [givenergy-modbus@${NEW}](https://github.com/dewet22/givenergy-modbus/releases/tag/v${NEW})." \
+              --base main \
+              --head "$branch"
+          fi
