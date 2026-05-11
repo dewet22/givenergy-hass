@@ -132,6 +132,43 @@ async def test_cell_voltages_attached_to_battery_device(hass, setup_integration)
     assert device.serial_number == "BT1234A001"
 
 
+async def test_new_inverter_sensors_present(hass, setup_integration):
+    """Spot-check a handful of the newly-added inverter sensors."""
+    cases = {
+        "system_mode": "1",
+        "charge_status": "1",
+        "battery_pause_mode": "0",
+        "i_ac1": "5.2",
+        "p_combined_generation": "2500",
+        "p_backup": "0",
+        "num_phases": "1",
+        "num_mppt": "2",
+        "arm_firmware_version": "449",
+    }
+    for key, expected in cases.items():
+        state = hass.states.get(_entity_id(hass, "sensor", f"SA1234G123_{key}"))
+        assert state.state == expected, f"{key}: expected {expected!r}, got {state.state!r}"
+
+
+async def test_enum_sensors_render_as_human_readable(hass, setup_integration):
+    """meter_type and battery_type enums should surface as title-cased names, not ints."""
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_battery_type"))
+    assert state.state == "Lithium"
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_meter_type"))
+    assert state.state == "Ct Or Em418"
+
+
+async def test_battery_capacity_sensors(hass, setup_integration):
+    """Battery capacity is exposed both in Ah and as the computed kWh field."""
+    ah = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_battery_capacity_ah"))
+    assert ah.state == "160"
+    assert ah.attributes["unit_of_measurement"] == "Ah"
+
+    kwh = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_battery_capacity_kwh"))
+    assert float(kwh.state) == 8.19
+    assert kwh.attributes["unit_of_measurement"] == "kWh"
+
+
 async def test_consecutive_failures_starts_at_zero(hass, setup_integration):
     state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_consecutive_failures"))
     assert state.state == "0"

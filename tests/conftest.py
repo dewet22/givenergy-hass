@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from givenergy_modbus.model import TimeSlot
-from givenergy_modbus.model.inverter import BatteryPowerMode
+from givenergy_modbus.model.inverter import BatteryPowerMode, BatteryType, MeterType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.givenergy_local.const import DOMAIN
@@ -71,6 +71,37 @@ def mock_inverter() -> MagicMock:
     inv.charge_slot_2 = TimeSlot(start=time(0, 0), end=time(0, 0))
     inv.discharge_slot_1 = TimeSlot(start=time(17, 0), end=time(22, 0))
     inv.discharge_slot_2 = TimeSlot(start=time(0, 0), end=time(0, 0))
+    # Status / mode
+    inv.inverter_errors = 0
+    inv.charger_warning_code = 0
+    inv.charge_status = 1
+    inv.system_mode = 1
+    inv.battery_pause_mode = 0
+    # AC output + power quality
+    inv.v_ac1_output = 240.3
+    inv.f_ac1_output = 50.01
+    inv.i_ac1 = 5.2
+    inv.p_grid_apparent = 850
+    inv.pf_inverter_output_now = 0.98
+    inv.p_grid_out_ph1 = -800
+    # Additional energy totals
+    inv.e_inverter_export_total = 2105.7
+    inv.e_inverter_in_total = 312.4
+    inv.e_discharge_year = 421.8
+    # EPS / generation
+    inv.p_backup = 0
+    inv.p_combined_generation = 2500
+    # Identification / firmware
+    inv.device_type_code = "2001"
+    inv.num_mppt = 2
+    inv.num_phases = 1
+    inv.arm_firmware_version = 449
+    inv.dsp_firmware_version = 451
+    inv.modbus_version = 16
+    inv.meter_type = MeterType.CT_OR_EM418
+    inv.battery_type = BatteryType.LITHIUM
+    inv.battery_capacity_ah = 160
+    inv.battery_capacity_kwh = 8.19
     return inv
 
 

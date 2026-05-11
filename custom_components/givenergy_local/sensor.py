@@ -71,6 +71,39 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: inv.fault_code,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
+    GivEnergyInverterSensorDescription(
+        key="inverter_errors",
+        name="Inverter Errors",
+        value_fn=lambda inv: inv.inverter_errors,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="charger_warning_code",
+        name="Charger Warning Code",
+        value_fn=lambda inv: inv.charger_warning_code,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    # Raw integers — the upstream library doesn't ship enum mappings for
+    # these yet, but exposing the values lets users build templates or
+    # see them change in history while the mappings get figured out.
+    GivEnergyInverterSensorDescription(
+        key="charge_status",
+        name="Charge Status",
+        value_fn=lambda inv: inv.charge_status,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="system_mode",
+        name="System Mode",
+        value_fn=lambda inv: inv.system_mode,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="battery_pause_mode",
+        name="Battery Pause Mode",
+        value_fn=lambda inv: inv.battery_pause_mode,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
     # --- Solar / PV ---
     GivEnergyInverterSensorDescription(
         key="p_pv",
@@ -290,6 +323,59 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: inv.f_ac1,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
+    GivEnergyInverterSensorDescription(
+        key="v_ac1_output",
+        name="AC Output Voltage",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.v_ac1_output,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="f_ac1_output",
+        name="AC Output Frequency",
+        native_unit_of_measurement=UnitOfFrequency.HERTZ,
+        device_class=SensorDeviceClass.FREQUENCY,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.f_ac1_output,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="i_ac1",
+        name="AC Output Current",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.i_ac1,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="p_grid_apparent",
+        name="Grid Apparent Power",
+        native_unit_of_measurement="VA",
+        device_class=SensorDeviceClass.APPARENT_POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.p_grid_apparent,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="pf_inverter_output_now",
+        name="Inverter Power Factor",
+        device_class=SensorDeviceClass.POWER_FACTOR,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.pf_inverter_output_now,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="p_grid_out_ph1",
+        name="Grid Power Phase 1",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.p_grid_out_ph1,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
     # --- Load / Consumption ---
     GivEnergyInverterSensorDescription(
         key="p_load_demand",
@@ -323,6 +409,47 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_inverter_out_total,
     ),
+    GivEnergyInverterSensorDescription(
+        key="e_inverter_export_total",
+        name="Inverter Export Total",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda inv: inv.e_inverter_export_total,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="e_inverter_in_total",
+        name="Charge from Grid Total",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda inv: inv.e_inverter_in_total,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="e_discharge_year",
+        name="Battery Discharge This Year",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda inv: inv.e_discharge_year,
+    ),
+    # --- EPS / Generation ---
+    GivEnergyInverterSensorDescription(
+        key="p_backup",
+        name="Backup Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.p_backup,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="p_combined_generation",
+        name="Combined Generation Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.p_combined_generation,
+    ),
     # --- Temperatures ---
     GivEnergyInverterSensorDescription(
         key="t_inverter_heatsink",
@@ -350,6 +477,78 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: round(inv.work_time_total / 3600, 1),
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="device_type_code",
+        name="Device Type Code",
+        value_fn=lambda inv: inv.device_type_code,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="num_mppt",
+        name="MPPT Count",
+        value_fn=lambda inv: inv.num_mppt,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="num_phases",
+        name="Phase Count",
+        value_fn=lambda inv: inv.num_phases,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="arm_firmware_version",
+        name="ARM Firmware Version",
+        value_fn=lambda inv: inv.arm_firmware_version,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="dsp_firmware_version",
+        name="DSP Firmware Version",
+        value_fn=lambda inv: inv.dsp_firmware_version,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="modbus_version",
+        name="Modbus Version",
+        value_fn=lambda inv: inv.modbus_version,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="meter_type",
+        name="Meter Type",
+        value_fn=lambda inv: (
+            inv.meter_type.name.replace("_", " ").title() if inv.meter_type is not None else None
+        ),
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="battery_type",
+        name="Battery Type",
+        value_fn=lambda inv: (
+            inv.battery_type.name.replace("_", " ").title()
+            if inv.battery_type is not None
+            else None
+        ),
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="battery_capacity_ah",
+        name="Battery Capacity",
+        native_unit_of_measurement="Ah",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.battery_capacity_ah,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="battery_capacity_kwh",
+        name="Battery Nominal Capacity",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY_STORAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda inv: inv.battery_capacity_kwh,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
 )

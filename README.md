@@ -83,7 +83,29 @@ When enabled, the integration connects to the inverter but does not send any Mod
 | Charger Temperature | °C | |
 | Status | — | e.g. Normal, Warning, Fault |
 | Fault Code | — | |
+| Inverter Errors | — | Diagnostic; error bitmask |
+| Charger Warning Code | — | Diagnostic |
+| Charge Status | — | Diagnostic; raw int (BMS state code, mapping TBD) |
+| System Mode | — | Diagnostic; raw int (operating mode, mapping TBD) |
+| Battery Pause Mode | — | Diagnostic; raw int (pause-charging state) |
+| AC Output Voltage / Frequency / Current | V / Hz / A | Diagnostic; inverter output (post-conversion) |
+| Grid Apparent Power | VA | Diagnostic |
+| Inverter Power Factor | — | Diagnostic |
+| Grid Power Phase 1 | W | Diagnostic; useful for 3-phase models |
+| Inverter Export Total | kWh | Cumulative inverter export to grid |
+| Charge from Grid Total | kWh | Cumulative grid-sourced battery charging |
+| Battery Discharge This Year | kWh | |
+| Backup Power | W | EPS port output |
+| Combined Generation Power | W | Solar + battery combined |
 | Work Time Total | h | |
+| Device Type Code | — | Diagnostic |
+| MPPT Count | — | Diagnostic |
+| Phase Count | — | Diagnostic; 1 for single-phase, 3 for three-phase |
+| ARM / DSP / Modbus Firmware Version | — | Diagnostic |
+| Meter Type | — | Diagnostic; CT-or-EM418 / EM115 |
+| Battery Type | — | Diagnostic; Lithium / Lead-Acid |
+| Battery Capacity | Ah | Diagnostic; reported pack capacity |
+| Battery Nominal Capacity | kWh | Diagnostic; computed from Ah × nominal voltage |
 | Last Successful Refresh | timestamp | Diagnostic |
 | Consecutive Refresh Failures | — | Diagnostic; resets to 0 on next success |
 | Total Refresh Failures | — | Diagnostic; ever-increasing counter (resets only when HA restarts — HA's long-term statistics handle that transparently) |
@@ -122,6 +144,19 @@ Each battery appears as a separate device linked to the inverter.
 | Cells 1-4 / 5-8 / 9-12 / 13-16 Temperature | °C | Diagnostic; the BMS samples one thermistor per 4-cell group |
 
 Cell-level entities are tagged as diagnostic, so they're hidden from the default device view but available for dashboards and pack-health monitoring (cell voltage spread, temperature deltas, etc.).
+
+### Not exposed by default
+
+The upstream library makes ~180 inverter fields available; this integration intentionally exposes the subset that's useful for end users without being unsafe or noisy. Deliberately skipped for now:
+
+- `enable_*` flags for low-level inverter behaviour (buzzer, RTC, BMS read, frequency derating, auto-judge battery type, …) — changing these from a UI toggle is rarely what you actually want
+- Battery calibration registers, voltage-adjust trims, low-voltage force-charge timers
+- Charge / discharge slots 3 - 10 and their per-slot SOC stops (slots 1 and 2 cover typical Eco/Timed usage)
+- Admin / destructive actions: inverter reboot, BMS flash update, auto-test triggers, ARM-chip select, user-code register
+- Raw debug fields (internal bus voltages, countdown timers, `debug_inverter`)
+- Per-phase three-phase data beyond `Grid Power Phase 1` and the three-phase balance registers
+
+If any of these would genuinely help your setup, [open an issue](https://github.com/dewet22/givenergy-hass/issues) describing the use case — the field probably can be exposed with a single description entry, but it's nicer to have a concrete reason to do it. The same applies if a sensor we *do* expose looks wrong on your inverter — **real-world testing on non-Hybrid Gen 1 hardware (AC, AC3, EMS, Gateway, All-in-One) is especially appreciated**, and a register dump from your unit goes a long way.
 
 ## Energy dashboard
 
