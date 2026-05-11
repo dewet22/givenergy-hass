@@ -117,11 +117,46 @@ async def test_successful_refresh_resets_failure_count(hass, mock_plant):
                 await coordinator._async_update_data()
 
         assert coordinator.consecutive_failures == 2
+        assert coordinator.total_failures == 2
 
         await coordinator._async_update_data()
 
         assert coordinator.consecutive_failures == 0
+        # total_failures is monotonic — success doesn't reset it.
+        assert coordinator.total_failures == 2
         assert coordinator.last_successful_refresh is not None
+
+
+async def test_total_failures_increments_on_every_failure_type(hass, mock_plant):
+    """Each of the three failure paths (UpdateFailed, TimeoutError, generic Exception)
+    must increment total_failures."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30, 1)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.refresh_plant.side_effect = [
+            TimeoutError(),  # → counted (TimeoutError path)
+            ConnectionResetError("peer reset"),  # → counted (generic Exception path)
+            mock_plant,  # → success, no count
+            TimeoutError(),  # → counted (TimeoutError path)
+        ]
+        mock_cls.return_value = client
+        coordinator._client = client
+
+        for _ in range(2):
+            with pytest.raises(UpdateFailed):
+                await coordinator._async_update_data()
+        assert coordinator.total_failures == 2
+
+        await coordinator._async_update_data()
+        assert coordinator.total_failures == 2  # success doesn't bump it
+
+        coordinator._client = client  # ConnectionReset reset it
+        client.connected = True
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+        assert coordinator.total_failures == 3
 
 
 async def test_non_timeout_error_closes_client(hass):

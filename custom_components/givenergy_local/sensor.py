@@ -419,6 +419,16 @@ COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
         value_fn=lambda coord: coord.consecutive_failures,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
+    GivEnergyCoordinatorSensorDescription(
+        key="total_failures",
+        name="Total Refresh Failures",
+        # Monotonically increasing within a coordinator instance; HA's recorder
+        # treats the reset-to-zero on HA restart as a counter cycle, so the
+        # long-term statistics still show correct cumulative deltas over time.
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda coord: coord.total_failures,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
 )
 
 

@@ -42,6 +42,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self._client: Client | None = None
         self.last_successful_refresh: datetime | None = None
         self.consecutive_failures: int = 0
+        self.total_failures: int = 0
         self._last_inverter_time: datetime | None = None
         self._unchanged_ticks: int = 0
         self._active_tick: int = 0
@@ -69,14 +70,17 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             return plant
         except UpdateFailed:
             self.consecutive_failures += 1
+            self.total_failures += 1
             raise
         except TimeoutError as err:
             # Keep the client alive — timeouts are transient and the TCP
             # connection is likely still valid.
             self.consecutive_failures += 1
+            self.total_failures += 1
             raise UpdateFailed(f"Timed out communicating with inverter: {err}") from err
         except Exception as err:
             self.consecutive_failures += 1
+            self.total_failures += 1
             await self._reset_client()
             raise UpdateFailed(f"Error communicating with inverter: {err}") from err
 

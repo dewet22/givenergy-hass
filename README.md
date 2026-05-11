@@ -86,6 +86,7 @@ When enabled, the integration connects to the inverter but does not send any Mod
 | Work Time Total | h | |
 | Last Successful Refresh | timestamp | Diagnostic |
 | Consecutive Refresh Failures | — | Diagnostic; resets to 0 on next success |
+| Total Refresh Failures | — | Diagnostic; ever-increasing counter (resets only when HA restarts — HA's long-term statistics handle that transparently) |
 
 #### Controls
 
