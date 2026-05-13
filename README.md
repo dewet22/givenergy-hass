@@ -11,9 +11,20 @@ Uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) for the u
 
 ## Supported inverters
 
-The underlying [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) library knows the following inverter families: Hybrid (1ph/3ph), AC, EMS, Gateway, and All-in-One. However, **this integration has only been tested by the author on a Hybrid Gen 1**. If you have a different model and would like to help validate the integration against it, please [open an issue](https://github.com/dewet22/givenergy-hass/issues) — bug reports, register dumps, and PRs are all very welcome.
+The underlying [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) library knows the following inverter families: Hybrid (1ph/3ph), AC, EMS, Gateway, and All-in-One. The following systems have been reported working:
 
-Older Gen 2 units with the `EA` serial prefix are not currently supported by the underlying library — again, any owners willing to help test are very welcome!
+- Hybrid (Gen 1)
+- AC-coupled (Gen 1)
+
+If you have a different model and would like to help validate the integration against it, please [open an issue](https://github.com/dewet22/givenergy-hass/issues). A register dump is the most useful thing you can include — it captures every raw value the inverter exposes and lets me map new sensors without needing physical access to your hardware. To produce one, clone [givenergy-cli](https://github.com/dewet22/givenergy-cli), run `uv sync`, then:
+
+```bash
+uv run givenergy-cli --host <inverter-ip> export -o plant.json
+```
+
+This writes a portable JSON file covering all discovered registers. Attach it to the issue along with your inverter model and serial prefix.
+
+Older Gen 2 units with the `EA` serial prefix are untested — any owners willing to help validate are very welcome!
 
 ## Installation
 
@@ -156,7 +167,7 @@ The upstream library makes ~180 inverter fields available; this integration inte
 - Raw debug fields (internal bus voltages, countdown timers, `debug_inverter`)
 - Per-phase three-phase data beyond `Grid Power Phase 1` and the three-phase balance registers
 
-If any of these would genuinely help your setup, [open an issue](https://github.com/dewet22/givenergy-hass/issues) describing the use case — the field probably can be exposed with a single description entry, but it's nicer to have a concrete reason to do it. The same applies if a sensor we *do* expose looks wrong on your inverter — **real-world testing on non-Hybrid Gen 1 hardware (AC, AC3, EMS, Gateway, All-in-One) is especially appreciated**, and a register dump from your unit goes a long way.
+If any of these would genuinely help your setup, [open an issue](https://github.com/dewet22/givenergy-hass/issues) describing the use case — the field probably can be exposed with a single description entry, but it's nicer to have a concrete reason to do it. The same applies if a sensor we *do* expose looks wrong on your inverter — **real-world testing on non-Hybrid Gen 1 hardware (AC, AC3, EMS, Gateway, All-in-One) is especially appreciated**, and a register dump from your unit goes a long way (see [Supported inverters](#supported-inverters) for how to produce one).
 
 ## Energy dashboard
 
