@@ -1,8 +1,16 @@
-# GivEnergy Local Home Assistant custom component
+# GivEnergy Home Assistant Integration
 
-A Home Assistant custom integration for GivEnergy plants (combination of inverter, solar/photovoltaic and batteries) which communicates directly over local Modbus TCP — no cloud, no GivEnergy portal account required.
+<p align="center"><img src="logo.png" alt="GivEnergy" width="320"></p>
 
-Uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) for the underlying communication and state management.
+[![release](https://img.shields.io/github/v/release/dewet22/givenergy-hass)](https://github.com/dewet22/givenergy-hass/releases)
+[![CI](https://img.shields.io/github/checks-status/dewet22/givenergy-hass/main)](https://github.com/dewet22/givenergy-hass/actions?query=branch%3Amain)
+[![license](https://img.shields.io/github/license/dewet22/givenergy-hass)](LICENSE)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/docs/use/repositories/dashboard)
+
+A Home Assistant integration for GivEnergy inverters that communicates directly over local Modbus TCP — no cloud, no GivEnergy portal account required.
+
+Uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) for all inverter communication.
 
 ## Requirements
 
