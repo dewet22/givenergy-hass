@@ -12,10 +12,12 @@ from .const import (
     CONF_MAX_BATTERIES,
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
+    CONF_TIMEOUT_TOLERANCE,
     DEFAULT_MAX_BATTERIES,
     DEFAULT_PASSIVE,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_TIMEOUT_TOLERANCE,
     DOMAIN,
 )
 
@@ -28,6 +30,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): int,
         vol.Required(CONF_MAX_BATTERIES, default=DEFAULT_MAX_BATTERIES): int,
         vol.Required(CONF_PASSIVE, default=DEFAULT_PASSIVE): bool,
+        vol.Required(CONF_TIMEOUT_TOLERANCE, default=DEFAULT_TIMEOUT_TOLERANCE): int,
     }
 )
 

@@ -7,7 +7,9 @@ DEFAULT_MAX_BATTERIES = 1
 CONF_MAX_BATTERIES = "max_batteries"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_PASSIVE = "passive"
+CONF_TIMEOUT_TOLERANCE = "timeout_tolerance"
 
 DEFAULT_PASSIVE = False
+DEFAULT_TIMEOUT_TOLERANCE = 5
 
 PLATFORMS = ["sensor", "switch", "number", "select", "time"]

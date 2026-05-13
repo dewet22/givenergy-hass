@@ -8,9 +8,11 @@ from .const import (
     CONF_MAX_BATTERIES,
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
+    CONF_TIMEOUT_TOLERANCE,
     DEFAULT_MAX_BATTERIES,
     DEFAULT_PASSIVE,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_TIMEOUT_TOLERANCE,
     DOMAIN,
     PLATFORMS,
 )
@@ -25,6 +27,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         scan_interval=entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
         max_batteries=entry.data.get(CONF_MAX_BATTERIES, DEFAULT_MAX_BATTERIES),
         passive=entry.data.get(CONF_PASSIVE, DEFAULT_PASSIVE),
+        timeout_tolerance=entry.data.get(CONF_TIMEOUT_TOLERANCE, DEFAULT_TIMEOUT_TOLERANCE),
     )
 
     await coordinator.async_config_entry_first_refresh()

@@ -28,6 +28,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         scan_interval: int,
         max_batteries: int,
         passive: bool = False,
+        timeout_tolerance: int = 5,
     ) -> None:
         super().__init__(
             hass,
@@ -39,6 +40,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self.port = port
         self.max_batteries = max_batteries
         self.passive = passive
+        self.timeout_tolerance = timeout_tolerance
         self._client: Client | None = None
         self.last_successful_refresh: datetime | None = None
         self.consecutive_failures: int = 0
@@ -72,17 +74,29 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             self.consecutive_failures += 1
             self.total_failures += 1
             raise
-        except TimeoutError as err:
+        except TimeoutError:
             # Keep the client alive — timeouts are transient and the TCP
             # connection is likely still valid.
             self.consecutive_failures += 1
             self.total_failures += 1
-            raise UpdateFailed(f"Timed out communicating with inverter: {err}") from err
+            if self.data is None or self.consecutive_failures > self.timeout_tolerance:
+                raise UpdateFailed(
+                    f"Timed out communicating with inverter "
+                    f"({self.consecutive_failures} consecutive failures)"
+                )
+            _LOGGER.warning(
+                "Timed out communicating with inverter (failure %d/%d); serving last known data",
+                self.consecutive_failures,
+                self.timeout_tolerance,
+            )
+            return self.data
         except Exception as err:
             self.consecutive_failures += 1
             self.total_failures += 1
             await self._reset_client()
-            raise UpdateFailed(f"Error communicating with inverter: {err}") from err
+            raise UpdateFailed(
+                f"Error communicating with inverter: {str(err) or type(err).__name__}"
+            ) from err
 
     # ------------------------------------------------------------------
     # Update strategies

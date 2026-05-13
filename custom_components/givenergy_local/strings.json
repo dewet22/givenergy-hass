@@ -9,7 +9,8 @@
           "port": "Modbus Port",
           "scan_interval": "Scan Interval (seconds)",
           "max_batteries": "Number of Batteries",
-          "passive": "Passive mode (listen only — another client drives refreshes)"
+          "passive": "Passive mode (listen only — another client drives refreshes)",
+          "timeout_tolerance": "Timeout Tolerance (consecutive failures before unavailable)"
         }
       },
       "reconfigure": {
@@ -20,7 +21,8 @@
           "port": "Modbus Port",
           "scan_interval": "Scan Interval (seconds)",
           "max_batteries": "Number of Batteries",
-          "passive": "Passive mode (listen only — another client drives refreshes)"
+          "passive": "Passive mode (listen only — another client drives refreshes)",
+          "timeout_tolerance": "Timeout Tolerance (consecutive failures before unavailable)"
         }
       }
     },
