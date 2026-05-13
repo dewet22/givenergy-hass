@@ -1930,7 +1930,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "givenergy-modbus", specifier = ">=1.3.0,<2.0.0a1" }]
+requires-dist = [{ name = "givenergy-modbus", editable = "../givenergy-modbus" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1944,16 +1944,46 @@ dev = [
 [[package]]
 name = "givenergy-modbus"
 version = "1.3.0"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../givenergy-modbus" }
 dependencies = [
     { name = "crccheck" },
     { name = "pydantic", version = "2.10.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13.2'" },
     { name = "pydantic", version = "2.12.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13.2' and python_full_version < '3.14.2'" },
     { name = "pydantic", version = "2.13.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14.2'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/99/8f/929743420244f5364b497e66424db622b2ab61dd422ff495380ff977c032/givenergy_modbus-1.3.0.tar.gz", hash = "sha256:9ea1481c9a44a489c0881d45658350a809476704d848521b647483a477b60e79", size = 59793, upload-time = "2026-05-13T08:12:19.955Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/94/12/c725b05ed2cb963ba443d65b4b9bb76948ccd89bac789cc8dcda210885aa/givenergy_modbus-1.3.0-py3-none-any.whl", hash = "sha256:bedfcad399b42265f398edf0cf7fca37a5996e664a5f9c18ca8c3cd5393e0aa1", size = 39285, upload-time = "2026-05-13T08:12:18.618Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "crccheck", specifier = ">=1.1,<2" },
+    { name = "pydantic", specifier = ">=2.0,<3" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "ipython", specifier = ">=9.0.0,<10" },
+    { name = "pip", specifier = ">=26.0.0,<27" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "twine", specifier = ">=6.0.0,<7" },
+    { name = "virtualenv", specifier = ">=21.0.0,<22" },
+]
+docs = [
+    { name = "mkdocs", specifier = ">=1.6.0,<2" },
+    { name = "mkdocs-autorefs", specifier = ">=1.0.0,<2" },
+    { name = "mkdocs-include-markdown-plugin", specifier = ">=7.0.0,<8" },
+    { name = "mkdocs-material", specifier = ">=9.5.0,<10" },
+    { name = "mkdocs-material-extensions", specifier = ">=1.3.0,<2" },
+    { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.0,<2" },
+]
+test = [
+    { name = "bandit", specifier = ">=1.7.5,<2" },
+    { name = "mypy", specifier = ">=2.0.0,<3" },
+    { name = "pytest", specifier = ">=9.0.0,<10" },
+    { name = "pytest-asyncio", specifier = ">=1.0.0,<2" },
+    { name = "pytest-cov", specifier = ">=7.0.0,<8" },
+    { name = "pytest-timeout", specifier = ">=2.4.0,<3" },
+    { name = "ruff", specifier = ">=0.15.0,<1" },
+    { name = "tox", specifier = ">=4.4.8,<5" },
+    { name = "tox-uv", specifier = ">=1.0.0" },
 ]
 
 [[package]]
