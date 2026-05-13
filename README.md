@@ -63,6 +63,7 @@ Add the integration via **Settings → Devices & Services → Add Integration �
 | Scan Interval | `30` s | How often HA polls for updated values |
 | Number of Batteries | `1` | Number of battery units connected |
 | [Passive mode](#passive-mode) | off | Listen only — use when another Modbus client (e.g. the GivEnergy app) is already polling and this integration should just observe |
+| Timeout Tolerance | `5` | Consecutive refresh failures before the integration marks entities unavailable |
 
 To change any of these later, open the integration's **⋮** menu in **Settings → Devices & Services → GivEnergy Local** and choose **Reconfigure**. The integration reloads automatically when you save.
 
