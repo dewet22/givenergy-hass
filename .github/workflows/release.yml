@@ -17,18 +17,29 @@ jobs:
 
       - name: Generate release notes from git log
         id: notes
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
         run: |
-          tag="${{ github.event.release.tag_name }}"
-          previous_tag="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
+          # Require an annotated tag — the message becomes the release blurb.
+          blurb="$(git tag -l --format='%(contents)' "$TAG" | sed '/^-----BEGIN PGP/,/^-----END PGP/d' | sed 's/[[:space:]]*$//' | sed '/^$/d')"
+          if [ -z "$blurb" ]; then
+            echo "::error::Tag '$TAG' has no message. Use 'git tag -a $TAG -m \"...\"' to add a release blurb."
+            exit 1
+          fi
+
+          previous_tag="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
           if [ -n "$previous_tag" ]; then
-            range="${previous_tag}..${tag}"
-            compare="**Full Changelog**: https://github.com/${{ github.repository }}/compare/${previous_tag}...${tag}"
+            range="${previous_tag}..${TAG}"
+            compare="**Full Changelog**: https://github.com/${REPO}/compare/${previous_tag}...${TAG}"
           else
-            range="$tag"
+            range="$TAG"
             compare=""
           fi
           {
             echo "body<<NOTES_EOF"
+            echo "$blurb"
+            echo
             echo "## Changes"
             echo
             git log "$range" --no-merges --reverse --pretty=format:'- %s (%h)'
@@ -39,9 +50,10 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Patch manifest.json with release tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
         run: |
-          version="${{ github.event.release.tag_name }}"
-          version="${version#v}"
+          version="${TAG#v}"
           jq --arg v "$version" '.version = $v' \
             custom_components/givenergy_local/manifest.json > manifest.tmp
           mv manifest.tmp custom_components/givenergy_local/manifest.json
