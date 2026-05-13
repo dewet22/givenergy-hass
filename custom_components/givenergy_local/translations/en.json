@@ -34,5 +34,30 @@
       "already_configured": "This inverter is already configured.",
       "reconfigure_successful": "Reconfiguration was successful."
     }
+  },
+  "entity": {
+    "sensor": {
+      "inverter_status": {
+        "state": {
+          "waiting": "Waiting",
+          "normal": "Normal",
+          "warning": "Warning",
+          "fault": "Fault",
+          "flashing_firmware_update": "Flashing Firmware Update"
+        }
+      },
+      "meter_type": {
+        "state": {
+          "ct_or_em418": "CT or EM418",
+          "em115": "EM115"
+        }
+      },
+      "battery_type": {
+        "state": {
+          "lead_acid": "Lead Acid",
+          "lithium": "Lithium"
+        }
+      }
+    }
   }
 }

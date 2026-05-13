@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from givenergy_modbus.model.battery import Battery
-from givenergy_modbus.model.inverter import Inverter
+from givenergy_modbus.model.inverter import BatteryType, Inverter, MeterType, Model, Status
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -62,7 +62,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     GivEnergyInverterSensorDescription(
         key="status",
         name="Status",
-        value_fn=lambda inv: inv.status.name.replace("_", " ").title(),
+        device_class=SensorDeviceClass.ENUM,
+        options=[s.name.lower() for s in Status],
+        translation_key="inverter_status",
+        value_fn=lambda inv: inv.status.name.lower(),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(
@@ -518,18 +521,20 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     GivEnergyInverterSensorDescription(
         key="meter_type",
         name="Meter Type",
-        value_fn=lambda inv: (
-            inv.meter_type.name.replace("_", " ").title() if inv.meter_type is not None else None
-        ),
+        device_class=SensorDeviceClass.ENUM,
+        options=[m.name.lower() for m in MeterType],
+        translation_key="meter_type",
+        value_fn=lambda inv: inv.meter_type.name.lower() if inv.meter_type is not None else None,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(
         key="battery_type",
         name="Battery Type",
+        device_class=SensorDeviceClass.ENUM,
+        options=[m.name.lower() for m in BatteryType],
+        translation_key="battery_type",
         value_fn=lambda inv: (
-            inv.battery_type.name.replace("_", " ").title()
-            if inv.battery_type is not None
-            else None
+            inv.battery_type.name.lower() if inv.battery_type is not None else None
         ),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
@@ -723,6 +728,17 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
+_MODEL_NAMES: dict[Model, str] = {
+    Model.HYBRID: "Hybrid",
+    Model.AC: "AC",
+    Model.HYBRID_3PH: "Hybrid (3-phase)",
+    Model.EMS: "EMS",
+    Model.AC_3PH: "AC (3-phase)",
+    Model.GATEWAY: "Gateway",
+    Model.ALL_IN_ONE: "All In One",
+}
+
+
 class GivEnergyInverterSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
     entity_description: GivEnergyInverterSensorDescription
@@ -740,7 +756,9 @@ class GivEnergyInverterSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Sen
             identifiers={(DOMAIN, serial)},
             name=f"GivEnergy Inverter {serial}",
             manufacturer="GivEnergy",
-            model=coordinator.data.inverter.model.name,
+            model=_MODEL_NAMES.get(
+                coordinator.data.inverter.model, coordinator.data.inverter.model.name
+            ),
             sw_version=coordinator.data.inverter.firmware_version,
             serial_number=serial,
         )

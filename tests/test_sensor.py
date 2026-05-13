@@ -151,11 +151,11 @@ async def test_new_inverter_sensors_present(hass, setup_integration):
 
 
 async def test_enum_sensors_render_as_human_readable(hass, setup_integration):
-    """meter_type and battery_type enums should surface as title-cased names, not ints."""
+    """meter_type and battery_type enums should surface as lowercase enum keys, not ints."""
     state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_battery_type"))
-    assert state.state == "Lithium"
+    assert state.state == "lithium"
     state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_meter_type"))
-    assert state.state == "Ct Or Em418"
+    assert state.state == "ct_or_em418"
 
 
 async def test_battery_capacity_sensors(hass, setup_integration):
