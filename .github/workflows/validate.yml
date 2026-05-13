@@ -22,4 +22,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: home-assistant/hassfest@master
+      - uses: home-assistant/actions/hassfest@master
