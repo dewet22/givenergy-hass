@@ -80,6 +80,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             self.consecutive_failures += 1
             self.total_failures += 1
             if self.data is None or self.consecutive_failures > self.timeout_tolerance:
+                await self._reset_client()
                 raise UpdateFailed(
                     f"Timed out communicating with inverter "
                     f"({self.consecutive_failures} consecutive failures)"

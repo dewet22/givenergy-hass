@@ -64,22 +64,50 @@ async def test_timeout_raises_update_failed(hass):
             await coordinator._async_update_data()
 
 
-async def test_timeout_preserves_client(hass):
-    """TimeoutError is transient — the TCP connection should be kept open."""
-    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30, 1)
+async def test_timeout_within_tolerance_preserves_client(hass, mock_plant):
+    """TimeoutError within tolerance keeps the TCP connection open and serves stale data."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, timeout_tolerance=3
+    )
 
     with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
         client = AsyncMock()
         client.connected = True
-        client.refresh_plant.side_effect = TimeoutError()
+        client.plant = mock_plant
+        client.refresh_plant = AsyncMock(side_effect=TimeoutError())
         mock_cls.return_value = client
         coordinator._client = client
+        coordinator.data = mock_plant  # seed stale data so tolerance path is reached
 
-        with pytest.raises(UpdateFailed):
-            await coordinator._async_update_data()
+        result = await coordinator._async_update_data()  # failure 1/3 — within tolerance
 
         client.close.assert_not_called()
         assert coordinator._client is client
+        assert result is mock_plant
+
+
+async def test_timeout_exceeding_tolerance_resets_client(hass, mock_plant):
+    """Once consecutive failures exceed tolerance the client is reset so the next tick reconnects."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, 1, timeout_tolerance=2
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh_plant = AsyncMock(side_effect=TimeoutError())
+        mock_cls.return_value = client
+        coordinator._client = client
+        coordinator.data = mock_plant  # seed stale data
+
+        coordinator.consecutive_failures = 2  # already at tolerance limit
+
+        with pytest.raises(UpdateFailed, match="Timed out"):
+            await coordinator._async_update_data()  # failure 3 — exceeds tolerance
+
+        client.close.assert_called_once()
+        assert coordinator._client is None
 
 
 async def test_timeout_increments_consecutive_failures(hass):
