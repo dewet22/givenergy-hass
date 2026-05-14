@@ -11,6 +11,7 @@ from custom_components.givenergy_local.coordinator import GivEnergyUpdateCoordin
 
 async def test_first_refresh_connects_and_fetches(hass, mock_client, setup_integration):
     mock_client.connect.assert_called_once()
+    mock_client.detect.assert_called_once()
     mock_client.refresh_plant.assert_called_once_with(full_refresh=True)
 
 
