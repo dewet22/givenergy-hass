@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import voluptuous as vol
 from givenergy_modbus.client import commands
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers import config_validation as cv, device_registry as dr
 
 from .const import (
     CONF_MAX_BATTERIES,
@@ -22,8 +24,20 @@ from .const import (
 from .coordinator import GivEnergyUpdateCoordinator
 
 
-def _coordinators(hass: HomeAssistant) -> list[GivEnergyUpdateCoordinator]:
-    return list(hass.data.get(DOMAIN, {}).values())
+SERVICE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): cv.string})
+
+
+def _coordinator_for_device(
+    hass: HomeAssistant, device_id: str
+) -> GivEnergyUpdateCoordinator | None:
+    device = dr.async_get(hass).async_get(device_id)
+    if device is None:
+        return None
+    for entry_id in device.config_entries:
+        coordinator = hass.data.get(DOMAIN, {}).get(entry_id)
+        if coordinator is not None:
+            return coordinator
+    return None
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -45,18 +59,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if not hass.services.has_service(DOMAIN, SERVICE_REBOOT_INVERTER):
 
-        async def handle_reboot_inverter(_call: ServiceCall) -> None:
-            for c in _coordinators(hass):
-                if c._client and c._client.connected:
-                    await c._client.one_shot_command(commands.set_inverter_reboot())
+        async def handle_reboot_inverter(call: ServiceCall) -> None:
+            c = _coordinator_for_device(hass, call.data["device_id"])
+            if c and c._client and c._client.connected:
+                await c._client.one_shot_command(commands.set_inverter_reboot())
 
-        async def handle_calibrate_battery_soc(_call: ServiceCall) -> None:
-            for c in _coordinators(hass):
-                if c._client and c._client.connected:
-                    await c._client.one_shot_command(commands.set_calibrate_battery_soc())
+        async def handle_calibrate_battery_soc(call: ServiceCall) -> None:
+            c = _coordinator_for_device(hass, call.data["device_id"])
+            if c and c._client and c._client.connected:
+                await c._client.one_shot_command(commands.set_calibrate_battery_soc())
 
-        hass.services.async_register(DOMAIN, SERVICE_REBOOT_INVERTER, handle_reboot_inverter)
-        hass.services.async_register(DOMAIN, SERVICE_CALIBRATE_BATTERY_SOC, handle_calibrate_battery_soc)
+        hass.services.async_register(
+            DOMAIN, SERVICE_REBOOT_INVERTER, handle_reboot_inverter, SERVICE_DEVICE_SCHEMA
+        )
+        hass.services.async_register(
+            DOMAIN, SERVICE_CALIBRATE_BATTERY_SOC, handle_calibrate_battery_soc, SERVICE_DEVICE_SCHEMA
+        )
 
     return True
 
