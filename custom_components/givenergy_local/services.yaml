@@ -1,0 +1,12 @@
+reboot_inverter:
+  name: Reboot inverter
+  description: >
+    Restarts the GivEnergy inverter. The inverter will be offline for approximately
+    30 seconds. Only use this if the inverter is in an unresponsive state.
+
+calibrate_battery_soc:
+  name: Calibrate battery state of charge
+  description: >
+    Instructs the inverter to recalibrate its battery state-of-charge estimation.
+    This triggers a full charge/discharge cycle and should only be run when advised
+    by GivEnergy support or as part of routine battery maintenance.

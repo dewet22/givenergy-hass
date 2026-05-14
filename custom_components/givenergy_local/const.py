@@ -13,3 +13,6 @@ DEFAULT_PASSIVE = False
 DEFAULT_TIMEOUT_TOLERANCE = 5
 
 PLATFORMS = ["sensor", "switch", "number", "select", "time"]
+
+SERVICE_REBOOT_INVERTER = "reboot_inverter"
+SERVICE_CALIBRATE_BATTERY_SOC = "calibrate_battery_soc"
