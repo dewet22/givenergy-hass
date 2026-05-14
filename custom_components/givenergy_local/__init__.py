@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from givenergy_modbus.client import commands
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
 
 from .const import (
     CONF_MAX_BATTERIES,
@@ -15,8 +16,14 @@ from .const import (
     DEFAULT_TIMEOUT_TOLERANCE,
     DOMAIN,
     PLATFORMS,
+    SERVICE_CALIBRATE_BATTERY_SOC,
+    SERVICE_REBOOT_INVERTER,
 )
 from .coordinator import GivEnergyUpdateCoordinator
+
+
+def _coordinators(hass: HomeAssistant) -> list[GivEnergyUpdateCoordinator]:
+    return list(hass.data.get(DOMAIN, {}).values())
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -35,6 +42,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_REBOOT_INVERTER):
+
+        async def handle_reboot_inverter(_call: ServiceCall) -> None:
+            for c in _coordinators(hass):
+                if c._client and c._client.connected:
+                    await c._client.one_shot_command(commands.set_inverter_reboot())
+
+        async def handle_calibrate_battery_soc(_call: ServiceCall) -> None:
+            for c in _coordinators(hass):
+                if c._client and c._client.connected:
+                    await c._client.one_shot_command(commands.set_calibrate_battery_soc())
+
+        hass.services.async_register(DOMAIN, SERVICE_REBOOT_INVERTER, handle_reboot_inverter)
+        hass.services.async_register(DOMAIN, SERVICE_CALIBRATE_BATTERY_SOC, handle_calibrate_battery_soc)
+
     return True
 
 
@@ -43,4 +66,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         coordinator: GivEnergyUpdateCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.async_close()
+
+    if not hass.data.get(DOMAIN):
+        hass.services.async_remove(DOMAIN, SERVICE_REBOOT_INVERTER)
+        hass.services.async_remove(DOMAIN, SERVICE_CALIBRATE_BATTERY_SOC)
+
     return unload_ok
