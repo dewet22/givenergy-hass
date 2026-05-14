@@ -5,6 +5,7 @@ from givenergy_modbus.client import commands
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 
@@ -58,13 +59,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         async def handle_reboot_inverter(call: ServiceCall) -> None:
             c = _coordinator_for_device(hass, call.data["device_id"])
-            if c and c._client and c._client.connected:
-                await c._client.one_shot_command(commands.set_inverter_reboot())
+            if c is None or c._client is None or not c._client.connected:
+                raise HomeAssistantError(
+                    f"GivEnergy inverter for device {call.data['device_id']!r} "
+                    "is not currently connected"
+                )
+            await c._client.one_shot_command(commands.set_inverter_reboot())
 
         async def handle_calibrate_battery_soc(call: ServiceCall) -> None:
             c = _coordinator_for_device(hass, call.data["device_id"])
-            if c and c._client and c._client.connected:
-                await c._client.one_shot_command(commands.set_calibrate_battery_soc())
+            if c is None or c._client is None or not c._client.connected:
+                raise HomeAssistantError(
+                    f"GivEnergy inverter for device {call.data['device_id']!r} "
+                    "is not currently connected"
+                )
+            await c._client.one_shot_command(commands.set_calibrate_battery_soc())
 
         hass.services.async_register(
             DOMAIN, SERVICE_REBOOT_INVERTER, handle_reboot_inverter, SERVICE_DEVICE_SCHEMA
