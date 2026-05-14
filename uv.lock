@@ -1930,7 +1930,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "givenergy-modbus", editable = "../givenergy-modbus" }]
+requires-dist = [{ name = "givenergy-modbus", git = "https://github.com/dewet22/givenergy-modbus?branch=main" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1944,46 +1944,12 @@ dev = [
 [[package]]
 name = "givenergy-modbus"
 version = "1.3.0"
-source = { editable = "../givenergy-modbus" }
+source = { git = "https://github.com/dewet22/givenergy-modbus?branch=main#7ca3acde5d363b9b0a73956c41a11850ebb61350" }
 dependencies = [
     { name = "crccheck" },
     { name = "pydantic", version = "2.10.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13.2'" },
     { name = "pydantic", version = "2.12.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13.2' and python_full_version < '3.14.2'" },
     { name = "pydantic", version = "2.13.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14.2'" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "crccheck", specifier = ">=1.1,<2" },
-    { name = "pydantic", specifier = ">=2.0,<3" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "ipython", specifier = ">=9.0.0,<10" },
-    { name = "pip", specifier = ">=26.0.0,<27" },
-    { name = "pyyaml", specifier = ">=6.0.2" },
-    { name = "twine", specifier = ">=6.0.0,<7" },
-    { name = "virtualenv", specifier = ">=21.0.0,<22" },
-]
-docs = [
-    { name = "mkdocs", specifier = ">=1.6.0,<2" },
-    { name = "mkdocs-autorefs", specifier = ">=1.0.0,<2" },
-    { name = "mkdocs-include-markdown-plugin", specifier = ">=7.0.0,<8" },
-    { name = "mkdocs-material", specifier = ">=9.5.0,<10" },
-    { name = "mkdocs-material-extensions", specifier = ">=1.3.0,<2" },
-    { name = "mkdocstrings", extras = ["python"], specifier = ">=1.0.0,<2" },
-]
-test = [
-    { name = "bandit", specifier = ">=1.7.5,<2" },
-    { name = "mypy", specifier = ">=2.0.0,<3" },
-    { name = "pytest", specifier = ">=9.0.0,<10" },
-    { name = "pytest-asyncio", specifier = ">=1.0.0,<2" },
-    { name = "pytest-cov", specifier = ">=7.0.0,<8" },
-    { name = "pytest-timeout", specifier = ">=2.4.0,<3" },
-    { name = "ruff", specifier = ">=0.15.0,<1" },
-    { name = "tox", specifier = ">=4.4.8,<5" },
-    { name = "tox-uv", specifier = ">=1.0.0" },
 ]
 
 [[package]]
