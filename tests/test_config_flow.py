@@ -4,7 +4,6 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PORT
 
 from custom_components.givenergy_local.const import (
-    CONF_MAX_BATTERIES,
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
     CONF_TIMEOUT_TOLERANCE,
@@ -16,7 +15,6 @@ VALID_USER_INPUT = {
     CONF_HOST: "192.168.1.100",
     CONF_PORT: 8899,
     CONF_SCAN_INTERVAL: 30,
-    CONF_MAX_BATTERIES: 1,
     CONF_PASSIVE: False,
     CONF_TIMEOUT_TOLERANCE: DEFAULT_TIMEOUT_TOLERANCE,
 }
@@ -99,14 +97,12 @@ async def test_reconfigure_updates_settings_without_retesting_connection(
     assert setup_integration.data[CONF_SCAN_INTERVAL] == 60
     assert setup_integration.data[CONF_PASSIVE] is True
 
-    # The post-reload coordinator calls refresh_plant(full_refresh=True, max_batteries=1).
+    # The post-reload coordinator calls refresh_plant(full_refresh=True).
     # _test_connection (used only when host/port changes) calls
-    # refresh_plant(full_refresh=False, max_batteries=0) — neither set of args
-    # should appear if it wasn't invoked.
+    # refresh_plant(full_refresh=False) — the latter should not appear if
+    # the host didn't change.
     test_connection_calls = [
-        c
-        for c in mock_client.refresh_plant.call_args_list
-        if c.kwargs == {"full_refresh": False, "max_batteries": 0}
+        c for c in mock_client.refresh_plant.call_args_list if c.kwargs == {"full_refresh": False}
     ]
     assert test_connection_calls == []
 

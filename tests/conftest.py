@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from givenergy_modbus.model import TimeSlot
-from givenergy_modbus.model.inverter import BatteryPowerMode, BatteryType, MeterType
+from givenergy_modbus.model.inverter import (
+    SINGLE_PHASE_SLOTS,
+    BatteryPowerMode,
+    BatteryType,
+    MeterType,
+)
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.givenergy_local.const import DOMAIN
@@ -67,6 +72,7 @@ def mock_inverter() -> MagicMock:
     inv.battery_discharge_min_power_reserve = 4
     inv.battery_power_mode = BatteryPowerMode.SELF_CONSUMPTION
     inv.system_time = datetime(2026, 5, 10, 12, 0, 0)
+    inv.slot_map = SINGLE_PHASE_SLOTS
     inv.charge_slot_1 = TimeSlot(start=time(0, 30), end=time(4, 30))
     inv.charge_slot_2 = TimeSlot(start=time(0, 0), end=time(0, 0))
     inv.discharge_slot_1 = TimeSlot(start=time(17, 0), end=time(22, 0))
@@ -148,6 +154,7 @@ def mock_client(mock_plant) -> AsyncMock:
     client.plant = mock_plant
     client.refresh_plant = AsyncMock(return_value=mock_plant)
     client.connect = AsyncMock()
+    client.detect = AsyncMock()
     client.close = AsyncMock()
     client.one_shot_command = AsyncMock()
     with (
@@ -165,7 +172,6 @@ def mock_config_entry() -> MockConfigEntry:
             "host": "192.168.1.100",
             "port": 8899,
             "scan_interval": 30,
-            "max_batteries": 1,
             "passive": False,
         },
         unique_id="SA1234G123",

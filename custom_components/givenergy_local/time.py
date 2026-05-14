@@ -6,7 +6,6 @@ from datetime import time as dt_time
 
 from givenergy_modbus.client import commands
 from givenergy_modbus.model import TimeSlot
-from givenergy_modbus.model.inverter import SinglePhaseInverter
 from homeassistant.components.time import TimeEntity, TimeEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -15,14 +14,15 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import GivEnergyUpdateCoordinator
+from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 
 
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyTimeEntityDescription(TimeEntityDescription):
-    slot_fn: Callable[[SinglePhaseInverter], TimeSlot | None] = field(default=lambda _: None)
+    slot_fn: Callable[[InverterModel], TimeSlot | None] = field(default=lambda _: None)
     is_start: bool = True
-    set_slot_cmd: Callable[[TimeSlot], list] = field(default=lambda _: [])
+    is_charge: bool = True
+    slot_index: int = 1
 
 
 TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
@@ -31,7 +31,8 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Charge Slot 1 Start",
         slot_fn=lambda inv: inv.charge_slot_1,
         is_start=True,
-        set_slot_cmd=lambda ts: commands.set_charge_slot_1(ts),
+        is_charge=True,
+        slot_index=1,
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -39,7 +40,8 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Charge Slot 1 End",
         slot_fn=lambda inv: inv.charge_slot_1,
         is_start=False,
-        set_slot_cmd=lambda ts: commands.set_charge_slot_1(ts),
+        is_charge=True,
+        slot_index=1,
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -47,7 +49,8 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Charge Slot 2 Start",
         slot_fn=lambda inv: inv.charge_slot_2,
         is_start=True,
-        set_slot_cmd=lambda ts: commands.set_charge_slot_2(ts),
+        is_charge=True,
+        slot_index=2,
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -55,7 +58,8 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Charge Slot 2 End",
         slot_fn=lambda inv: inv.charge_slot_2,
         is_start=False,
-        set_slot_cmd=lambda ts: commands.set_charge_slot_2(ts),
+        is_charge=True,
+        slot_index=2,
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -63,7 +67,8 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Discharge Slot 1 Start",
         slot_fn=lambda inv: inv.discharge_slot_1,
         is_start=True,
-        set_slot_cmd=lambda ts: commands.set_discharge_slot_1(ts),
+        is_charge=False,
+        slot_index=1,
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -71,7 +76,8 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Discharge Slot 1 End",
         slot_fn=lambda inv: inv.discharge_slot_1,
         is_start=False,
-        set_slot_cmd=lambda ts: commands.set_discharge_slot_1(ts),
+        is_charge=False,
+        slot_index=1,
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -79,7 +85,8 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Discharge Slot 2 Start",
         slot_fn=lambda inv: inv.discharge_slot_2,
         is_start=True,
-        set_slot_cmd=lambda ts: commands.set_discharge_slot_2(ts),
+        is_charge=False,
+        slot_index=2,
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -87,7 +94,8 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Discharge Slot 2 End",
         slot_fn=lambda inv: inv.discharge_slot_2,
         is_start=False,
-        set_slot_cmd=lambda ts: commands.set_discharge_slot_2(ts),
+        is_charge=False,
+        slot_index=2,
         entity_category=EntityCategory.CONFIG,
     ),
 )
@@ -132,12 +140,20 @@ class GivEnergyTimeEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], TimeEnt
         client = self.coordinator._client
         if client is None or not client.connected:
             return
-        current_slot = self.entity_description.slot_fn(self.coordinator.data.inverter)
+        inverter = self.coordinator.data.inverter
+        current_slot = self.entity_description.slot_fn(inverter)
         if current_slot is None:
             current_slot = TimeSlot(start=dt_time(0, 0), end=dt_time(0, 0))
         if self.entity_description.is_start:
             new_slot = TimeSlot(start=value, end=current_slot.end)
         else:
             new_slot = TimeSlot(start=current_slot.start, end=value)
-        await client.one_shot_command(self.entity_description.set_slot_cmd(new_slot))
+        setter = (
+            commands.set_charge_slot
+            if self.entity_description.is_charge
+            else commands.set_discharge_slot
+        )
+        await client.one_shot_command(
+            setter(self.entity_description.slot_index, new_slot, inverter.slot_map)
+        )
         await self.coordinator.async_request_refresh()
