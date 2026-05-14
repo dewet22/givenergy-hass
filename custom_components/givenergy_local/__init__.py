@@ -5,14 +5,13 @@ from givenergy_modbus.client import commands
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers import config_validation as cv, device_registry as dr
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import device_registry as dr
 
 from .const import (
-    CONF_MAX_BATTERIES,
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
     CONF_TIMEOUT_TOLERANCE,
-    DEFAULT_MAX_BATTERIES,
     DEFAULT_PASSIVE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_TIMEOUT_TOLERANCE,
@@ -22,7 +21,6 @@ from .const import (
     SERVICE_REBOOT_INVERTER,
 )
 from .coordinator import GivEnergyUpdateCoordinator
-
 
 SERVICE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): cv.string})
 
@@ -46,7 +44,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         host=entry.data[CONF_HOST],
         port=entry.data[CONF_PORT],
         scan_interval=entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-        max_batteries=entry.data.get(CONF_MAX_BATTERIES, DEFAULT_MAX_BATTERIES),
         passive=entry.data.get(CONF_PASSIVE, DEFAULT_PASSIVE),
         timeout_tolerance=entry.data.get(CONF_TIMEOUT_TOLERANCE, DEFAULT_TIMEOUT_TOLERANCE),
     )
@@ -73,7 +70,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             DOMAIN, SERVICE_REBOOT_INVERTER, handle_reboot_inverter, SERVICE_DEVICE_SCHEMA
         )
         hass.services.async_register(
-            DOMAIN, SERVICE_CALIBRATE_BATTERY_SOC, handle_calibrate_battery_soc, SERVICE_DEVICE_SCHEMA
+            DOMAIN,
+            SERVICE_CALIBRATE_BATTERY_SOC,
+            handle_calibrate_battery_soc,
+            SERVICE_DEVICE_SCHEMA,
         )
 
     return True

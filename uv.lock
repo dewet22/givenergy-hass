@@ -1944,7 +1944,7 @@ dev = [
 [[package]]
 name = "givenergy-modbus"
 version = "1.3.0"
-source = { git = "https://github.com/dewet22/givenergy-modbus?branch=main#7ca3acde5d363b9b0a73956c41a11850ebb61350" }
+source = { git = "https://github.com/dewet22/givenergy-modbus?branch=main#04ef415d2bb3f019aa436c86324803c0f7109713" }
 dependencies = [
     { name = "crccheck" },
     { name = "pydantic", version = "2.10.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13.2'" },

@@ -4,7 +4,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from givenergy_modbus.client import commands
-from givenergy_modbus.model.inverter import SinglePhaseInverter
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE
@@ -14,12 +13,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import GivEnergyUpdateCoordinator
+from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 
 
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyNumberEntityDescription(NumberEntityDescription):
-    value_fn: Callable[[SinglePhaseInverter], float | None] = field(default=lambda _: None)
+    value_fn: Callable[[InverterModel], float | None] = field(default=lambda _: None)
     set_value_cmd: Callable[[float], list] = field(default=lambda _: [])
 
 

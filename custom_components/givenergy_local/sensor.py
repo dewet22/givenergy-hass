@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from givenergy_modbus.model.battery import Battery
-from givenergy_modbus.model.inverter import BatteryType, MeterType, Model, SinglePhaseInverter, Status
+from givenergy_modbus.model.inverter import BatteryType, MeterType, Model, Status
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -29,12 +29,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import GivEnergyUpdateCoordinator
+from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 
 
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyInverterSensorDescription(SensorEntityDescription):
-    value_fn: Callable[[SinglePhaseInverter], Any] = field(default=lambda _: None)
+    value_fn: Callable[[InverterModel], Any] = field(default=lambda _: None)
 
 
 @dataclass(frozen=True, kw_only=True)
