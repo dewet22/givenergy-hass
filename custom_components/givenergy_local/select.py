@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from givenergy_modbus.client import commands
-from givenergy_modbus.model.inverter import BatteryPowerMode, Inverter
+from givenergy_modbus.model.inverter import BatteryPowerMode, SinglePhaseInverter
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -18,7 +18,7 @@ from .coordinator import GivEnergyUpdateCoordinator
 
 @dataclass(frozen=True, kw_only=True)
 class GivEnergySelectEntityDescription(SelectEntityDescription):
-    current_option_fn: Callable[[Inverter], str | None] = field(default=lambda _: None)
+    current_option_fn: Callable[[SinglePhaseInverter], str | None] = field(default=lambda _: None)
     select_option_cmd: Callable[[str], list] = field(default=lambda _: [])
 
 

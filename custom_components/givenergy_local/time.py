@@ -6,7 +6,7 @@ from datetime import time as dt_time
 
 from givenergy_modbus.client import commands
 from givenergy_modbus.model import TimeSlot
-from givenergy_modbus.model.inverter import Inverter
+from givenergy_modbus.model.inverter import SinglePhaseInverter
 from homeassistant.components.time import TimeEntity, TimeEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -20,7 +20,7 @@ from .coordinator import GivEnergyUpdateCoordinator
 
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyTimeEntityDescription(TimeEntityDescription):
-    slot_fn: Callable[[Inverter], TimeSlot | None] = field(default=lambda _: None)
+    slot_fn: Callable[[SinglePhaseInverter], TimeSlot | None] = field(default=lambda _: None)
     is_start: bool = True
     set_slot_cmd: Callable[[TimeSlot], list] = field(default=lambda _: [])
 
