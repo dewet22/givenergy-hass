@@ -47,6 +47,11 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ steps.ver.outputs.base }}
+          # PAT (not GITHUB_TOKEN) so the resulting push + PR-creation events
+          # fire downstream workflows — GITHUB_TOKEN-authored actions don't
+          # trigger other workflows by design, which would otherwise leave the
+          # bump PR without validate.yml checks running.
+          token: ${{ secrets.BUMP_PAT }}
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -84,7 +89,7 @@ jobs:
 
       - name: Commit, push, open PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BUMP_PAT }}
           NEW: ${{ steps.ver.outputs.new }}
           BASE: ${{ steps.ver.outputs.base }}
         run: |
