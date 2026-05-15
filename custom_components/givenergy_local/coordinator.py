@@ -169,10 +169,12 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self._last_inverter_time = None
         self._unchanged_ticks = 0
         self._active_tick = 0
+        _LOGGER.info("Connected to inverter at %s:%s", self.host, self.port)
 
     async def _reset_client(self) -> None:
         """Close and discard the client so the next tick triggers a reconnect."""
         if self._client is not None:
+            _LOGGER.info("Closing connection to %s:%s", self.host, self.port)
             await self._client.close()
             self._client = None
 

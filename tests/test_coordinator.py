@@ -1,5 +1,6 @@
 """Tests for the GivEnergy Local coordinator."""
 
+import logging
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
@@ -182,6 +183,35 @@ async def test_total_failures_increments_on_every_failure_type(hass, mock_plant)
         with pytest.raises(UpdateFailed):
             await coordinator._async_update_data()
         assert coordinator.total_failures == 3
+
+
+async def test_reset_and_reconnect_emit_integration_level_logs(hass, mock_plant, caplog):
+    """The close-and-reconnect cycle must log under the integration's own logger
+    so users don't need to enable the library's logger separately to trace it."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30, timeout_tolerance=1)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh_plant = AsyncMock(side_effect=TimeoutError())
+        mock_cls.return_value = client
+        coordinator._client = client
+        coordinator.data = mock_plant
+        coordinator.consecutive_failures = 1  # next failure exceeds tolerance
+
+        with caplog.at_level(logging.INFO, logger="custom_components.givenergy_local.coordinator"):
+            with pytest.raises(UpdateFailed):
+                await coordinator._async_update_data()  # triggers _reset_client
+
+            # Next tick: client is None → _connect() runs and succeeds
+            client.connected = True
+            client.refresh_plant = AsyncMock(return_value=mock_plant)
+            await coordinator._async_update_data()
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("Closing connection to 192.168.1.1:8899" in m for m in messages)
+    assert any("Connected to inverter at 192.168.1.1:8899" in m for m in messages)
 
 
 async def test_non_timeout_error_closes_client(hass):
