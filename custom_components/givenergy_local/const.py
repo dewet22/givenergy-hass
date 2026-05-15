@@ -6,9 +6,11 @@ DEFAULT_SCAN_INTERVAL = 30
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_PASSIVE = "passive"
 CONF_TIMEOUT_TOLERANCE = "timeout_tolerance"
+CONF_RETRIES = "retries"
 
 DEFAULT_PASSIVE = False
 DEFAULT_TIMEOUT_TOLERANCE = 3
+DEFAULT_RETRIES = 1
 
 PLATFORMS = ["sensor", "switch", "number", "select", "time"]
 

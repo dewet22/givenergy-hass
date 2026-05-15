@@ -9,7 +9,8 @@
           "port": "Modbus Port",
           "scan_interval": "Scan Interval (seconds)",
           "passive": "Passive mode (listen only — another client drives refreshes)",
-          "timeout_tolerance": "Timeout Tolerance (reset connection on Nth consecutive failure)"
+          "timeout_tolerance": "Timeout Tolerance (reset connection on Nth consecutive failure)",
+          "retries": "Retries per Modbus request (in-tick retry before counting as a failure)"
         }
       },
       "reconfigure": {
@@ -20,7 +21,8 @@
           "port": "Modbus Port",
           "scan_interval": "Scan Interval (seconds)",
           "passive": "Passive mode (listen only — another client drives refreshes)",
-          "timeout_tolerance": "Timeout Tolerance (reset connection on Nth consecutive failure)"
+          "timeout_tolerance": "Timeout Tolerance (reset connection on Nth consecutive failure)",
+          "retries": "Retries per Modbus request (in-tick retry before counting as a failure)"
         }
       }
     },

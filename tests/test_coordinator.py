@@ -13,7 +13,7 @@ from custom_components.givenergy_local.coordinator import GivEnergyUpdateCoordin
 async def test_first_refresh_connects_and_fetches(hass, mock_client, setup_integration):
     mock_client.connect.assert_called_once()
     mock_client.detect.assert_called_once()
-    mock_client.refresh_plant.assert_called_once_with(full_refresh=True)
+    mock_client.refresh_plant.assert_called_once_with(full_refresh=True, retries=1)
 
 
 async def test_reconnects_when_disconnected(hass, mock_client, mock_config_entry):
@@ -249,7 +249,7 @@ async def test_passive_mode_initial_connect_does_full_refresh(hass, mock_plant):
 
         await coordinator._async_update_data()
 
-    client.refresh_plant.assert_called_once_with(full_refresh=True)
+    client.refresh_plant.assert_called_once_with(full_refresh=True, retries=1)
 
 
 async def test_passive_mode_skips_refresh_on_subsequent_ticks(hass, mock_plant):
@@ -288,7 +288,42 @@ async def test_passive_mode_reconnect_does_full_refresh(hass, mock_plant):
 
         await coordinator._async_update_data()
 
-    client.refresh_plant.assert_called_once_with(full_refresh=True)
+    client.refresh_plant.assert_called_once_with(full_refresh=True, retries=1)
+
+
+async def test_retries_forwarded_to_refresh_plant_active(hass, mock_plant):
+    """Active-mode ticks must thread the configured retries count to refresh_plant()."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, passive=False, retries=2
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh_plant = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+        coordinator._client = client
+
+        await coordinator._async_update_data()
+
+    client.refresh_plant.assert_called_once_with(full_refresh=True, retries=2)
+
+
+async def test_retries_forwarded_to_refresh_plant_passive_reconnect(hass, mock_plant):
+    """Passive-mode reconnect (the only path that hits the wire) must also forward retries."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30, passive=True, retries=3)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = False  # forces reconnect
+        client.plant = mock_plant
+        client.refresh_plant = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+
+        await coordinator._async_update_data()
+
+    client.refresh_plant.assert_called_once_with(full_refresh=True, retries=3)
 
 
 async def test_active_mode_always_refreshes(hass, mock_plant):
@@ -323,7 +358,7 @@ async def test_active_mode_first_tick_is_full_refresh(hass, mock_plant):
 
         await coordinator._async_update_data()
 
-    client.refresh_plant.assert_called_once_with(full_refresh=True)
+    client.refresh_plant.assert_called_once_with(full_refresh=True, retries=1)
 
 
 async def test_active_mode_intermediate_ticks_are_partial(hass, mock_plant):

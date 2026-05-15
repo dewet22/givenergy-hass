@@ -14,9 +14,11 @@ from homeassistant.helpers import device_registry as dr
 
 from .const import (
     CONF_PASSIVE,
+    CONF_RETRIES,
     CONF_SCAN_INTERVAL,
     CONF_TIMEOUT_TOLERANCE,
     DEFAULT_PASSIVE,
+    DEFAULT_RETRIES,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_TIMEOUT_TOLERANCE,
     DOMAIN,
@@ -53,6 +55,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         scan_interval=entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
         passive=entry.data.get(CONF_PASSIVE, DEFAULT_PASSIVE),
         timeout_tolerance=entry.data.get(CONF_TIMEOUT_TOLERANCE, DEFAULT_TIMEOUT_TOLERANCE),
+        retries=entry.data.get(CONF_RETRIES, DEFAULT_RETRIES),
     )
 
     await coordinator.async_config_entry_first_refresh()

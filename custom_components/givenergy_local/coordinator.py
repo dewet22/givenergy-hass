@@ -31,7 +31,8 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         port: int,
         scan_interval: int,
         passive: bool = False,
-        timeout_tolerance: int = 5,
+        timeout_tolerance: int = 3,
+        retries: int = 1,
     ) -> None:
         super().__init__(
             hass,
@@ -43,6 +44,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self.port = port
         self.passive = passive
         self.timeout_tolerance = timeout_tolerance
+        self.retries = retries
         self._client: Client | None = None
         self.last_successful_refresh: datetime | None = None
         self.consecutive_failures: int = 0
@@ -115,7 +117,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         assert self._client is not None  # _async_update_data ensures this
         full_refresh = self._active_tick % self._full_refresh_every == 0
         self._active_tick += 1
-        await self._client.refresh_plant(full_refresh=full_refresh)
+        await self._client.refresh_plant(full_refresh=full_refresh, retries=self.retries)
         return self._client.plant
 
     async def _passive_update(self, reconnecting: bool) -> Plant:
@@ -126,7 +128,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         """
         assert self._client is not None  # _async_update_data ensures this
         if reconnecting:
-            await self._client.refresh_plant(full_refresh=True)
+            await self._client.refresh_plant(full_refresh=True, retries=self.retries)
             return self._client.plant
 
         plant = self._client.plant
