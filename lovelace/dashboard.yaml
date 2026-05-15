@@ -5,12 +5,11 @@
 # 1. In HA go to Settings → Dashboards → Add Dashboard, give it a name,
 #    then open it and click the three-dot menu → Edit dashboard → Raw config editor.
 # 2. Paste the contents of this file.
-# 3. Search-replace the two placeholders with your actual serial numbers
+# 3. Search-replace the placeholders with your actual serial numbers
 #    (use lowercase, exactly as shown in Settings → Devices):
-#      INVERTER_SERIAL  →  e.g. sa1234g123
-#      BATTERY_SERIAL   →  e.g. bt1234a001
-#    If you have multiple batteries, duplicate the battery view and change
-#    BATTERY_SERIAL for each one.
+#      INVERTER_SERIAL    →  e.g. sa1234g123
+#      BATTERY_SERIAL_1   →  e.g. bt1234a001
+#      BATTERY_SERIAL_2   →  e.g. bt1234a002   (duplicate/remove sections as needed)
 #
 # Required custom cards (install via HACS → Frontend):
 #   - power-flow-card  (ulic75/power-flow-card)
@@ -99,17 +98,18 @@ views:
           show: true
           title: Daily Generation vs Consumption — Last 30 Days
         graph_span: 30d
-        chart_type: bar
         series:
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_pv_energy_today
             name: PV Generated
             color: "#FFB300"
+            type: column
             statistics:
               type: max
               period: day
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_load_energy_today
             name: Consumed
             color: "#EF5350"
+            type: column
             statistics:
               type: max
               period: day
@@ -119,17 +119,18 @@ views:
           show: true
           title: Grid Import vs Export — Last 30 Days
         graph_span: 30d
-        chart_type: bar
         series:
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_grid_export_today
             name: Exported
             color: "#66BB6A"
+            type: column
             statistics:
               type: max
               period: day
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_grid_import_today
             name: Imported
             color: "#EF5350"
+            type: column
             statistics:
               type: max
               period: day
@@ -139,17 +140,18 @@ views:
           show: true
           title: Battery Charge vs Discharge — Last 30 Days
         graph_span: 30d
-        chart_type: bar
         series:
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_charge_today
             name: Charged
             color: "#42A5F5"
+            type: column
             statistics:
               type: max
               period: day
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_discharge_today
             name: Discharged
             color: "#7E57C2"
+            type: column
             statistics:
               type: max
               period: day
@@ -173,121 +175,190 @@ views:
             name: Discharged This Year
 
   # ── Battery ───────────────────────────────────────────────────────────────
+  # sections view: one column per battery, cards stack vertically within each.
+  # Add or remove sections below to match the number of batteries you have.
   - title: Battery
     path: battery
+    type: sections
     icon: mdi:battery-high
 
-    cards:
-      - type: gauge
-        entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_soc
-        name: Battery State of Charge
-        min: 0
-        max: 100
-        needle: true
-        severity:
-          red: 0
-          yellow: 20
-          green: 40
+    sections:
 
-      - type: custom:mini-graph-card
-        name: SOC — Last 24 Hours
-        entities:
-          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_soc
-            name: SOC
-        hours_to_show: 24
-        points_per_hour: 4
-        line_color: "#42A5F5"
-        fill: true
-        show:
-          extrema: true
+      # ── Battery 1 ── BATTERY_SERIAL_1 ──
+      - cards:
+          - type: gauge
+            entity: sensor.givenergy_battery_BATTERY_SERIAL_1_soc
+            name: BATTERY_SERIAL_1
+            min: 0
+            max: 100
+            needle: true
+            severity:
+              red: 0
+              yellow: 20
+              green: 40
 
-      - type: entities
-        title: Battery Pack — BATTERY_SERIAL
-        entities:
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_soc
-            name: SOC
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_voltage
-            name: Pack Voltage
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_temperature_max
-            name: Temp Max
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_temperature_min
-            name: Temp Min
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_bms_mosfet_temperature
-            name: BMS MOSFET Temp
-          - type: divider
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_charge_cycles
-            name: Charge Cycles
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_remaining_capacity
-            name: Remaining Capacity
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_calibrated_capacity
-            name: Calibrated Capacity
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_design_capacity
-            name: Design Capacity
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_voltages_sum
-            name: Cell Voltages Sum
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_count
-            name: Cell Count
+          - type: entities
+            title: Pack Details
+            entities:
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_soc
+                name: SOC
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_voltage
+                name: Voltage
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_temperature_max
+                name: Temp Max
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_temperature_min
+                name: Temp Min
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_bms_mosfet_temperature
+                name: BMS MOSFET Temp
+              - type: divider
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_charge_cycles
+                name: Charge Cycles
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_remaining_capacity
+                name: Remaining Capacity
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_calibrated_capacity
+                name: Calibrated Capacity
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_design_capacity
+                name: Design Capacity
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_voltages_sum
+                name: Cell Voltages Sum
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_count
+                name: Cell Count
 
-      - type: custom:apexcharts-card
-        header:
-          show: true
-          title: Battery Temperatures — Last 24 Hours
-        graph_span: 24h
-        series:
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_temperature_max
-            name: Pack Max
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_temperature_min
-            name: Pack Min
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_bms_mosfet_temperature
-            name: BMS MOSFET
+          - type: entities
+            title: Cell Voltages
+            entities:
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_1_voltage
+                name: Cell 1
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_2_voltage
+                name: Cell 2
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_3_voltage
+                name: Cell 3
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_4_voltage
+                name: Cell 4
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_5_voltage
+                name: Cell 5
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_6_voltage
+                name: Cell 6
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_7_voltage
+                name: Cell 7
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_8_voltage
+                name: Cell 8
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_9_voltage
+                name: Cell 9
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_10_voltage
+                name: Cell 10
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_11_voltage
+                name: Cell 11
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_12_voltage
+                name: Cell 12
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_13_voltage
+                name: Cell 13
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_14_voltage
+                name: Cell 14
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_15_voltage
+                name: Cell 15
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cell_16_voltage
+                name: Cell 16
 
-      - type: entities
-        title: Cell Voltages — BATTERY_SERIAL
-        entities:
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_1_voltage
-            name: Cell 1
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_2_voltage
-            name: Cell 2
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_3_voltage
-            name: Cell 3
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_4_voltage
-            name: Cell 4
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_5_voltage
-            name: Cell 5
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_6_voltage
-            name: Cell 6
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_7_voltage
-            name: Cell 7
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_8_voltage
-            name: Cell 8
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_9_voltage
-            name: Cell 9
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_10_voltage
-            name: Cell 10
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_11_voltage
-            name: Cell 11
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_12_voltage
-            name: Cell 12
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_13_voltage
-            name: Cell 13
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_14_voltage
-            name: Cell 14
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_15_voltage
-            name: Cell 15
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cell_16_voltage
-            name: Cell 16
+          - type: entities
+            title: Cell Temperatures
+            entities:
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cells_1_4_temperature
+                name: Cells 1–4
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cells_5_8_temperature
+                name: Cells 5–8
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cells_9_12_temperature
+                name: Cells 9–12
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_1_cells_13_16_temperature
+                name: Cells 13–16
 
-      - type: entities
-        title: Cell Temperatures — BATTERY_SERIAL
-        entities:
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cells_1_4_temperature
-            name: Cells 1–4
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cells_5_8_temperature
-            name: Cells 5–8
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cells_9_12_temperature
-            name: Cells 9–12
-          - entity: sensor.givenergy_battery_BATTERY_SERIAL_cells_13_16_temperature
-            name: Cells 13–16
+      # ── Battery 2 ── BATTERY_SERIAL_2 ── (remove if only one battery)
+      - cards:
+          - type: gauge
+            entity: sensor.givenergy_battery_BATTERY_SERIAL_2_soc
+            name: BATTERY_SERIAL_2
+            min: 0
+            max: 100
+            needle: true
+            severity:
+              red: 0
+              yellow: 20
+              green: 40
+
+          - type: entities
+            title: Pack Details
+            entities:
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_soc
+                name: SOC
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_voltage
+                name: Voltage
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_temperature_max
+                name: Temp Max
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_temperature_min
+                name: Temp Min
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_bms_mosfet_temperature
+                name: BMS MOSFET Temp
+              - type: divider
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_charge_cycles
+                name: Charge Cycles
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_remaining_capacity
+                name: Remaining Capacity
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_calibrated_capacity
+                name: Calibrated Capacity
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_design_capacity
+                name: Design Capacity
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_voltages_sum
+                name: Cell Voltages Sum
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_count
+                name: Cell Count
+
+          - type: entities
+            title: Cell Voltages
+            entities:
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_1_voltage
+                name: Cell 1
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_2_voltage
+                name: Cell 2
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_3_voltage
+                name: Cell 3
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_4_voltage
+                name: Cell 4
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_5_voltage
+                name: Cell 5
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_6_voltage
+                name: Cell 6
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_7_voltage
+                name: Cell 7
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_8_voltage
+                name: Cell 8
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_9_voltage
+                name: Cell 9
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_10_voltage
+                name: Cell 10
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_11_voltage
+                name: Cell 11
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_12_voltage
+                name: Cell 12
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_13_voltage
+                name: Cell 13
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_14_voltage
+                name: Cell 14
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_15_voltage
+                name: Cell 15
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cell_16_voltage
+                name: Cell 16
+
+          - type: entities
+            title: Cell Temperatures
+            entities:
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cells_1_4_temperature
+                name: Cells 1–4
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cells_5_8_temperature
+                name: Cells 5–8
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cells_9_12_temperature
+                name: Cells 9–12
+              - entity: sensor.givenergy_battery_BATTERY_SERIAL_2_cells_13_16_temperature
+                name: Cells 13–16
 
   # ── Controls ──────────────────────────────────────────────────────────────
   - title: Controls
