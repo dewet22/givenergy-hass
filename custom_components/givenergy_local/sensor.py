@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from givenergy_modbus.model.battery import Battery, BatteryMaintenance, BatteryPauseMode
+from givenergy_modbus.model.battery import Battery, BatteryMaintenance
 from givenergy_modbus.model.inverter import (
     BatteryCalibrationStage,
     BatteryType,
@@ -127,19 +127,6 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         key="system_mode",
         name="System Mode",
         value_fn=lambda inv: inv.system_mode,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    GivEnergyInverterSensorDescription(
-        key="battery_pause_mode",
-        name="Battery Pause Mode",
-        device_class=SensorDeviceClass.ENUM,
-        options=[s.name.lower() for s in BatteryPauseMode],
-        translation_key="battery_pause_mode",
-        value_fn=lambda inv: (
-            BatteryPauseMode(inv.battery_pause_mode).name.lower()
-            if inv.battery_pause_mode is not None
-            else None
-        ),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(

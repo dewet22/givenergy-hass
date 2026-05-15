@@ -83,6 +83,7 @@ def mock_inverter() -> MagicMock:
     inv.charge_status = 1
     inv.system_mode = 1
     inv.battery_pause_mode = 0
+    inv.battery_pause_slot_1 = TimeSlot(start=time(0, 0), end=time(0, 0))
     # AC output + power quality
     inv.v_ac1_output = 240.3
     inv.f_ac1_output = 50.01

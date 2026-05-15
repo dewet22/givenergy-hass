@@ -42,3 +42,29 @@ async def test_select_self_consumption_sends_command(hass, mock_client, setup_in
         blocking=True,
     )
     mock_client.one_shot_command.assert_called_once()
+
+
+async def test_battery_pause_mode_initial_option(hass, setup_integration):
+    state = hass.states.get(_entity_id(hass, "SA1234G123_battery_pause_mode"))
+    assert state.state == "Disabled"
+
+
+async def test_battery_pause_mode_options(hass, setup_integration):
+    state = hass.states.get(_entity_id(hass, "SA1234G123_battery_pause_mode"))
+    assert set(state.attributes["options"]) == {
+        "Disabled",
+        "Pause Charge",
+        "Pause Discharge",
+        "Pause Both",
+    }
+
+
+async def test_select_pause_both_sends_command(hass, mock_client, setup_integration):
+    entity_id = _entity_id(hass, "SA1234G123_battery_pause_mode")
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": entity_id, "option": "Pause Both"},
+        blocking=True,
+    )
+    mock_client.one_shot_command.assert_called_once()

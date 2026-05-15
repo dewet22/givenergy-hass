@@ -137,7 +137,6 @@ async def test_new_inverter_sensors_present(hass, setup_integration):
     cases = {
         "system_mode": "1",
         "charge_status": "1",
-        "battery_pause_mode": "disabled",
         "i_ac1": "5.2",
         "p_combined_generation": "2500",
         "p_backup": "0",

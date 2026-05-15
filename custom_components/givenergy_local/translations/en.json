@@ -66,14 +66,6 @@
           "finish": "Finish"
         }
       },
-      "battery_pause_mode": {
-        "state": {
-          "disabled": "Disabled",
-          "pause_charge": "Pause Charge",
-          "pause_discharge": "Pause Discharge",
-          "pause_both": "Pause Both"
-        }
-      },
       "battery_maintenance_mode": {
         "state": {
           "off": "Off",
