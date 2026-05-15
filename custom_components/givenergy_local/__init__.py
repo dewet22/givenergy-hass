@@ -82,7 +82,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await c._client.one_shot_command(commands.set_calibrate_battery_soc())
 
         async def handle_generate_dashboard(_call: ServiceCall) -> None:
-            from .lovelace import generate_dashboard
+            from .dashboard import generate_dashboard
 
             for coordinator in hass.data.get(DOMAIN, {}).values():
                 if coordinator.data is None:
@@ -90,18 +90,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 inv = coordinator.data.inverter.serial_number.lower()
                 bats = [b.serial_number.lower() for b in coordinator.data.batteries]
                 yaml = generate_dashboard(inv, bats)
-                out = Path(hass.config.path(f"lovelace_givenergy_{inv}.yaml"))
-                await hass.async_add_executor_job(out.write_text, yaml)
-                _LOGGER.info("GivEnergy dashboard written to %s", out)
+                filename = f"dashboard_givenergy_{inv}.yaml"
+                www_dir = Path(hass.config.path("www"))
+                www_dir.mkdir(exist_ok=True)
+                await hass.async_add_executor_job((www_dir / filename).write_text, yaml)
+                url = f"/local/{filename}"
+                _LOGGER.info("GivEnergy dashboard available at %s", url)
                 await hass.services.async_call(
                     "persistent_notification",
                     "create",
                     {
                         "title": "GivEnergy dashboard generated",
                         "message": (
-                            f"Dashboard written to `{out}`.\n\n"
+                            f"Dashboard ready — [download YAML]({url})\n\n"
                             "Go to **Settings → Dashboards → Add Dashboard** "
-                            "and select this file to import it."
+                            "and paste the contents into the raw config editor."
                         ),
                         "notification_id": f"givenergy_dashboard_{inv}",
                     },

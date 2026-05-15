@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-Generate a GivEnergy Local Lovelace dashboard with serial numbers pre-filled.
+Generate a GivEnergy Local dashboard with serial numbers pre-filled.
 
 The Battery view uses HA's sections layout — one column per battery — so pass
 as many --battery serials as you have packs and the columns are built for you.
 
 Usage:
-    uv run lovelace/generate.py \\
+    uv run dashboard/generate.py \\
         --inverter sa1234g123 \\
         --battery bt1234a001 bt1234a002
 
     # write to a file:
-    uv run lovelace/generate.py --inverter sa1234g123 --battery bt1234a001 \\
-        --output ~/homeassistant/lovelace/givenergy.yaml
+    uv run dashboard/generate.py --inverter sa1234g123 --battery bt1234a001 \\
+        --output ~/homeassistant/dashboard_givenergy.yaml
 
     # pipe to clipboard (macOS):
-    uv run lovelace/generate.py --inverter sa1234g123 --battery bt1234a001 | pbcopy
+    uv run dashboard/generate.py --inverter sa1234g123 --battery bt1234a001 | pbcopy
 """
 from __future__ import annotations
 
@@ -24,10 +24,10 @@ import importlib.util
 import sys
 from pathlib import Path
 
-# Load lovelace.py directly to avoid triggering the HA component's __init__.py.
+# Load dashboard.py directly to avoid triggering the HA component's __init__.py.
 _spec = importlib.util.spec_from_file_location(
-    "givenergy_local_lovelace",
-    Path(__file__).parent.parent / "custom_components" / "givenergy_local" / "lovelace.py",
+    "givenergy_local_dashboard",
+    Path(__file__).parent.parent / "custom_components" / "givenergy_local" / "dashboard.py",
 )
 _mod = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 _spec.loader.exec_module(_mod)  # type: ignore[union-attr]

@@ -1,4 +1,4 @@
-"""Generate a Lovelace dashboard YAML for the GivEnergy Local integration."""
+"""Generate a dashboard YAML for the GivEnergy Local integration."""
 
 from __future__ import annotations
 
