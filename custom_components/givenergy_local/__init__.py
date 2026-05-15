@@ -110,7 +110,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 yaml = generate_dashboard(inv, bats)
                 filename = f"dashboard_givenergy_{inv}.yaml"
                 www_dir = Path(hass.config.path("www"))
-                await hass.async_add_executor_job(lambda: www_dir.mkdir(exist_ok=True))
+                await hass.async_add_executor_job(lambda d=www_dir: d.mkdir(exist_ok=True))
                 await hass.async_add_executor_job((www_dir / filename).write_text, yaml)
                 url = f"/local/{filename}"
                 _LOGGER.info("GivEnergy dashboard available at %s", url)
