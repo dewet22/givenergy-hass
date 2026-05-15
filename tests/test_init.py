@@ -1,5 +1,6 @@
 """Tests for integration setup, unload, and config-entry migration."""
 
+from homeassistant.config_entries import ConfigEntryState
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.givenergy_local.const import (
@@ -72,3 +73,4 @@ async def test_migrate_refuses_future_version(hass, mock_client):
 
     # Setup is expected to fail; HA marks the entry as migration_error.
     assert not await hass.config_entries.async_setup(entry.entry_id)
+    assert entry.state is ConfigEntryState.MIGRATION_ERROR

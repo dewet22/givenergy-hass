@@ -46,7 +46,7 @@ views:
             name: Inverter
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_soc
             name: Battery SOC
-          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_pause_mode
+          - entity: select.givenergy_inverter_INVERTER_SERIAL_battery_pause_mode
             name: Pause Mode
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_temperature
             name: Battery Temp
@@ -371,7 +371,7 @@ views:
         entities:
           - entity: select.givenergy_inverter_INVERTER_SERIAL_battery_power_mode
             name: Battery Power Mode
-          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_pause_mode
+          - entity: select.givenergy_inverter_INVERTER_SERIAL_battery_pause_mode
             name: Pause Mode
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_calibration_stage
             name: Calibration Stage

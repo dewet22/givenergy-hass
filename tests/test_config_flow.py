@@ -99,7 +99,7 @@ async def test_reconfigure_updates_settings_without_retesting_connection(
     # refresh_plant(full_refresh=False) — the latter should not appear if
     # the host didn't change.
     test_connection_calls = [
-        c for c in mock_client.refresh_plant.call_args_list if c.kwargs == {"full_refresh": False}
+        c for c in mock_client.refresh_plant.call_args_list if c.kwargs.get("full_refresh") is False
     ]
     assert test_connection_calls == []
 

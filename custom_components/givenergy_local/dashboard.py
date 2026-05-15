@@ -68,7 +68,7 @@ def _overview_view(inv: str) -> str:
             name: Inverter
           - entity: {_i(inv, "battery_soc")}
             name: Battery SOC
-          - entity: {_i(inv, "battery_pause_mode")}
+          - entity: select.givenergy_inverter_{inv}_battery_pause_mode
             name: Pause Mode
           - entity: {_i(inv, "battery_temperature")}
             name: Battery Temp
@@ -212,10 +212,10 @@ def _battery_section(serial: str) -> str:
     temps = _bat_entity_rows(
         serial,
         [
-            ("cells_1_4_temperature", "Cells 1–4"),
-            ("cells_5_8_temperature", "Cells 5–8"),
-            ("cells_9_12_temperature", "Cells 9–12"),
-            ("cells_13_16_temperature", "Cells 13–16"),
+            ("cells_1_4_temperature", "Cells 1-4"),
+            ("cells_5_8_temperature", "Cells 5-8"),
+            ("cells_9_12_temperature", "Cells 9-12"),
+            ("cells_13_16_temperature", "Cells 13-16"),
         ],
     )
 
@@ -263,7 +263,7 @@ def _controls_view(inv: str) -> str:
         entities:
           - entity: select.givenergy_inverter_{inv}_battery_power_mode
             name: Battery Power Mode
-          - entity: {_i(inv, "battery_pause_mode")}
+          - entity: select.givenergy_inverter_{inv}_battery_pause_mode
             name: Pause Mode
           - entity: {_i(inv, "battery_calibration_stage")}
             name: Calibration Stage
