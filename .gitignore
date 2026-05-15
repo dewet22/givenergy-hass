@@ -10,6 +10,8 @@ dist/
 .env
 .DS_Store
 
+.coverage
+
 # Claude Code — local-only, not shared
 .claude/settings.local.json
 .claude/worktrees/

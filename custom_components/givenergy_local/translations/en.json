@@ -55,6 +55,41 @@
           "lead_acid": "Lead Acid",
           "lithium": "Lithium"
         }
+      },
+      "battery_calibration_stage": {
+        "state": {
+          "off": "Off",
+          "discharge": "Discharge",
+          "set_lower_limit": "Set Lower Limit",
+          "charge": "Charge",
+          "set_upper_limit": "Set Upper Limit",
+          "balance": "Balance",
+          "set_full_capacity": "Set Full Capacity",
+          "finish": "Finish"
+        }
+      },
+      "battery_pause_mode": {
+        "state": {
+          "disabled": "Disabled",
+          "pause_charge": "Pause Charge",
+          "pause_discharge": "Pause Discharge",
+          "pause_both": "Pause Both"
+        }
+      },
+      "battery_maintenance_mode": {
+        "state": {
+          "off": "Off",
+          "discharge": "Discharge",
+          "charge": "Charge",
+          "standby": "Standby"
+        }
+      },
+      "usb_device_inserted": {
+        "state": {
+          "none": "None",
+          "wifi": "Wi-Fi",
+          "disk": "Disk"
+        }
       }
     }
   }
