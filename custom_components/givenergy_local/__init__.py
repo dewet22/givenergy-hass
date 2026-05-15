@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 import voluptuous as vol
 from givenergy_modbus.client import commands
 from homeassistant.config_entries import ConfigEntry
@@ -19,9 +22,12 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     SERVICE_CALIBRATE_BATTERY_SOC,
+    SERVICE_GENERATE_DASHBOARD,
     SERVICE_REBOOT_INVERTER,
 )
 from .coordinator import GivEnergyUpdateCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 SERVICE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): cv.string})
 
@@ -75,6 +81,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
             await c._client.one_shot_command(commands.set_calibrate_battery_soc())
 
+        async def handle_generate_dashboard(_call: ServiceCall) -> None:
+            from .lovelace import generate_dashboard
+
+            for coordinator in hass.data.get(DOMAIN, {}).values():
+                if coordinator.data is None:
+                    continue
+                inv = coordinator.data.inverter.serial_number.lower()
+                bats = [b.serial_number.lower() for b in coordinator.data.batteries]
+                yaml = generate_dashboard(inv, bats)
+                out = Path(hass.config.path(f"lovelace_givenergy_{inv}.yaml"))
+                await hass.async_add_executor_job(out.write_text, yaml)
+                _LOGGER.info("GivEnergy dashboard written to %s", out)
+                await hass.services.async_call(
+                    "persistent_notification",
+                    "create",
+                    {
+                        "title": "GivEnergy dashboard generated",
+                        "message": (
+                            f"Dashboard written to `{out}`.\n\n"
+                            "Go to **Settings → Dashboards → Add Dashboard** "
+                            "and select this file to import it."
+                        ),
+                        "notification_id": f"givenergy_dashboard_{inv}",
+                    },
+                )
+
         hass.services.async_register(
             DOMAIN, SERVICE_REBOOT_INVERTER, handle_reboot_inverter, SERVICE_DEVICE_SCHEMA
         )
@@ -84,6 +116,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             handle_calibrate_battery_soc,
             SERVICE_DEVICE_SCHEMA,
         )
+        hass.services.async_register(DOMAIN, SERVICE_GENERATE_DASHBOARD, handle_generate_dashboard)
 
     return True
 
@@ -97,5 +130,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.data.get(DOMAIN):
         hass.services.async_remove(DOMAIN, SERVICE_REBOOT_INVERTER)
         hass.services.async_remove(DOMAIN, SERVICE_CALIBRATE_BATTERY_SOC)
+        hass.services.async_remove(DOMAIN, SERVICE_GENERATE_DASHBOARD)
 
     return unload_ok

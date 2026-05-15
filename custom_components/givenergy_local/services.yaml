@@ -26,3 +26,11 @@ calibrate_battery_soc:
       selector:
         device:
           integration: givenergy_local
+
+generate_dashboard:
+  name: Generate Lovelace dashboard
+  description: >
+    Generates a pre-configured Lovelace dashboard YAML file for all connected
+    inverters and writes it to your Home Assistant config directory.
+    A persistent notification will appear with the file path once complete.
+    Import it via Settings → Dashboards → Add Dashboard.
