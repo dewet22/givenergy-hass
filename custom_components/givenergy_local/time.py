@@ -21,10 +21,10 @@ from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 class GivEnergyTimeEntityDescription(TimeEntityDescription):
     slot_fn: Callable[[InverterModel], TimeSlot | None] = field(default=lambda _: None)
     is_start: bool = True
-    # Build the command list that writes the slot to the inverter. Receives the
-    # rebuilt slot and the current inverter (needed by charge/discharge setters
-    # to look up the model-specific register addresses via inverter.slot_map).
-    setter_fn: Callable[[TimeSlot, InverterModel], list] = field(default=lambda _, __: [])
+    # Writes just the relevant endpoint register. Takes the new value and the
+    # current inverter — charge/discharge setters dispatch on inverter.slot_map
+    # to handle extended-slot models; the pause setter ignores the inverter.
+    setter_fn: Callable[[dt_time, InverterModel], list] = field(default=lambda _, __: [])
 
 
 TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
@@ -33,7 +33,7 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Charge Slot 1 Start",
         slot_fn=lambda inv: inv.charge_slot_1,
         is_start=True,
-        setter_fn=lambda slot, inv: commands.set_charge_slot(1, slot, inv.slot_map),
+        setter_fn=lambda value, inv: commands.set_charge_slot_start(1, value, inv.slot_map),
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -41,7 +41,7 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Charge Slot 1 End",
         slot_fn=lambda inv: inv.charge_slot_1,
         is_start=False,
-        setter_fn=lambda slot, inv: commands.set_charge_slot(1, slot, inv.slot_map),
+        setter_fn=lambda value, inv: commands.set_charge_slot_end(1, value, inv.slot_map),
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -49,7 +49,7 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Charge Slot 2 Start",
         slot_fn=lambda inv: inv.charge_slot_2,
         is_start=True,
-        setter_fn=lambda slot, inv: commands.set_charge_slot(2, slot, inv.slot_map),
+        setter_fn=lambda value, inv: commands.set_charge_slot_start(2, value, inv.slot_map),
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -57,7 +57,7 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Charge Slot 2 End",
         slot_fn=lambda inv: inv.charge_slot_2,
         is_start=False,
-        setter_fn=lambda slot, inv: commands.set_charge_slot(2, slot, inv.slot_map),
+        setter_fn=lambda value, inv: commands.set_charge_slot_end(2, value, inv.slot_map),
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -65,7 +65,7 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Discharge Slot 1 Start",
         slot_fn=lambda inv: inv.discharge_slot_1,
         is_start=True,
-        setter_fn=lambda slot, inv: commands.set_discharge_slot(1, slot, inv.slot_map),
+        setter_fn=lambda value, inv: commands.set_discharge_slot_start(1, value, inv.slot_map),
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -73,7 +73,7 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Discharge Slot 1 End",
         slot_fn=lambda inv: inv.discharge_slot_1,
         is_start=False,
-        setter_fn=lambda slot, inv: commands.set_discharge_slot(1, slot, inv.slot_map),
+        setter_fn=lambda value, inv: commands.set_discharge_slot_end(1, value, inv.slot_map),
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -81,7 +81,7 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Discharge Slot 2 Start",
         slot_fn=lambda inv: inv.discharge_slot_2,
         is_start=True,
-        setter_fn=lambda slot, inv: commands.set_discharge_slot(2, slot, inv.slot_map),
+        setter_fn=lambda value, inv: commands.set_discharge_slot_start(2, value, inv.slot_map),
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -89,7 +89,7 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Discharge Slot 2 End",
         slot_fn=lambda inv: inv.discharge_slot_2,
         is_start=False,
-        setter_fn=lambda slot, inv: commands.set_discharge_slot(2, slot, inv.slot_map),
+        setter_fn=lambda value, inv: commands.set_discharge_slot_end(2, value, inv.slot_map),
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -97,7 +97,7 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Battery Pause Slot Start",
         slot_fn=lambda inv: inv.battery_pause_slot_1,
         is_start=True,
-        setter_fn=lambda slot, _inv: commands.set_pause_slot(slot),
+        setter_fn=lambda value, _inv: commands.set_pause_slot_start(value),
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -105,7 +105,7 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         name="Battery Pause Slot End",
         slot_fn=lambda inv: inv.battery_pause_slot_1,
         is_start=False,
-        setter_fn=lambda slot, _inv: commands.set_pause_slot(slot),
+        setter_fn=lambda value, _inv: commands.set_pause_slot_end(value),
         entity_category=EntityCategory.CONFIG,
     ),
 )
@@ -151,12 +151,5 @@ class GivEnergyTimeEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], TimeEnt
         if client is None or not client.connected:
             return
         inverter = self.coordinator.data.inverter
-        current_slot = self.entity_description.slot_fn(inverter)
-        if current_slot is None:
-            current_slot = TimeSlot(start=dt_time(0, 0), end=dt_time(0, 0))
-        if self.entity_description.is_start:
-            new_slot = TimeSlot(start=value, end=current_slot.end)
-        else:
-            new_slot = TimeSlot(start=current_slot.start, end=value)
-        await client.one_shot_command(self.entity_description.setter_fn(new_slot, inverter))
+        await client.one_shot_command(self.entity_description.setter_fn(value, inverter))
         await self.coordinator.async_request_refresh()
