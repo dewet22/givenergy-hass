@@ -1,15 +1,16 @@
 [project]
 name = "givenergy-local"
+# Stub version only. The integration is distributed via HACS, which reads
+# `custom_components/givenergy_local/manifest.json` as the single source of
+# truth. uv_build requires a static version field even with
+# [tool.uv] package = false, so we satisfy it with a placeholder rather than
+# duplicate the real version here and let it drift.
+version = "0.0.0"
 description = "Home Assistant custom component for GivEnergy inverters via local Modbus TCP"
 requires-python = ">=3.13"
 dependencies = [
-    "givenergy-modbus>=2.0.0a1,<3.0.0",
+    "givenergy-modbus>=2.0.0a2,<3.0.0",
 ]
-# Version is not declared here. The integration is distributed via HACS,
-# which reads `custom_components/givenergy_local/manifest.json` as the
-# single source of truth. `[tool.uv] package = false` means uv never
-# builds this project, so a pyproject version would just drift.
-dynamic = ["version"]
 
 [dependency-groups]
 dev = [
