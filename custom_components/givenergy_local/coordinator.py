@@ -24,6 +24,20 @@ _FULL_REFRESH_INTERVAL = 300  # seconds (~5 minutes)
 
 
 class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
+    """Wraps a long-lived Modbus Client, polling the inverter on a fixed interval.
+
+    Concurrency invariant: detect() must not run while any other request can be
+    in flight against the same client. Today this holds naturally — detect only
+    runs inside _connect(), which itself runs under HA's coordinator lock and
+    before any entity write path is available. Entity write calls via
+    client.one_shot_command() *can* interleave with regular refresh ticks (HA's
+    lock doesn't cover them), but that's safe: reads and writes have orthogonal
+    shape hashes, the tx_queue serialises bytes onto the wire, and the consumer
+    demuxes responses by shape hash. Moving detect onto a hot path would break
+    the invariant and need a per-client lock around detect and capability
+    mutation.
+    """
+
     def __init__(
         self,
         hass: HomeAssistant,
