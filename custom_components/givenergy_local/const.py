@@ -8,7 +8,7 @@ CONF_PASSIVE = "passive"
 CONF_TIMEOUT_TOLERANCE = "timeout_tolerance"
 
 DEFAULT_PASSIVE = False
-DEFAULT_TIMEOUT_TOLERANCE = 5
+DEFAULT_TIMEOUT_TOLERANCE = 3
 
 PLATFORMS = ["sensor", "switch", "number", "select", "time"]
 

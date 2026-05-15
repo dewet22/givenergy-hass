@@ -81,7 +81,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             # connection is likely still valid.
             self.consecutive_failures += 1
             self.total_failures += 1
-            if self.data is None or self.consecutive_failures > self.timeout_tolerance:
+            if self.data is None or self.consecutive_failures >= self.timeout_tolerance:
                 await self._reset_client()
                 raise UpdateFailed(
                     f"Timed out communicating with inverter "

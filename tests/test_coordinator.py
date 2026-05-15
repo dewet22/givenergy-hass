@@ -86,8 +86,8 @@ async def test_timeout_within_tolerance_preserves_client(hass, mock_plant):
         assert result is mock_plant
 
 
-async def test_timeout_exceeding_tolerance_resets_client(hass, mock_plant):
-    """Once consecutive failures exceed tolerance the client is reset for the next tick."""
+async def test_timeout_reaching_tolerance_resets_client(hass, mock_plant):
+    """The Nth consecutive timeout (with tolerance=N) resets the client for the next tick."""
     coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30, timeout_tolerance=2)
 
     with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
@@ -99,10 +99,14 @@ async def test_timeout_exceeding_tolerance_resets_client(hass, mock_plant):
         coordinator._client = client
         coordinator.data = mock_plant  # seed stale data
 
-        coordinator.consecutive_failures = 2  # already at tolerance limit
+        # First failure — within tolerance, serves stale data.
+        result = await coordinator._async_update_data()
+        assert result is mock_plant
+        client.close.assert_not_called()
 
+        # Second failure — reaches tolerance, resets the client.
         with pytest.raises(UpdateFailed, match="Timed out"):
-            await coordinator._async_update_data()  # failure 3 — exceeds tolerance
+            await coordinator._async_update_data()
 
         client.close.assert_called_once()
         assert coordinator._client is None
@@ -198,7 +202,7 @@ async def test_reset_and_reconnect_emit_integration_level_logs(hass, mock_plant,
         mock_cls.return_value = client
         coordinator._client = client
         coordinator.data = mock_plant
-        coordinator.consecutive_failures = 1  # next failure exceeds tolerance
+        # tolerance=1 → first failure already reaches the threshold.
 
         with caplog.at_level(logging.INFO, logger="custom_components.givenergy_local.coordinator"):
             with pytest.raises(UpdateFailed):
