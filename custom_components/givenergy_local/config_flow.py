@@ -10,14 +10,10 @@ from homeassistant.const import CONF_HOST, CONF_PORT
 
 from .const import (
     CONF_PASSIVE,
-    CONF_RETRIES,
     CONF_SCAN_INTERVAL,
-    CONF_TIMEOUT_TOLERANCE,
     DEFAULT_PASSIVE,
     DEFAULT_PORT,
-    DEFAULT_RETRIES,
     DEFAULT_SCAN_INTERVAL,
-    DEFAULT_TIMEOUT_TOLERANCE,
     DOMAIN,
 )
 
@@ -29,14 +25,12 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
         vol.Required(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): int,
         vol.Required(CONF_PASSIVE, default=DEFAULT_PASSIVE): bool,
-        vol.Required(CONF_TIMEOUT_TOLERANCE, default=DEFAULT_TIMEOUT_TOLERANCE): int,
-        vol.Required(CONF_RETRIES, default=DEFAULT_RETRIES): int,
     }
 )
 
 
 class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}

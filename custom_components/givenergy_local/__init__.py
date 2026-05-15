@@ -18,9 +18,7 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_TIMEOUT_TOLERANCE,
     DEFAULT_PASSIVE,
-    DEFAULT_RETRIES,
     DEFAULT_SCAN_INTERVAL,
-    DEFAULT_TIMEOUT_TOLERANCE,
     DOMAIN,
     PLATFORMS,
     SERVICE_CALIBRATE_BATTERY_SOC,
@@ -47,6 +45,25 @@ def _coordinator_for_device(
     return None
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Drop the user-tunable retry/tolerance knobs from older config entries.
+
+    The library now ships a calibrated retry_delay default, and the previous
+    knobs were doing more harm than good in practice (users dialling them up
+    to defensive-but-counterproductive values). Strip them so everyone runs
+    on the integration's current defaults; storage stays clean rather than
+    carrying inert fields that have no effect.
+    """
+    if entry.version > 2:
+        return False
+    if entry.version == 1:
+        data = {**entry.data}
+        data.pop(CONF_TIMEOUT_TOLERANCE, None)
+        data.pop(CONF_RETRIES, None)
+        hass.config_entries.async_update_entry(entry, data=data, version=2)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = GivEnergyUpdateCoordinator(
         hass=hass,
@@ -54,8 +71,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         port=entry.data[CONF_PORT],
         scan_interval=entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
         passive=entry.data.get(CONF_PASSIVE, DEFAULT_PASSIVE),
-        timeout_tolerance=entry.data.get(CONF_TIMEOUT_TOLERANCE, DEFAULT_TIMEOUT_TOLERANCE),
-        retries=entry.data.get(CONF_RETRIES, DEFAULT_RETRIES),
     )
 
     await coordinator.async_config_entry_first_refresh()

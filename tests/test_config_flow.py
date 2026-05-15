@@ -5,11 +5,7 @@ from homeassistant.const import CONF_HOST, CONF_PORT
 
 from custom_components.givenergy_local.const import (
     CONF_PASSIVE,
-    CONF_RETRIES,
     CONF_SCAN_INTERVAL,
-    CONF_TIMEOUT_TOLERANCE,
-    DEFAULT_RETRIES,
-    DEFAULT_TIMEOUT_TOLERANCE,
     DOMAIN,
 )
 
@@ -18,8 +14,6 @@ VALID_USER_INPUT = {
     CONF_PORT: 8899,
     CONF_SCAN_INTERVAL: 30,
     CONF_PASSIVE: False,
-    CONF_TIMEOUT_TOLERANCE: DEFAULT_TIMEOUT_TOLERANCE,
-    CONF_RETRIES: DEFAULT_RETRIES,
 }
 
 
