@@ -9,7 +9,7 @@ version = "0.0.0"
 description = "Home Assistant custom component for GivEnergy inverters via local Modbus TCP"
 requires-python = ">=3.13"
 dependencies = [
-    "givenergy-modbus>=2.0.0a4,<3.0.0",
+    "givenergy-modbus>=2.0.0a5,<3.0.0",
 ]
 
 [dependency-groups]
