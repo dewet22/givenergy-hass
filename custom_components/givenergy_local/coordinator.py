@@ -4,12 +4,16 @@ import logging
 from datetime import datetime, timedelta
 
 from givenergy_modbus.client.client import Client
+from givenergy_modbus.model.inverter import SinglePhaseInverter
+from givenergy_modbus.model.inverter_threephase import ThreePhaseInverter
 from givenergy_modbus.model.plant import Plant
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
+
+InverterModel = SinglePhaseInverter | ThreePhaseInverter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,15 +24,29 @@ _FULL_REFRESH_INTERVAL = 300  # seconds (~5 minutes)
 
 
 class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
+    """Wraps a long-lived Modbus Client, polling the inverter on a fixed interval.
+
+    Concurrency invariant: detect() must not run while any other request can be
+    in flight against the same client. Today this holds naturally — detect only
+    runs inside _connect(), which itself runs under HA's coordinator lock and
+    before any entity write path is available. Entity write calls via
+    client.one_shot_command() *can* interleave with regular refresh ticks (HA's
+    lock doesn't cover them), but that's safe: reads and writes have orthogonal
+    shape hashes, the tx_queue serialises bytes onto the wire, and the consumer
+    demuxes responses by shape hash. Moving detect onto a hot path would break
+    the invariant and need a per-client lock around detect and capability
+    mutation.
+    """
+
     def __init__(
         self,
         hass: HomeAssistant,
         host: str,
         port: int,
         scan_interval: int,
-        max_batteries: int,
         passive: bool = False,
-        timeout_tolerance: int = 5,
+        timeout_tolerance: int = 3,
+        retries: int = 1,
     ) -> None:
         super().__init__(
             hass,
@@ -38,9 +56,9 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         )
         self.host = host
         self.port = port
-        self.max_batteries = max_batteries
         self.passive = passive
         self.timeout_tolerance = timeout_tolerance
+        self.retries = retries
         self._client: Client | None = None
         self.last_successful_refresh: datetime | None = None
         self.consecutive_failures: int = 0
@@ -79,7 +97,8 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             # connection is likely still valid.
             self.consecutive_failures += 1
             self.total_failures += 1
-            if self.data is None or self.consecutive_failures > self.timeout_tolerance:
+            if self.data is None or self.consecutive_failures >= self.timeout_tolerance:
+                await self._reset_client()
                 raise UpdateFailed(
                     f"Timed out communicating with inverter "
                     f"({self.consecutive_failures} consecutive failures)"
@@ -112,10 +131,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         assert self._client is not None  # _async_update_data ensures this
         full_refresh = self._active_tick % self._full_refresh_every == 0
         self._active_tick += 1
-        await self._client.refresh_plant(
-            full_refresh=full_refresh,
-            max_batteries=self.max_batteries,
-        )
+        await self._client.refresh_plant(full_refresh=full_refresh, retries=self.retries)
         return self._client.plant
 
     async def _passive_update(self, reconnecting: bool) -> Plant:
@@ -126,10 +142,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         """
         assert self._client is not None  # _async_update_data ensures this
         if reconnecting:
-            await self._client.refresh_plant(
-                full_refresh=True,
-                max_batteries=self.max_batteries,
-            )
+            await self._client.refresh_plant(full_refresh=True, retries=self.retries)
             return self._client.plant
 
         plant = self._client.plant
@@ -162,16 +175,22 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
     # ------------------------------------------------------------------
 
     async def _connect(self) -> None:
-        """Open a fresh TCP connection and reset all staleness tracking."""
+        """Open a fresh TCP connection, discover topology, and reset staleness tracking."""
         self._client = Client(host=self.host, port=self.port)
         await self._client.connect()
+        # detect() populates plant.capabilities, which makes subsequent
+        # refresh_plant() calls dispatch via model-aware load_config()/refresh()
+        # — required for three-phase, AIO-HV, EMS and other non-default topologies.
+        await self._client.detect()
         self._last_inverter_time = None
         self._unchanged_ticks = 0
         self._active_tick = 0
+        _LOGGER.info("Connected to inverter at %s:%s", self.host, self.port)
 
     async def _reset_client(self) -> None:
         """Close and discard the client so the next tick triggers a reconnect."""
         if self._client is not None:
+            _LOGGER.info("Closing connection to %s:%s", self.host, self.port)
             await self._client.close()
             self._client = None
 

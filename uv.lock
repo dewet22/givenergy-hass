@@ -1910,6 +1910,7 @@ wheels = [
 
 [[package]]
 name = "givenergy-local"
+version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "givenergy-modbus" },
@@ -1930,7 +1931,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "givenergy-modbus", specifier = ">=1.3.0,<2.0.0" }]
+requires-dist = [{ name = "givenergy-modbus", specifier = ">=2.0.0a6,<3.0.0" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1943,7 +1944,7 @@ dev = [
 
 [[package]]
 name = "givenergy-modbus"
-version = "1.3.0"
+version = "2.0.0a6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "crccheck" },
@@ -1951,9 +1952,9 @@ dependencies = [
     { name = "pydantic", version = "2.12.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13.2' and python_full_version < '3.14.2'" },
     { name = "pydantic", version = "2.13.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14.2'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/99/8f/929743420244f5364b497e66424db622b2ab61dd422ff495380ff977c032/givenergy_modbus-1.3.0.tar.gz", hash = "sha256:9ea1481c9a44a489c0881d45658350a809476704d848521b647483a477b60e79", size = 59793, upload-time = "2026-05-13T08:12:19.955Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fa/3b/6cb2165877a01ec2e0af4d9ed562c33f2af6df8849d6c260b0899b026664/givenergy_modbus-2.0.0a6.tar.gz", hash = "sha256:8f30e22d5da7eebc386f06c0a441c269c8968feb882ce1b5cfb7282e4099a19a", size = 107883, upload-time = "2026-05-15T22:56:43.013Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/94/12/c725b05ed2cb963ba443d65b4b9bb76948ccd89bac789cc8dcda210885aa/givenergy_modbus-1.3.0-py3-none-any.whl", hash = "sha256:bedfcad399b42265f398edf0cf7fca37a5996e664a5f9c18ca8c3cd5393e0aa1", size = 39285, upload-time = "2026-05-13T08:12:18.618Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/83/5181bcda0c89fd4ba80e7ea90dc1abcce582af4af6c8e78279a1e771c96a/givenergy_modbus-2.0.0a6-py3-none-any.whl", hash = "sha256:7b714027ab580a8358ac9e0aaea99497ca5b909b8a1ec36fa37d826ce868102a", size = 67539, upload-time = "2026-05-15T22:56:41.516Z" },
 ]
 
 [[package]]

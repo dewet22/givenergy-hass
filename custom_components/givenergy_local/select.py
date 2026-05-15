@@ -4,7 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from givenergy_modbus.client import commands
-from givenergy_modbus.model.inverter import BatteryPowerMode, Inverter
+from givenergy_modbus.model.battery import BatteryPauseMode
+from givenergy_modbus.model.inverter import BatteryPowerMode
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -13,12 +14,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import GivEnergyUpdateCoordinator
+from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 
 
 @dataclass(frozen=True, kw_only=True)
 class GivEnergySelectEntityDescription(SelectEntityDescription):
-    current_option_fn: Callable[[Inverter], str | None] = field(default=lambda _: None)
+    current_option_fn: Callable[[InverterModel], str | None] = field(default=lambda _: None)
     select_option_cmd: Callable[[str], list] = field(default=lambda _: [])
 
 
@@ -26,6 +27,27 @@ def _battery_power_mode_cmd(option: str) -> list:
     if option == "Self Consumption":
         return commands.set_discharge_mode_to_match_demand()
     return commands.set_discharge_mode_max_power()
+
+
+# Human-readable labels derived from BatteryPauseMode enum names. Kept as a
+# bidirectional mapping so the select option and the command stay in sync.
+_PAUSE_MODE_LABELS: dict[BatteryPauseMode, str] = {
+    BatteryPauseMode.DISABLED: "Disabled",
+    BatteryPauseMode.PAUSE_CHARGE: "Pause Charge",
+    BatteryPauseMode.PAUSE_DISCHARGE: "Pause Discharge",
+    BatteryPauseMode.PAUSE_BOTH: "Pause Both",
+}
+_PAUSE_MODE_BY_LABEL: dict[str, BatteryPauseMode] = {v: k for k, v in _PAUSE_MODE_LABELS.items()}
+
+
+def _battery_pause_current_option(inv: InverterModel) -> str | None:
+    if inv.battery_pause_mode is None:
+        return None
+    return _PAUSE_MODE_LABELS.get(BatteryPauseMode(inv.battery_pause_mode))
+
+
+def _battery_pause_mode_cmd(option: str) -> list:
+    return commands.set_battery_pause_mode(_PAUSE_MODE_BY_LABEL[option])
 
 
 SELECT_DESCRIPTIONS: tuple[GivEnergySelectEntityDescription, ...] = (
@@ -39,6 +61,14 @@ SELECT_DESCRIPTIONS: tuple[GivEnergySelectEntityDescription, ...] = (
             else "Export"
         ),
         select_option_cmd=_battery_power_mode_cmd,
+        entity_category=EntityCategory.CONFIG,
+    ),
+    GivEnergySelectEntityDescription(
+        key="battery_pause_mode",
+        name="Battery Pause Mode",
+        options=list(_PAUSE_MODE_BY_LABEL.keys()),
+        current_option_fn=_battery_pause_current_option,
+        select_option_cmd=_battery_pause_mode_cmd,
         entity_category=EntityCategory.CONFIG,
     ),
 )

@@ -8,9 +8,7 @@
           "host": "Inverter IP Address",
           "port": "Modbus Port",
           "scan_interval": "Scan Interval (seconds)",
-          "max_batteries": "Number of Batteries",
-          "passive": "Passive mode (listen only — another client drives refreshes)",
-          "timeout_tolerance": "Timeout Tolerance (consecutive failures before unavailable)"
+          "passive": "Passive mode (listen only — another client drives refreshes)"
         }
       },
       "reconfigure": {
@@ -20,9 +18,7 @@
           "host": "Inverter IP Address",
           "port": "Modbus Port",
           "scan_interval": "Scan Interval (seconds)",
-          "max_batteries": "Number of Batteries",
-          "passive": "Passive mode (listen only — another client drives refreshes)",
-          "timeout_tolerance": "Timeout Tolerance (consecutive failures before unavailable)"
+          "passive": "Passive mode (listen only — another client drives refreshes)"
         }
       }
     },
@@ -56,6 +52,33 @@
         "state": {
           "lead_acid": "Lead Acid",
           "lithium": "Lithium"
+        }
+      },
+      "battery_calibration_stage": {
+        "state": {
+          "off": "Off",
+          "discharge": "Discharge",
+          "set_lower_limit": "Set Lower Limit",
+          "charge": "Charge",
+          "set_upper_limit": "Set Upper Limit",
+          "balance": "Balance",
+          "set_full_capacity": "Set Full Capacity",
+          "finish": "Finish"
+        }
+      },
+      "battery_maintenance_mode": {
+        "state": {
+          "off": "Off",
+          "discharge": "Discharge",
+          "charge": "Charge",
+          "standby": "Standby"
+        }
+      },
+      "usb_device_inserted": {
+        "state": {
+          "none": "None",
+          "wifi": "Wi-Fi",
+          "disk": "Disk"
         }
       }
     }

@@ -1,0 +1,35 @@
+reboot_inverter:
+  name: Reboot inverter
+  description: >
+    Restarts the GivEnergy inverter. The inverter will be offline for approximately
+    30 seconds. Only use this if the inverter is in an unresponsive state.
+  fields:
+    device_id:
+      name: Device
+      description: The GivEnergy inverter to reboot.
+      required: true
+      selector:
+        device:
+          integration: givenergy_local
+
+calibrate_battery_soc:
+  name: Calibrate battery state of charge
+  description: >
+    Instructs the inverter to recalibrate its battery state-of-charge estimation.
+    This triggers a full charge/discharge cycle and should only be run when advised
+    by GivEnergy support or as part of routine battery maintenance.
+  fields:
+    device_id:
+      name: Device
+      description: The GivEnergy inverter to calibrate.
+      required: true
+      selector:
+        device:
+          integration: givenergy_local
+
+generate_dashboard:
+  name: Generate dashboard
+  description: >
+    Generates a pre-configured dashboard YAML file for all connected
+    inverters and makes it available for download via a persistent notification.
+    Import it via Settings → Dashboards → Add Dashboard.

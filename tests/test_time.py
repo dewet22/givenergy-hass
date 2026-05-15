@@ -66,8 +66,26 @@ async def test_all_time_slot_entities_created(hass, setup_integration):
         "discharge_slot_1_end",
         "discharge_slot_2_start",
         "discharge_slot_2_end",
+        "battery_pause_slot_start",
+        "battery_pause_slot_end",
     ]
     for key in expected_keys:
         entity_id = _entity_id(hass, f"SA1234G123_{key}")
         state = hass.states.get(entity_id)
         assert state is not None, f"Entity SA1234G123_{key} has no state"
+
+
+async def test_set_battery_pause_slot_start_sends_command(hass, mock_client, setup_integration):
+    entity_id = _entity_id(hass, "SA1234G123_battery_pause_slot_start")
+    await hass.services.async_call(
+        "time", "set_value", {"entity_id": entity_id, "time": "14:00:00"}, blocking=True
+    )
+    mock_client.one_shot_command.assert_called_once()
+
+
+async def test_set_battery_pause_slot_end_sends_command(hass, mock_client, setup_integration):
+    entity_id = _entity_id(hass, "SA1234G123_battery_pause_slot_end")
+    await hass.services.async_call(
+        "time", "set_value", {"entity_id": entity_id, "time": "15:00:00"}, blocking=True
+    )
+    mock_client.one_shot_command.assert_called_once()

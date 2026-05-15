@@ -4,8 +4,15 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from givenergy_modbus.model.battery import Battery
-from givenergy_modbus.model.inverter import BatteryType, Inverter, MeterType, Model, Status
+from givenergy_modbus.model.battery import Battery, BatteryMaintenance
+from givenergy_modbus.model.inverter import (
+    BatteryCalibrationStage,
+    BatteryType,
+    MeterType,
+    Model,
+    Status,
+    UsbDevice,
+)
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -29,12 +36,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import GivEnergyUpdateCoordinator
+from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 
 
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyInverterSensorDescription(SensorEntityDescription):
-    value_fn: Callable[[Inverter], Any] = field(default=lambda _: None)
+    value_fn: Callable[[InverterModel], Any] = field(default=lambda _: None)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -86,6 +93,27 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: inv.charger_warning_code,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
+    GivEnergyInverterSensorDescription(
+        key="battery_calibration_stage",
+        name="Battery Calibration Stage",
+        device_class=SensorDeviceClass.ENUM,
+        options=[s.name.lower() for s in BatteryCalibrationStage],
+        translation_key="battery_calibration_stage",
+        value_fn=lambda inv: (
+            inv.battery_calibration_stage.name.lower()
+            if inv.battery_calibration_stage is not None
+            else None
+        ),
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="inverter_fault_messages",
+        name="Fault Messages",
+        value_fn=lambda inv: (
+            ", ".join(inv.inverter_fault_messages) if inv.inverter_fault_messages else None
+        ),
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
     # Raw integers — the upstream library doesn't ship enum mappings for
     # these yet, but exposing the values lets users build templates or
     # see them change in history while the mappings get figured out.
@@ -102,9 +130,28 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(
-        key="battery_pause_mode",
-        name="Battery Pause Mode",
-        value_fn=lambda inv: inv.battery_pause_mode,
+        key="battery_maintenance_mode",
+        name="Battery Maintenance Mode",
+        device_class=SensorDeviceClass.ENUM,
+        options=[s.name.lower() for s in BatteryMaintenance],
+        translation_key="battery_maintenance_mode",
+        # Only present on three-phase inverters (HR 1124); None on single-phase.
+        value_fn=lambda inv: (
+            m.name.lower()
+            if (m := getattr(inv, "battery_maintenance_mode", None)) is not None
+            else None
+        ),
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="usb_device_inserted",
+        name="USB Device",
+        device_class=SensorDeviceClass.ENUM,
+        options=[s.name.lower() for s in UsbDevice],
+        translation_key="usb_device_inserted",
+        value_fn=lambda inv: (
+            inv.usb_device_inserted.name.lower() if inv.usb_device_inserted is not None else None
+        ),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     # --- Solar / PV ---
@@ -379,6 +426,15 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: inv.p_grid_out_ph1,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
+    GivEnergyInverterSensorDescription(
+        key="i_grid_port",
+        name="Grid Port Current",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.i_grid_port,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
     # --- Load / Consumption ---
     GivEnergyInverterSensorDescription(
         key="p_load_demand",
@@ -435,6 +491,67 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_discharge_year,
+    ),
+    # --- Second battery stack (dual-stack setups) ---
+    GivEnergyInverterSensorDescription(
+        key="e_battery_charge_2",
+        name="Battery 2 Charge Total",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda inv: inv.e_battery_charge_2,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="e_battery_discharge_2",
+        name="Battery 2 Discharge Total",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda inv: inv.e_battery_discharge_2,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="e_battery_charge_day_2",
+        name="Battery 2 Charge Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda inv: inv.e_battery_charge_day_2,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="e_battery_discharge_day_2",
+        name="Battery 2 Discharge Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda inv: inv.e_battery_discharge_day_2,
+    ),
+    # --- Solar diverter ---
+    GivEnergyInverterSensorDescription(
+        key="e_solar_diverter",
+        name="Solar Diverter Energy Total",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda inv: inv.e_solar_diverter,
+    ),
+    # --- DC bus voltages ---
+    GivEnergyInverterSensorDescription(
+        key="v_p_bus",
+        name="Positive DC Bus Voltage",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.v_p_bus,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="v_n_bus",
+        name="Negative DC Bus Voltage",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.v_n_bus,
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     # --- EPS / Generation ---
     GivEnergyInverterSensorDescription(
@@ -611,6 +728,14 @@ BATTERY_SENSORS: tuple[GivEnergyBatterySensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyBatterySensorDescription(
+        key="cap_calibrated",
+        name="Calibrated Capacity",
+        native_unit_of_measurement="Ah",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda bat: bat.cap_calibrated,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyBatterySensorDescription(
         key="num_cycles",
         name="Charge Cycles",
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -643,6 +768,33 @@ BATTERY_SENSORS: tuple[GivEnergyBatterySensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda bat: bat.t_bms_mosfet,
         entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    # BMS status and warning flag bytes — no enum mapping exists upstream yet,
+    # but the raw values let users spot state changes in history and build
+    # template automations in the meantime.
+    *(
+        GivEnergyBatterySensorDescription(
+            key=f"status_{i}",
+            name=f"BMS Status {i}",
+            state_class=SensorStateClass.MEASUREMENT,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn=_battery_attr(f"status_{i}"),
+        )
+        for i in range(1, 8)
+    ),
+    GivEnergyBatterySensorDescription(
+        key="warning_1",
+        name="BMS Warning 1",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda bat: bat.warning_1,
+    ),
+    GivEnergyBatterySensorDescription(
+        key="warning_2",
+        name="BMS Warning 2",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda bat: bat.warning_2,
     ),
     # Per-cell voltages — 16 entities; unused cells in smaller packs read ~0.
     # `attr` default-arg captures the loop variable to avoid the closure trap.

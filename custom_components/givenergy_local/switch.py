@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from givenergy_modbus.client import commands
-from givenergy_modbus.model.inverter import Inverter
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -14,12 +13,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import GivEnergyUpdateCoordinator
+from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 
 
 @dataclass(frozen=True, kw_only=True)
 class GivEnergySwitchEntityDescription(SwitchEntityDescription):
-    is_on_fn: Callable[[Inverter], bool] = field(default=lambda _: False)
+    is_on_fn: Callable[[InverterModel], bool] = field(default=lambda _: False)
     turn_on_cmd: Callable[[], list] = field(default=list)
     turn_off_cmd: Callable[[], list] = field(default=list)
 
