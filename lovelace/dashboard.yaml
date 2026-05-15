@@ -12,7 +12,7 @@
 #      BATTERY_SERIAL_2   →  e.g. bt1234a002   (duplicate/remove sections as needed)
 #
 # Required custom cards (install via HACS → Frontend):
-#   - power-flow-card  (ulic75/power-flow-card)
+#   - power-flow-card-plus  (flixlix/power-flow-card-plus)
 #   - mini-graph-card  (kalkih/mini-graph-card)
 #   - apexcharts-card  (RomRider/apexcharts-card)
 
@@ -25,7 +25,7 @@ views:
     icon: mdi:solar-power-variant
 
     cards:
-      - type: custom:power-flow-card
+      - type: custom:power-flow-card-plus
         entities:
           solar:
             entity: sensor.givenergy_inverter_INVERTER_SERIAL_pv_power

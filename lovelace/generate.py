@@ -64,7 +64,7 @@ def _build(inv: str, bats: list[str]) -> str:
         f"# Batteries: {', '.join(bats)}\n"
         f"#\n"
         f"# Required custom cards (install via HACS → Frontend):\n"
-        f"#   - power-flow-card  (ulic75/power-flow-card)\n"
+        f"#   - power-flow-card-plus  (flixlix/power-flow-card-plus)\n"
         f"#   - mini-graph-card  (kalkih/mini-graph-card)\n"
         f"#   - apexcharts-card  (RomRider/apexcharts-card)\n"
         f"\n"
@@ -85,7 +85,7 @@ def _overview_view(inv: str) -> str:
     icon: mdi:solar-power-variant
 
     cards:
-      - type: custom:power-flow-card
+      - type: custom:power-flow-card-plus
         entities:
           solar:
             entity: {_i(inv, "pv_power")}
