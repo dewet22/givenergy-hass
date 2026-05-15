@@ -1931,7 +1931,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "givenergy-modbus", specifier = ">=2.0.0a5,<3.0.0" }]
+requires-dist = [{ name = "givenergy-modbus", specifier = ">=2.0.0a6,<3.0.0" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1944,7 +1944,7 @@ dev = [
 
 [[package]]
 name = "givenergy-modbus"
-version = "2.0.0a5"
+version = "2.0.0a6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "crccheck" },
@@ -1952,9 +1952,9 @@ dependencies = [
     { name = "pydantic", version = "2.12.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.13.2' and python_full_version < '3.14.2'" },
     { name = "pydantic", version = "2.13.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14.2'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/09/a1/4382be33046c7c8ba18466b78331ae76e957be1e2979f82838d898956a2e/givenergy_modbus-2.0.0a5.tar.gz", hash = "sha256:dba929cffe23db925304e83aa5e8c5319f5ef875e0089f3e212ce7e50e5a4752", size = 107832, upload-time = "2026-05-15T22:07:06.211Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/fa/3b/6cb2165877a01ec2e0af4d9ed562c33f2af6df8849d6c260b0899b026664/givenergy_modbus-2.0.0a6.tar.gz", hash = "sha256:8f30e22d5da7eebc386f06c0a441c269c8968feb882ce1b5cfb7282e4099a19a", size = 107883, upload-time = "2026-05-15T22:56:43.013Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f9/a2/e54197208371ab7ae66340ddd0317f56b3503a43d467dd11e5d0a939a01b/givenergy_modbus-2.0.0a5-py3-none-any.whl", hash = "sha256:ee278b4ad69a9f536565040bfd609b362b4075ac88e581e35b0a6eeffa5a1756", size = 67490, upload-time = "2026-05-15T22:07:04.545Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/83/5181bcda0c89fd4ba80e7ea90dc1abcce582af4af6c8e78279a1e771c96a/givenergy_modbus-2.0.0a6-py3-none-any.whl", hash = "sha256:7b714027ab580a8358ac9e0aaea99497ca5b909b8a1ec36fa37d826ce868102a", size = 67539, upload-time = "2026-05-15T22:56:41.516Z" },
 ]
 
 [[package]]
