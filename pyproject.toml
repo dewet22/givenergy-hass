@@ -20,6 +20,15 @@ dev = [
     "mypy>=1.10",
 ]
 
+# This project isn't distributed as a pip package — it's a HACS-installed HA
+# custom component. The pyproject is here purely so `uv` can resolve a dev
+# venv. Pin the build backend explicitly to uv_build so we don't fall back
+# to setuptools' flat-layout auto-discovery, which fails on the coexisting
+# `custom_components/` and `dashboard/` directories.
+[build-system]
+requires = ["uv_build>=0.5"]
+build-backend = "uv_build"
+
 [tool.uv]
 package = false
 
