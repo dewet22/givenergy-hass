@@ -11,6 +11,8 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.storage import Store
 
 from .const import (
     CONF_PASSIVE,
@@ -26,8 +28,12 @@ from .const import (
     SERVICE_REBOOT_INVERTER,
 )
 from .coordinator import GivEnergyUpdateCoordinator
+from .dashboard import DASHBOARD_VERSION
 
 _LOGGER = logging.getLogger(__name__)
+
+_DASHBOARD_STORAGE_KEY = f"{DOMAIN}.dashboard"
+_DASHBOARD_STORAGE_VERSION = 1
 
 SERVICE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): cv.string})
 
@@ -87,6 +93,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    store = Store(hass, _DASHBOARD_STORAGE_VERSION, _DASHBOARD_STORAGE_KEY)
+    stored = await store.async_load() or {}
+    stored_version = stored.get("schema_version", 0)
+
+    # Clean up repair issues from all previous schema versions.
+    for v in range(1, DASHBOARD_VERSION):
+        ir.async_delete_issue(hass, DOMAIN, f"dashboard_outdated_v{v}")
+
+    if 0 < stored_version < DASHBOARD_VERSION:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"dashboard_outdated_v{DASHBOARD_VERSION}",
+            is_fixable=True,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="dashboard_outdated",
+            translation_placeholders={
+                "old_version": str(stored_version),
+                "new_version": str(DASHBOARD_VERSION),
+            },
+            data={
+                "max_power_kw": stored.get("max_power_kw", 10),
+                "old_version": stored_version,
+                "new_version": DASHBOARD_VERSION,
+            },
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, f"dashboard_outdated_v{DASHBOARD_VERSION}")
+
     if not hass.services.has_service(DOMAIN, SERVICE_REBOOT_INVERTER):
 
         async def handle_reboot_inverter(call: ServiceCall) -> None:
@@ -136,6 +172,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         "notification_id": f"givenergy_dashboard_{inv}",
                     },
                 )
+            await store.async_save(
+                {"schema_version": DASHBOARD_VERSION, "max_power_kw": max_power_kw}
+            )
+            ir.async_delete_issue(hass, DOMAIN, f"dashboard_outdated_v{DASHBOARD_VERSION}")
 
         hass.services.async_register(
             DOMAIN, SERVICE_REBOOT_INVERTER, handle_reboot_inverter, SERVICE_DEVICE_SCHEMA
