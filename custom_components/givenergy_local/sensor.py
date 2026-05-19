@@ -42,6 +42,8 @@ from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyInverterSensorDescription(SensorEntityDescription):
     value_fn: Callable[[InverterModel], Any] = field(default=lambda _: None)
+    # If True, the entity is not created when value_fn returns None at first refresh.
+    skip_if_none: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -492,38 +494,42 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_discharge_year,
     ),
-    # --- Second battery stack (dual-stack setups) ---
+    # --- Alternate battery energy registers (present on some models only) ---
     GivEnergyInverterSensorDescription(
         key="e_battery_charge_alt",
-        name="Battery 2 Charge Total",
+        name="Battery Alt Charge Total",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_battery_charge_alt,
+        skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
         key="e_battery_discharge_alt",
-        name="Battery 2 Discharge Total",
+        name="Battery Alt Discharge Total",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_battery_discharge_alt,
+        skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
         key="e_battery_charge_day_alt",
-        name="Battery 2 Charge Today",
+        name="Battery Alt Charge Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_battery_charge_day_alt,
+        skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
         key="e_battery_discharge_day_alt",
-        name="Battery 2 Discharge Today",
+        name="Battery Alt Discharge Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_battery_discharge_day_alt,
+        skip_if_none=True,
     ),
     # --- Solar diverter ---
     GivEnergyInverterSensorDescription(
@@ -862,9 +868,12 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: GivEnergyUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    inverter = coordinator.data.inverter
 
     entities: list[SensorEntity] = [
-        GivEnergyInverterSensor(coordinator, description) for description in INVERTER_SENSORS
+        GivEnergyInverterSensor(coordinator, description)
+        for description in INVERTER_SENSORS
+        if not description.skip_if_none or description.value_fn(inverter) is not None
     ]
 
     for battery_index, battery in enumerate(coordinator.data.batteries):
