@@ -454,16 +454,15 @@ def _diagnostics_view(inv: str, max_power_kw: int) -> str:
               perform_action: givenergy_local.generate_dashboard
               data:
                 max_power_kw: {max_power_kw}
-          # Issue #45 — capture_frames service (givenergy-modbus v2.1):
-          # - type: button
-          #   name: Capture Debug Frames (60 s)
-          #   icon: mdi:bug-outline
-          #   action_name: Run
-          #   tap_action:
-          #     action: perform-action
-          #     perform_action: givenergy_local.capture_frames
-          #     data:
-          #       duration: 60
+          - type: button
+            name: Capture Debug Frames (60 s)
+            icon: mdi:bug-outline
+            action_name: Run
+            tap_action:
+              action: perform-action
+              perform_action: givenergy_local.capture_frames
+              data:
+                duration: 60
 """
 
 

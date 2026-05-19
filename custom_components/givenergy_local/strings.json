@@ -47,6 +47,22 @@
       }
     }
   },
+  "services": {
+    "capture_frames": {
+      "name": "Capture debug frames",
+      "description": "Records raw Modbus wire frames from the inverter for a set duration and saves them as a redacted text file in /local/.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The GivEnergy inverter to capture from. If omitted, the first connected inverter is used."
+        },
+        "duration": {
+          "name": "Duration (seconds)",
+          "description": "How long to capture frames for. Defaults to 60 seconds."
+        }
+      }
+    }
+  },
   "entity": {
     "sensor": {
       "inverter_status": {

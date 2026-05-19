@@ -24,6 +24,7 @@ from .const import (
     DOMAIN,
     PLATFORMS,
     SERVICE_CALIBRATE_BATTERY_SOC,
+    SERVICE_CAPTURE_FRAMES,
     SERVICE_GENERATE_DASHBOARD,
     SERVICE_REBOOT_INVERTER,
 )
@@ -42,6 +43,13 @@ SERVICE_GENERATE_DASHBOARD_SCHEMA = vol.Schema(
         vol.Optional("max_power_kw", default=10): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=100)
         ),
+    }
+)
+
+SERVICE_CAPTURE_FRAMES_SCHEMA = vol.Schema(
+    {
+        vol.Optional("device_id"): cv.string,
+        vol.Optional("duration", default=60): vol.All(vol.Coerce(int), vol.Range(min=10, max=300)),
     }
 )
 
@@ -177,6 +185,58 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             ir.async_delete_issue(hass, DOMAIN, f"dashboard_outdated_v{DASHBOARD_VERSION}")
 
+        async def handle_capture_frames(call: ServiceCall) -> None:
+            device_id = call.data.get("device_id")
+            duration = call.data["duration"]
+
+            if device_id is not None:
+                c = _coordinator_for_device(hass, device_id)
+                if c is None or c._client is None or not c._client.connected:
+                    raise HomeAssistantError(
+                        f"GivEnergy inverter for device {device_id!r} is not currently connected"
+                    )
+                coordinators = [c]
+            else:
+                coordinators = [
+                    c
+                    for c in hass.data.get(DOMAIN, {}).values()
+                    if c._client is not None and c._client.connected
+                ]
+                if not coordinators:
+                    raise HomeAssistantError("No connected GivEnergy inverter found")
+
+            for coordinator in coordinators:
+                if coordinator.data is None:
+                    continue
+                inv = coordinator.data.inverter.serial_number.lower()
+                frames: list[str] = []
+
+                def _sink(direction: str, data: bytes) -> None:
+                    frames.append(f"{direction}: {data.hex()}")
+
+                await coordinator._client.capture_frames(_sink, duration=float(duration))
+
+                filename = f"capture_givenergy_{inv}.txt"
+                www_dir = Path(hass.config.path("www"))
+                await hass.async_add_executor_job(lambda d=www_dir: d.mkdir(exist_ok=True))
+                content = "\n".join(frames) if frames else "(no frames captured)"
+                await hass.async_add_executor_job((www_dir / filename).write_text, content)
+                url = f"/local/{filename}"
+                _LOGGER.info("GivEnergy frame capture saved at %s (%d frames)", url, len(frames))
+                await hass.services.async_call(
+                    "persistent_notification",
+                    "create",
+                    {
+                        "title": "GivEnergy frame capture complete",
+                        "message": (
+                            f"Captured {len(frames)} frames over {duration} s — "
+                            f"[download]({url})\n\n"
+                            "Attach this file when reporting connectivity issues."
+                        ),
+                        "notification_id": f"givenergy_capture_{inv}",
+                    },
+                )
+
         hass.services.async_register(
             DOMAIN, SERVICE_REBOOT_INVERTER, handle_reboot_inverter, SERVICE_DEVICE_SCHEMA
         )
@@ -192,6 +252,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             handle_generate_dashboard,
             SERVICE_GENERATE_DASHBOARD_SCHEMA,
         )
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CAPTURE_FRAMES,
+            handle_capture_frames,
+            SERVICE_CAPTURE_FRAMES_SCHEMA,
+        )
 
     return True
 
@@ -206,5 +272,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, SERVICE_REBOOT_INVERTER)
         hass.services.async_remove(DOMAIN, SERVICE_CALIBRATE_BATTERY_SOC)
         hass.services.async_remove(DOMAIN, SERVICE_GENERATE_DASHBOARD)
+        hass.services.async_remove(DOMAIN, SERVICE_CAPTURE_FRAMES)
 
     return unload_ok

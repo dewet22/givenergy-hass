@@ -27,6 +27,35 @@ calibrate_battery_soc:
         device:
           integration: givenergy_local
 
+capture_frames:
+  name: Capture debug frames
+  description: >
+    Records raw Modbus wire frames from the inverter for a set duration and
+    saves them as a redacted text file in /local/. A persistent notification
+    with a download link appears when the capture finishes. Attach the file
+    when reporting connectivity or communication issues.
+  fields:
+    device_id:
+      name: Device
+      description: >
+        The GivEnergy inverter to capture from. If omitted, the first
+        connected inverter is used.
+      required: false
+      selector:
+        device:
+          integration: givenergy_local
+    duration:
+      name: Duration (seconds)
+      description: How long to capture frames for. Defaults to 60 seconds.
+      default: 60
+      selector:
+        number:
+          min: 10
+          max: 300
+          step: 10
+          unit_of_measurement: s
+          mode: box
+
 generate_dashboard:
   name: Generate dashboard
   description: >
