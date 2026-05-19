@@ -195,7 +195,7 @@ def _battery_view(bats: list[str]) -> str:
     sections = "\n".join(_battery_section(s) for s in bats)
     return f"""\
   # ── Battery ───────────────────────────────────────────────────────────────
-  - title: Battery
+  - title: Batteries
     path: battery
     type: sections
     icon: mdi:battery-high
@@ -234,11 +234,11 @@ def _battery_section(serial: str) -> str:
     )
 
     return f"""\
-      # ── {serial} ──
+      # ── {serial.upper()} ──
       - cards:
           - type: gauge
             entity: {_b(serial, "soc")}
-            name: {serial}
+            name: {serial.upper()}
             min: 0
             max: 100
             needle: true
