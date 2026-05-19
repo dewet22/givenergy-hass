@@ -31,6 +31,14 @@ _LOGGER = logging.getLogger(__name__)
 
 SERVICE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): cv.string})
 
+SERVICE_GENERATE_DASHBOARD_SCHEMA = vol.Schema(
+    {
+        vol.Optional("max_power_kw", default=10): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=100)
+        ),
+    }
+)
+
 
 def _coordinator_for_device(
     hass: HomeAssistant, device_id: str
@@ -99,15 +107,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
             await c._client.one_shot_command(commands.set_calibrate_battery_soc())
 
-        async def handle_generate_dashboard(_call: ServiceCall) -> None:
+        async def handle_generate_dashboard(call: ServiceCall) -> None:
             from .dashboard import generate_dashboard
 
+            max_power_kw = call.data["max_power_kw"]
             for coordinator in hass.data.get(DOMAIN, {}).values():
                 if coordinator.data is None:
                     continue
                 inv = coordinator.data.inverter.serial_number.lower()
                 bats = [b.serial_number.lower() for b in coordinator.data.batteries]
-                yaml = generate_dashboard(inv, bats)
+                yaml = generate_dashboard(inv, bats, max_power_kw=max_power_kw)
                 filename = f"dashboard_givenergy_{inv}.yaml"
                 www_dir = Path(hass.config.path("www"))
                 await hass.async_add_executor_job(lambda d=www_dir: d.mkdir(exist_ok=True))
@@ -137,7 +146,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             handle_calibrate_battery_soc,
             SERVICE_DEVICE_SCHEMA,
         )
-        hass.services.async_register(DOMAIN, SERVICE_GENERATE_DASHBOARD, handle_generate_dashboard)
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GENERATE_DASHBOARD,
+            handle_generate_dashboard,
+            SERVICE_GENERATE_DASHBOARD_SCHEMA,
+        )
 
     return True
 

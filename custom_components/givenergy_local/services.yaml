@@ -33,3 +33,20 @@ generate_dashboard:
     Generates a pre-configured dashboard YAML file for all connected
     inverters and makes it available for download via a persistent notification.
     Import it via Settings → Dashboards → Add Dashboard.
+  fields:
+    max_power_kw:
+      name: Power chart envelope (kW)
+      description: >
+        Vertical limit (±kW) applied to the Overview view's 24-hour power chart.
+        Readings outside this envelope are treated as garbage data and rendered
+        off-chart, so a single bad sample can't blow up the y-axis. Defaults to
+        10 kW, which suits typical single-phase systems. Raise for larger
+        3-phase setups.
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          unit_of_measurement: kW
+          mode: box
