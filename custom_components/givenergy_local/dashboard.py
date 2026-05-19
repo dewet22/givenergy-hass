@@ -130,8 +130,11 @@ def _energy_view(inv: str) -> str:
             f'            color: "{color}"\n'
             f"            type: column\n"
             f"            statistics:\n"
-            f"              type: max\n"
-            f"              period: day"
+            f"              type: state\n"
+            f"              period: hour\n"
+            f"            group_by:\n"
+            f"              func: max\n"
+            f"              duration: 1d"
         )
 
     return f"""\
