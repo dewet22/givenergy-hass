@@ -151,5 +151,7 @@ class GivEnergyTimeEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], TimeEnt
         if client is None or not client.connected:
             return
         inverter = self.coordinator.data.inverter
+        if self.entity_description.slot_fn(inverter) is None:
+            return
         await client.one_shot_command(self.entity_description.setter_fn(value, inverter))
         await self.coordinator.async_request_refresh()

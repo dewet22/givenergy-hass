@@ -37,14 +37,14 @@ package = false
 asyncio_mode = "auto"
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 strict = true
 ignore_missing_imports = true
 explicit_package_bases = true

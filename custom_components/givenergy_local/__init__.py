@@ -211,8 +211,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 inv = coordinator.data.inverter.serial_number.lower()
                 frames: list[str] = []
 
-                def _sink(direction: str, data: bytes) -> None:
-                    frames.append(f"{direction}: {data.hex()}")
+                def _sink(direction: str, data: bytes, bucket: list[str] = frames) -> None:
+                    bucket.append(f"{direction}: {data.hex()}")
 
                 await coordinator._client.capture_frames(_sink, duration=float(duration))
 
