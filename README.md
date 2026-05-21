@@ -15,24 +15,39 @@ Uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) for all i
 ## Requirements
 
 - A [supported GivEnergy inverter](#supported-inverters) connected to your local network (wifi or ethernet), with the Modbus TCP port reachable from your Home Assistant server (default port **8899**)
-- Home Assistant 2025.4 or later
+- Home Assistant 2026.5 or later (requires Python 3.14, which HA 2026.5+ ships)
 
 ## Supported inverters
 
-The underlying [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) library knows the following inverter families: Hybrid (1ph/3ph), AC, EMS, Gateway, and All-in-One. The following systems have been reported working:
+The integration uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) v2.0, which models the following device families: single-phase hybrid, three-phase hybrid, AC-coupled, EMS, Gateway, and All-in-One. Register maps for all of these shipped in v2.0, but empirical verification is still in progress for most — the mappings were brought in from the GivTCP fork, which ran across a wide range of hardware, so the coverage is broad but not all of it has been confirmed against wire data.
 
-- Hybrid (Gen 1)
+Confirmed working:
+
+- Hybrid single-phase (Gen 1)
 - AC-coupled (Gen 1)
 
-If you have a different model and would like to help validate the integration against it, please [open an issue](https://github.com/dewet22/givenergy-hass/issues). A register dump is the most useful thing you can include — it captures every raw value the inverter exposes and lets me map new sensors without needing physical access to your hardware. To produce one, clone [givenergy-cli](https://github.com/dewet22/givenergy-cli), run `uv sync`, then:
+The following have modelled register maps and are expected to work, but would benefit from owner validation — if yours is one of these and you run into sensor values that look wrong, please [open an issue](https://github.com/dewet22/givenergy-hass/issues):
+
+- Hybrid three-phase
+- All-in-One (AIO)
+- EMS controller
+- Gateway (V1 / V2)
+- HV battery stacks (BCU/BMU)
+
+If you'd like to help validate, a wire-frame capture is the most useful thing you can include. If you already have the integration running, use the built-in service from **Developer Tools → Services**:
+
+```
+Service: givenergy_local.capture_frames
+Duration: 60
+```
+
+This records a redacted copy of the raw Modbus traffic (serial numbers zeroed), saves it to `/local/`, and sends a notification with a download link. Attach the file to the issue along with your inverter model and serial prefix.
+
+If you don't yet have the integration installed, [givenergy-cli](https://github.com/dewet22/givenergy-cli) can produce a structured register dump instead:
 
 ```bash
 uv run givenergy-cli --host <inverter-ip> export -o plant.json
 ```
-
-This writes a portable JSON file covering all discovered registers. Attach it to the issue along with your inverter model and serial prefix.
-
-Older Gen 2 units with the `EA` serial prefix are untested — any owners willing to help validate are very welcome!
 
 ## Installation
 
@@ -56,14 +71,14 @@ Or if that doesn't work:
 
 Add the integration via **Settings → Devices & Services → Add Integration → GivEnergy Local**.
 
+![Config flow — add integration dialog](docs/config-flow.png)
+
 | Field | Default | Description |
 |---|---|---|
 | Inverter IP Address | — | Local IP of the inverter's data adapter |
 | Modbus Port | `8899` | Modbus TCP port |
 | Scan Interval | `30` s | How often HA polls for updated values |
-| Number of Batteries | `1` | Number of battery units connected |
 | [Passive mode](#passive-mode) | off | Listen only — use when another Modbus client (e.g. the GivEnergy app) is already polling and this integration should just observe |
-| Timeout Tolerance | `5` | Consecutive refresh failures before the integration marks entities unavailable |
 
 To change any of these later, open the integration's **⋮** menu in **Settings → Devices & Services → GivEnergy Local** and choose **Reconfigure**. The integration reloads automatically when you save.
 
@@ -72,6 +87,8 @@ To change any of these later, open the integration's **⋮** menu in **Settings 
 When enabled, the integration connects to the inverter but does not send any Modbus read requests after the initial connection. Instead, it reads the library's register cache on each scan interval tick. This is useful when you have another client (e.g. GivTCP or a mobile app) already polling the inverter — having multiple clients requesting large register bank reads tend to get the inverter confused by stepping on each other. This is also useful if you are migrating from GivTCP and want to keep both running for the time being.
 
 ## Entities
+
+![Inverter device page in Home Assistant](docs/device-page.png)
 
 ### Inverter device
 
@@ -107,7 +124,6 @@ When enabled, the integration connects to the inverter but does not send any Mod
 | Charger Warning Code | — | Diagnostic |
 | Charge Status | — | Diagnostic; raw int (BMS state code, mapping TBD) |
 | System Mode | — | Diagnostic; raw int (operating mode, mapping TBD) |
-| Battery Pause Mode | — | Diagnostic; raw int (pause-charging state) |
 | AC Output Voltage / Frequency / Current | V / Hz / A | Diagnostic; inverter output (post-conversion) |
 | Grid Apparent Power | VA | Diagnostic |
 | Inverter Power Factor | — | Diagnostic |
@@ -142,8 +158,12 @@ When enabled, the integration connects to the inverter but does not send any Mod
 | Battery Discharge Limit | Number | 0–50 % |
 | Battery Discharge Min Power Reserve | Number | 4–100 % |
 | Battery Power Mode | Select | Export / Self Consumption |
+| Battery Pause Mode | Select | Disabled / Pause Charge / Pause Discharge / Pause Both |
 | Charge Slot 1 & 2 Start / End | Time | |
 | Discharge Slot 1 & 2 Start / End | Time | |
+| Battery Pause Slot Start / End | Time | Active window for the pause mode above |
+
+![Battery pause mode select control](docs/battery-pause-select.png)
 
 ### Battery device(s)
 
@@ -165,6 +185,27 @@ Each battery appears as a separate device linked to the inverter.
 
 Cell-level entities are tagged as diagnostic, so they're hidden from the default device view but available for dashboards and pack-health monitoring (cell voltage spread, temperature deltas, etc.).
 
+### Services
+
+The integration registers the following services under the `givenergy_local` domain. All are accessible from **Developer Tools → Services** or from automations.
+
+| Service | Description |
+|---|---|
+| `givenergy_local.generate_dashboard` | Generates a topology-aware Lovelace dashboard YAML for your inverter and battery configuration, saves it to `/local/`, and sends a persistent notification with a download link. Import via **Settings → Dashboards → Add Dashboard**. Accepts an optional `max_power_kw` parameter (default 10). |
+| `givenergy_local.capture_frames` | Captures raw Modbus wire frames for a configurable duration (10–300 s, default 60 s), writes a redacted copy to `/local/`, and sends a download link via persistent notification. Serial numbers are zeroed before the file is written. Attach the file to a GitHub issue when reporting connectivity problems. |
+| `givenergy_local.reboot_inverter` | Sends the inverter reboot command. Requires a `device_id`. |
+| `givenergy_local.calibrate_battery_soc` | Triggers a BMS SOC calibration cycle. Requires a `device_id`. |
+
+![Generated GivEnergy Lovelace dashboard](docs/dashboard.png)
+
+After running `generate_dashboard`, a notification appears with a download link:
+
+![Dashboard generated notification](docs/dashboard-notification.png)
+
+If the dashboard schema is updated in a future release, the integration raises a fixable HA Repairs issue — click **Fix** to regenerate automatically with your settings preserved.
+
+![Dashboard outdated repair issue](docs/repairs-fix.png)
+
 ### Not exposed by default
 
 The upstream library makes ~180 inverter fields available; this integration intentionally exposes the subset that's useful for end users without being unsafe or noisy. Deliberately skipped for now:
@@ -176,7 +217,7 @@ The upstream library makes ~180 inverter fields available; this integration inte
 - Raw debug fields (internal bus voltages, countdown timers, `debug_inverter`)
 - Per-phase three-phase data beyond `Grid Power Phase 1` and the three-phase balance registers
 
-If any of these would genuinely help your setup, [open an issue](https://github.com/dewet22/givenergy-hass/issues) describing the use case — the field probably can be exposed with a single description entry, but it's nicer to have a concrete reason to do it. The same applies if a sensor we *do* expose looks wrong on your inverter — **real-world testing on non-Hybrid Gen 1 hardware (AC, AC3, EMS, Gateway, All-in-One) is especially appreciated**, and a register dump from your unit goes a long way (see [Supported inverters](#supported-inverters) for how to produce one).
+If any of these would genuinely help your setup, [open an issue](https://github.com/dewet22/givenergy-hass/issues) describing the use case — the field probably can be exposed with a single description entry, but it's nicer to have a concrete reason to do it. The same applies if a sensor we *do* expose looks wrong on your inverter — **real-world testing on non-Hybrid Gen 1 hardware (AC, AC3, EMS, Gateway, All-in-One) is especially appreciated**, and a frame capture from your unit goes a long way (see [Supported inverters](#supported-inverters) for how to produce one).
 
 ## Energy dashboard
 
@@ -212,6 +253,7 @@ The daily counters reset at midnight; Home Assistant's recorder detects the rese
 - **Transient connection drops are normal.** TCP-level timeouts and the occasional connection reset get logged at WARNING level and the next scan tick re-establishes the connection. The `Last Successful Refresh` and `Consecutive Refresh Failures` diagnostic sensors will tell you if something more persistent is going on.
 - **"Register cache unchanged" failures in passive mode** mean no peer client is refreshing the inverter. Switch back to active mode, or start the other client that's supposed to be driving the bus.
 - **Conflicts with another Modbus client** (GivTCP, the GivEnergy app, etc.) — the inverter doesn't always cope well with two clients issuing large reads concurrently. Use [passive mode](#passive-mode).
+- **Wrong number of battery devices appearing** — battery count is auto-discovered at startup by probing the Modbus bus; there is no manual override. If detection misfires (e.g. a battery was slow to respond), reloading the integration usually fixes it. If the count is consistently wrong, [open an issue](https://github.com/dewet22/givenergy-hass/issues/48) and attach a frame capture (see [Supported inverters](#supported-inverters)).
 
 For anything else, please [open an issue](https://github.com/dewet22/givenergy-hass/issues) with the relevant HA log lines and your inverter model.
 
