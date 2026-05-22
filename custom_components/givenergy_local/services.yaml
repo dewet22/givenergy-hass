@@ -1,0 +1,81 @@
+reboot_inverter:
+  name: Reboot inverter
+  description: >
+    Restarts the GivEnergy inverter. The inverter will be offline for approximately
+    30 seconds. Only use this if the inverter is in an unresponsive state.
+  fields:
+    device_id:
+      name: Device
+      description: The GivEnergy inverter to reboot.
+      required: true
+      selector:
+        device:
+          integration: givenergy_local
+
+calibrate_battery_soc:
+  name: Calibrate battery state of charge
+  description: >
+    Instructs the inverter to recalibrate its battery state-of-charge estimation.
+    This triggers a full charge/discharge cycle and should only be run when advised
+    by GivEnergy support or as part of routine battery maintenance.
+  fields:
+    device_id:
+      name: Device
+      description: The GivEnergy inverter to calibrate.
+      required: true
+      selector:
+        device:
+          integration: givenergy_local
+
+capture_frames:
+  name: Capture debug frames
+  description: >
+    Records raw Modbus wire frames from the inverter for a set duration and
+    saves them as a redacted text file in /local/. A persistent notification
+    with a download link appears when the capture finishes. Attach the file
+    when reporting connectivity or communication issues.
+  fields:
+    device_id:
+      name: Device
+      description: >
+        The GivEnergy inverter to capture from. If omitted, the first
+        connected inverter is used.
+      required: false
+      selector:
+        device:
+          integration: givenergy_local
+    duration:
+      name: Duration (seconds)
+      description: How long to capture frames for. Defaults to 60 seconds.
+      default: 60
+      selector:
+        number:
+          min: 10
+          max: 300
+          step: 10
+          unit_of_measurement: s
+          mode: box
+
+generate_dashboard:
+  name: Generate dashboard
+  description: >
+    Generates a pre-configured dashboard YAML file for all connected
+    inverters and makes it available for download via a persistent notification.
+    Import it via Settings → Dashboards → Add Dashboard.
+  fields:
+    max_power_kw:
+      name: Power chart envelope (kW)
+      description: >
+        Vertical limit (±kW) applied to the Overview view's 24-hour power chart.
+        Readings outside this envelope are treated as garbage data and rendered
+        off-chart, so a single bad sample can't blow up the y-axis. Defaults to
+        10 kW, which suits typical single-phase systems. Raise for larger
+        3-phase setups.
+      default: 10
+      selector:
+        number:
+          min: 1
+          max: 100
+          step: 1
+          unit_of_measurement: kW
+          mode: box

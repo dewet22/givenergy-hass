@@ -8,9 +8,7 @@
           "host": "Inverter IP Address",
           "port": "Modbus Port",
           "scan_interval": "Scan Interval (seconds)",
-          "max_batteries": "Number of Batteries",
-          "passive": "Passive mode (listen only — another client drives refreshes)",
-          "timeout_tolerance": "Timeout Tolerance (consecutive failures before unavailable)"
+          "passive": "Passive mode (listen only — another client drives refreshes)"
         }
       },
       "reconfigure": {
@@ -20,9 +18,7 @@
           "host": "Inverter IP Address",
           "port": "Modbus Port",
           "scan_interval": "Scan Interval (seconds)",
-          "max_batteries": "Number of Batteries",
-          "passive": "Passive mode (listen only — another client drives refreshes)",
-          "timeout_tolerance": "Timeout Tolerance (consecutive failures before unavailable)"
+          "passive": "Passive mode (listen only — another client drives refreshes)"
         }
       }
     },
@@ -33,6 +29,35 @@
     "abort": {
       "already_configured": "This inverter is already configured.",
       "reconfigure_successful": "Reconfiguration was successful."
+    }
+  },
+  "issues": {
+    "dashboard_outdated": {
+      "title": "GivEnergy dashboard schema update available",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Regenerate GivEnergy dashboard",
+            "description": "Your GivEnergy dashboard was generated with schema v{old_version}. Schema v{new_version} is now available with layout improvements.\n\nClicking Fix will regenerate the dashboard and save the updated YAML to `/local/`. A notification will appear with a download link when it is ready.\n\nYour current settings (power chart envelope, etc.) will be preserved."
+          }
+        }
+      }
+    }
+  },
+  "services": {
+    "capture_frames": {
+      "name": "Capture debug frames",
+      "description": "Records raw Modbus wire frames from the inverter for a set duration and saves them as a redacted text file in /local/.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The GivEnergy inverter to capture from. If omitted, the first connected inverter is used."
+        },
+        "duration": {
+          "name": "Duration (seconds)",
+          "description": "How long to capture frames for. Defaults to 60 seconds."
+        }
+      }
     }
   },
   "entity": {
@@ -56,6 +81,33 @@
         "state": {
           "lead_acid": "Lead Acid",
           "lithium": "Lithium"
+        }
+      },
+      "battery_calibration_stage": {
+        "state": {
+          "off": "Off",
+          "discharge": "Discharge",
+          "set_lower_limit": "Set Lower Limit",
+          "charge": "Charge",
+          "set_upper_limit": "Set Upper Limit",
+          "balance": "Balance",
+          "set_full_capacity": "Set Full Capacity",
+          "finish": "Finish"
+        }
+      },
+      "battery_maintenance_mode": {
+        "state": {
+          "off": "Off",
+          "discharge": "Discharge",
+          "charge": "Charge",
+          "standby": "Standby"
+        }
+      },
+      "usb_device_inserted": {
+        "state": {
+          "none": "None",
+          "wifi": "Wi-Fi",
+          "disk": "Disk"
         }
       }
     }

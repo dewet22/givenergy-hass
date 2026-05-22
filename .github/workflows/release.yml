@@ -1,8 +1,9 @@
 name: Release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "v*"
 
 jobs:
   release:
@@ -12,13 +13,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.ref_name }}
           fetch-depth: 0  # need full tag history for the changelog step
 
       - name: Generate release notes from git log
         id: notes
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
           # Require an annotated tag — the message becomes the release blurb.
@@ -49,9 +50,27 @@ jobs:
             echo "NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
 
+          # Mark as pre-release if the tag contains a pre-release identifier.
+          if echo "$TAG" | grep -qE '(a|b|rc)[0-9]+$'; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          NOTES: ${{ steps.notes.outputs.body }}
+          PRERELEASE: ${{ steps.notes.outputs.prerelease }}
+        run: |
+          flags=""
+          [ "$PRERELEASE" = "true" ] && flags="--prerelease"
+          gh release create "$TAG" --title "$TAG" --notes "$NOTES" $flags
+
       - name: Patch manifest.json with release tag
         env:
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.ref_name }}
         run: |
           version="${TAG#v}"
           jq --arg v "$version" '.version = $v' \

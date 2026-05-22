@@ -9,15 +9,11 @@ from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PORT
 
 from .const import (
-    CONF_MAX_BATTERIES,
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
-    CONF_TIMEOUT_TOLERANCE,
-    DEFAULT_MAX_BATTERIES,
     DEFAULT_PASSIVE,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
-    DEFAULT_TIMEOUT_TOLERANCE,
     DOMAIN,
 )
 
@@ -28,15 +24,13 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_HOST): str,
         vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
         vol.Required(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): int,
-        vol.Required(CONF_MAX_BATTERIES, default=DEFAULT_MAX_BATTERIES): int,
         vol.Required(CONF_PASSIVE, default=DEFAULT_PASSIVE): bool,
-        vol.Required(CONF_TIMEOUT_TOLERANCE, default=DEFAULT_TIMEOUT_TOLERANCE): int,
     }
 )
 
 
 class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -99,7 +93,11 @@ class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-
         client = Client(host=host, port=port)
         try:
             await client.connect()
-            plant = await client.refresh_plant(full_refresh=False, max_batteries=0)
+            # detect() resolves the device model and topology before any reads
+            # so refresh_plant() picks the right register layout (single vs.
+            # three-phase) from the first request.
+            await client.detect()
+            plant = await client.refresh_plant(full_refresh=False)
             return plant.inverter_serial_number, None
         except Exception:
             _LOGGER.exception("Connection test failed for %s:%s", host, port)
