@@ -88,9 +88,11 @@ When enabled, the integration connects to the inverter but does not send any Mod
 
 ## Entities
 
-![Inverter device page in Home Assistant](docs/device-page.png)
+![Integration entries — inverter and two battery devices](docs/integration-overview.png)
 
 ### Inverter device
+
+![Inverter device page in Home Assistant](docs/device-overview.png)
 
 #### Sensors
 
@@ -163,7 +165,7 @@ When enabled, the integration connects to the inverter but does not send any Mod
 | Discharge Slot 1 & 2 Start / End | Time | |
 | Battery Pause Slot Start / End | Time | Active window for the pause mode above |
 
-![Battery pause mode select control](docs/battery-pause-select.png)
+![Battery controls tab — charge/discharge windows and pause mode](docs/dashboard-controls.png)
 
 ### Battery device(s)
 
@@ -185,6 +187,8 @@ Each battery appears as a separate device linked to the inverter.
 
 Cell-level entities are tagged as diagnostic, so they're hidden from the default device view but available for dashboards and pack-health monitoring (cell voltage spread, temperature deltas, etc.).
 
+![Battery pack details — SOC gauges and per-pack health data](docs/dashboard-batteries.png)
+
 ### Services
 
 The integration registers the following services under the `givenergy_local` domain. All are accessible from **Developer Tools → Services** or from automations.
@@ -196,15 +200,13 @@ The integration registers the following services under the `givenergy_local` dom
 | `givenergy_local.reboot_inverter` | Sends the inverter reboot command. Requires a `device_id`. |
 | `givenergy_local.calibrate_battery_soc` | Triggers a BMS SOC calibration cycle. Requires a `device_id`. |
 
-![Generated GivEnergy Lovelace dashboard](docs/dashboard.png)
+![Generated GivEnergy Lovelace dashboard — overview tab](docs/dashboard-overview.png)
 
 After running `generate_dashboard`, a notification appears with a download link:
 
 ![Dashboard generated notification](docs/dashboard-notification.png)
 
 If the dashboard schema is updated in a future release, the integration raises a fixable HA Repairs issue — click **Fix** to regenerate automatically with your settings preserved.
-
-![Dashboard outdated repair issue](docs/repairs-fix.png)
 
 ### Not exposed by default
 
