@@ -597,12 +597,18 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     ),
     # --- Diagnostic ---
     GivEnergyInverterSensorDescription(
+        # The raw register at IR(47):IR(48) is already in hours of operation,
+        # despite the field name suggesting otherwise. Earlier code divided by
+        # 3600 assuming seconds, which produced values ~3600× too small (e.g.
+        # ~10h after several years of operation). Tracked upstream at
+        # givenergy-modbus#84 — once the library annotates the unit explicitly
+        # this comment can come out.
         key="work_time_total",
         name="Work Time Total",
         native_unit_of_measurement=UnitOfTime.HOURS,
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: round(inv.work_time_total / 3600, 1),
+        value_fn=lambda inv: inv.work_time_total,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(

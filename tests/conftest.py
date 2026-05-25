@@ -30,7 +30,7 @@ def mock_inverter() -> MagicMock:
     inv.model = MagicMock()
     inv.model.name = "HYBRID"
     inv.firmware_version = "D0.19-A0.21"
-    inv.work_time_total = 36_000_000  # 10,000 hours in seconds
+    inv.work_time_total = 36055  # hours of operation (raw register unit)
     inv.p_pv.return_value = 2500
     inv.p_pv1 = 1500
     inv.p_pv2 = 1000

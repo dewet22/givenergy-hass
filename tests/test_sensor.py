@@ -44,10 +44,11 @@ async def test_grid_power_sensor_negative_is_import(hass, setup_integration):
     assert float(state.state) == -800
 
 
-async def test_work_time_converted_to_hours(hass, setup_integration):
+async def test_work_time_total_reported_in_hours(hass, setup_integration):
     state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_work_time_total"))
-    # 36_000_000 seconds / 3600 = 10000.0 hours
-    assert float(state.state) == 10000.0
+    # Raw register is already in hours — no conversion applied (see sensor.py).
+    assert float(state.state) == 36055
+    assert state.attributes["unit_of_measurement"] == "h"
 
 
 async def test_inverter_device_info(hass, setup_integration):
