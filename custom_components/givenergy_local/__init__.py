@@ -206,7 +206,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     raise HomeAssistantError("No connected GivEnergy inverter found")
 
             for coordinator in coordinators:
-                if coordinator.data is None:
+                if coordinator.data is None or coordinator._client is None:
                     continue
                 inv = coordinator.data.inverter.serial_number.lower()
                 frames: list[str] = []
