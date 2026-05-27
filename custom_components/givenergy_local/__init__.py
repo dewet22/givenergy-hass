@@ -137,8 +137,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     prior_capabilities = await _load_capabilities(hass, entry.entry_id)
 
     async def _on_topology_changed(actual: PlantCapabilities) -> None:
-        # Reload is scheduled rather than awaited — we're still inside the
-        # coordinator's first refresh, so awaiting would deadlock.
+        # async_schedule_reload is the documented preferred path from inside
+        # integration code: it cancels any pending setup retry before queuing
+        # the reload task, avoiding a race where the retry fires mid-reload.
         await _save_capabilities(hass, entry.entry_id, actual)
         ir.async_create_issue(
             hass,
@@ -149,7 +150,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             severity=ir.IssueSeverity.WARNING,
             translation_key="plant_topology_changed",
         )
-        hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
+        hass.config_entries.async_schedule_reload(entry.entry_id)
 
     coordinator = GivEnergyUpdateCoordinator(
         hass=hass,
@@ -348,7 +349,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     f"No GivEnergy config entry found for device {call.data['device_id']!r}"
                 )
             await _capabilities_store(hass, target_entry_id).async_remove()
-            hass.async_create_task(hass.config_entries.async_reload(target_entry_id))
+            hass.config_entries.async_schedule_reload(target_entry_id)
 
         hass.services.async_register(
             DOMAIN,
