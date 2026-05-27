@@ -33,11 +33,16 @@ jobs:
           # GITHUB_OUTPUT, and a Python regex backref template downstream. The
           # trust boundary here is the BUMP_PAT used to fire the dispatch — a
           # compromised PAT shouldn't be able to inject shell metacharacters,
-          # newlines (GITHUB_OUTPUT injection), or `\g<...>` (regex backref
-          # subversion in the bump step). The character class permits every
-          # tag the modbus repo has historically published (`X.Y.Z`,
-          # `X.Y.ZrcN`, `X.Y.ZaN`) plus future PEP 440 `.dev`/`.post` suffixes.
-          if ! [[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-?[a-z0-9.]+)?$ ]]; then
+          # newlines (GITHUB_OUTPUT injection), `\g<...>` (regex backref
+          # subversion in the bump step), or git ref operators (`..`, `^`, `:`
+          # in the branch name). The pattern accepts every modbus tag in
+          # history (`X.Y.Z`, `X.Y.ZrcN`, `X.Y.ZaN`) plus forward-looking
+          # PEP 440 `.dev`/`.post` suffixes; the inner repetition deliberately
+          # requires each dot-separated segment to be non-empty, so values
+          # like `2.0.0..` or `2.0.0.post..1` — which would pass a coarser
+          # `[a-z0-9.]+` class but then break `git checkout -B` downstream —
+          # are rejected here instead.
+          if ! [[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.]?[a-z0-9]+(\.[a-z0-9]+)*)?$ ]]; then
             echo "::error::invalid givenergy-modbus version format (must match PEP 440-ish X.Y.Z[-?suffix])"
             exit 1
           fi
