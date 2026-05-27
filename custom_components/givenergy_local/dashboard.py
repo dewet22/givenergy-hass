@@ -5,7 +5,7 @@ from __future__ import annotations
 # Increment whenever the generated YAML layout changes in a meaningful way.
 # __init__.py compares this against the last-generated version stored in HA's
 # persistent Store and raises a Repairs issue when they diverge.
-DASHBOARD_VERSION = 1
+DASHBOARD_VERSION = 2
 
 
 def generate_dashboard(inv: str, bats: list[str], max_power_kw: int = 10) -> str:
@@ -238,6 +238,19 @@ def _battery_section(serial: str) -> str:
             ("cells_13_16_temperature", "Cells 13-16"),
         ],
     )
+    diagnostics = _bat_entity_rows(
+        serial,
+        [
+            ("bms_firmware_version", "BMS Firmware"),
+            ("usb_device", "USB Device"),
+            ("design_capacity_alt", "Design Capacity Alt"),
+            None,
+            *((f"bms_status_{i}", f"Status {i}") for i in range(1, 8)),
+            None,
+            ("bms_warning_1", "Warning 1"),
+            ("bms_warning_2", "Warning 2"),
+        ],
+    )
 
     return f"""\
       # ── {serial.upper()} ──
@@ -267,6 +280,11 @@ def _battery_section(serial: str) -> str:
             title: Cell Temperatures
             entities:
 {temps}
+
+          - type: entities
+            title: BMS Diagnostics
+            entities:
+{diagnostics}
 """
 
 
