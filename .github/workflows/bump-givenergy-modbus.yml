@@ -34,8 +34,7 @@ jobs:
           # branch (and/or new modbus major) is introduced.
           major="${NEW%%.*}"
           case "$major" in
-            1) base=main ;;
-            2) base=v1.0 ;;
+            2) base=main ;;
             *)
               echo "::error::no target branch configured for givenergy-modbus major $major (version $NEW)"
               exit 1
