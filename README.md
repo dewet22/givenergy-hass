@@ -271,3 +271,5 @@ uv run pytest          # run tests
 uv run ruff check .    # lint
 uv run mypy custom_components/  # type-check
 ```
+
+The dev environment requires Python 3.14.2 or later — `pyproject.toml` pins this to match HA Core's own lock-file floor and to keep transitive Dependabot alerts (pillow, cryptography) off the resolver. The integration runtime itself only needs whatever Python 3.14.x your Home Assistant install ships with.
