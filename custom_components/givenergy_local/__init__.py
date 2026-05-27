@@ -5,6 +5,7 @@ from pathlib import Path
 
 import voluptuous as vol
 from givenergy_modbus.client import commands
+from givenergy_modbus.model.plant import PlantCapabilities
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -27,6 +28,7 @@ from .const import (
     SERVICE_CAPTURE_FRAMES,
     SERVICE_GENERATE_DASHBOARD,
     SERVICE_REBOOT_INVERTER,
+    SERVICE_REDETECT_PLANT,
 )
 from .coordinator import GivEnergyUpdateCoordinator
 from .dashboard import DASHBOARD_VERSION
@@ -35,6 +37,47 @@ _LOGGER = logging.getLogger(__name__)
 
 _DASHBOARD_STORAGE_KEY = f"{DOMAIN}.dashboard"
 _DASHBOARD_STORAGE_VERSION = 1
+
+# Per-config-entry topology cache. PlantCapabilities is persisted as
+# `to_dict()` directly (no envelope) following HA Core's Store convention —
+# future shape changes go through `Store._async_migrate_func` on a subclass,
+# not an in-payload version field. Library-internal schema evolution is
+# already handled by `PlantCapabilities.from_dict()`.
+_CAPABILITIES_STORAGE_KEY_PREFIX = f"{DOMAIN}.plant_capabilities"
+_CAPABILITIES_STORAGE_VERSION = 1
+
+
+def _capabilities_store(hass: HomeAssistant, entry_id: str) -> Store:
+    return Store(
+        hass,
+        _CAPABILITIES_STORAGE_VERSION,
+        f"{_CAPABILITIES_STORAGE_KEY_PREFIX}.{entry_id}",
+    )
+
+
+async def _load_capabilities(hass: HomeAssistant, entry_id: str) -> PlantCapabilities | None:
+    """Load the persisted topology for `entry_id`, or None on miss/corrupt.
+
+    `Store` already absorbs file-not-found and JSON-decode errors and returns
+    None; we only add a guard around `from_dict()` for cases the library
+    rejects (hand-edited files, payloads from a future library schema, etc.).
+    Callers treat None as a cue to run a cold `detect()`.
+    """
+    payload = await _capabilities_store(hass, entry_id).async_load()
+    if payload is None:
+        return None
+    try:
+        return PlantCapabilities.from_dict(payload)
+    except (KeyError, ValueError, TypeError) as exc:
+        _LOGGER.debug("Capabilities cache rejected by library from_dict(): %s", exc)
+        return None
+
+
+async def _save_capabilities(
+    hass: HomeAssistant, entry_id: str, capabilities: PlantCapabilities
+) -> None:
+    await _capabilities_store(hass, entry_id).async_save(capabilities.to_dict())
+
 
 SERVICE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): cv.string})
 
@@ -87,15 +130,49 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    # Persisted topology lets the coordinator skip the cold-detect sweep on
+    # most reconnects/restarts. Client.detect(prior=...) accepts the cached
+    # topology as a hint and only re-probes slots the prior asserts non-empty;
+    # on real topology change it raises PlantTopologyMismatch.
+    prior_capabilities = await _load_capabilities(hass, entry.entry_id)
+
+    async def _on_topology_changed(actual: PlantCapabilities) -> None:
+        # async_schedule_reload is the documented preferred path from inside
+        # integration code: it cancels any pending setup retry before queuing
+        # the reload task, avoiding a race where the retry fires mid-reload.
+        await _save_capabilities(hass, entry.entry_id, actual)
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"plant_topology_changed_{entry.entry_id}",
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="plant_topology_changed",
+        )
+        hass.config_entries.async_schedule_reload(entry.entry_id)
+
     coordinator = GivEnergyUpdateCoordinator(
         hass=hass,
         host=entry.data[CONF_HOST],
         port=entry.data[CONF_PORT],
         scan_interval=entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
         passive=entry.data.get(CONF_PASSIVE, DEFAULT_PASSIVE),
+        prior_capabilities=prior_capabilities,
+        on_topology_changed=_on_topology_changed,
     )
 
     await coordinator.async_config_entry_first_refresh()
+
+    # Seed the cache on cold start (no prior loaded). Warm-hit doesn't need a
+    # write — the prior we just loaded is what's on the wire. Mismatch is
+    # already covered by _on_topology_changed having saved exc.actual.
+    if (
+        prior_capabilities is None
+        and coordinator.data is not None
+        and coordinator.data.capabilities is not None
+    ):
+        await _save_capabilities(hass, entry.entry_id, coordinator.data.capabilities)
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
@@ -252,11 +329,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             handle_generate_dashboard,
             SERVICE_GENERATE_DASHBOARD_SCHEMA,
         )
+
+        async def handle_redetect_plant(call: ServiceCall) -> None:
+            # Clear the cached topology for this device's entry and trigger a
+            # reload — the next setup_entry will see no prior and do a cold
+            # detect(), which is exactly the "I changed the hardware, please
+            # rediscover" semantic the issue calls for.
+            device = dr.async_get(hass).async_get(call.data["device_id"])
+            if device is None:
+                raise HomeAssistantError(
+                    f"No GivEnergy device found for {call.data['device_id']!r}"
+                )
+            target_entry_id = next(
+                (eid for eid in device.config_entries if eid in hass.data.get(DOMAIN, {})),
+                None,
+            )
+            if target_entry_id is None:
+                raise HomeAssistantError(
+                    f"No GivEnergy config entry found for device {call.data['device_id']!r}"
+                )
+            await _capabilities_store(hass, target_entry_id).async_remove()
+            hass.config_entries.async_schedule_reload(target_entry_id)
+
         hass.services.async_register(
             DOMAIN,
             SERVICE_CAPTURE_FRAMES,
             handle_capture_frames,
             SERVICE_CAPTURE_FRAMES_SCHEMA,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_REDETECT_PLANT,
+            handle_redetect_plant,
+            SERVICE_DEVICE_SCHEMA,
         )
 
     return True
@@ -273,5 +378,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, SERVICE_CALIBRATE_BATTERY_SOC)
         hass.services.async_remove(DOMAIN, SERVICE_GENERATE_DASHBOARD)
         hass.services.async_remove(DOMAIN, SERVICE_CAPTURE_FRAMES)
+        hass.services.async_remove(DOMAIN, SERVICE_REDETECT_PLANT)
 
     return unload_ok

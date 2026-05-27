@@ -44,6 +44,10 @@
           }
         }
       }
+    },
+    "plant_topology_changed": {
+      "title": "GivEnergy plant topology has changed",
+      "description": "The hardware layout of your GivEnergy system has changed since the last start — typically a battery was added or removed, or the inverter device type changed.\n\nThe integration has already accepted the new topology and reloaded itself; this notice is purely advisory and can be dismissed."
     }
   },
   "services": {

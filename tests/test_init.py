@@ -1,12 +1,20 @@
 """Tests for integration setup, unload, and config-entry migration."""
 
+from unittest.mock import AsyncMock, patch
+
+from givenergy_modbus.exceptions import PlantTopologyMismatch
+from givenergy_modbus.model.inverter import Model
+from givenergy_modbus.model.plant import PlantCapabilities
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.givenergy_local.const import (
     CONF_RETRIES,
     CONF_TIMEOUT_TOLERANCE,
     DOMAIN,
+    SERVICE_REDETECT_PLANT,
 )
 
 
@@ -74,3 +82,170 @@ async def test_migrate_refuses_future_version(hass, mock_client):
     # Setup is expected to fail; HA marks the entry as migration_error.
     assert not await hass.config_entries.async_setup(entry.entry_id)
     assert entry.state is ConfigEntryState.MIGRATION_ERROR
+
+
+# ---------------------------------------------------------------------------
+# PlantCapabilities cache integration (issue #48)
+# ---------------------------------------------------------------------------
+
+
+async def test_redetect_plant_service_clears_cache_and_reloads(
+    hass, mock_client, setup_integration
+):
+    """The redetect_plant service removes the per-entry Store file and schedules a reload."""
+    # The integration registers an inverter device whose only config_entry is
+    # setup_integration.entry_id — that's the linkage the service walks.
+    device_reg = dr.async_get(hass)
+    inverter_device = next(
+        d for d in device_reg.devices.values() if setup_integration.entry_id in d.config_entries
+    )
+
+    fake_store = AsyncMock()
+    with (
+        patch(
+            "custom_components.givenergy_local._capabilities_store", return_value=fake_store
+        ) as store_factory,
+        patch.object(
+            hass.config_entries, "async_reload", new=AsyncMock(return_value=True)
+        ) as reload_mock,
+    ):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_REDETECT_PLANT,
+            {"device_id": inverter_device.id},
+            blocking=True,
+        )
+        await hass.async_block_till_done()
+
+    store_factory.assert_called_with(hass, setup_integration.entry_id)
+    fake_store.async_remove.assert_awaited_once()
+    reload_mock.assert_called_with(setup_integration.entry_id)
+
+
+async def test_topology_mismatch_persists_actual_and_raises_repairs_issue(
+    hass, mock_client, mock_config_entry
+):
+    """End-to-end: detect(prior=) raising PlantTopologyMismatch persists the
+    new layout, raises an advisory Repairs issue, and queues a reload.
+    """
+    actual = PlantCapabilities(
+        device_type=Model.HYBRID,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32, 0x33],
+        bcu_stacks=[],
+    )
+    mismatch = PlantTopologyMismatch(
+        "topology changed",
+        prior=mock_client.plant.capabilities,
+        actual=actual,
+    )
+    mock_client.detect = AsyncMock(side_effect=mismatch)
+
+    mock_config_entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.givenergy_local._load_capabilities",
+            new=AsyncMock(return_value=mock_client.plant.capabilities),
+        ),
+        patch("custom_components.givenergy_local._save_capabilities", new=AsyncMock()) as save_mock,
+        patch.object(
+            hass.config_entries, "async_reload", new=AsyncMock(return_value=True)
+        ) as reload_mock,
+    ):
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    # The callback persisted the actual topology. (Save-on-success doesn't fire
+    # on the warm-hit-then-mismatch path because prior_capabilities was not None.)
+    save_mock.assert_awaited_with(hass, mock_config_entry.entry_id, actual)
+    # An advisory Repairs issue was raised for this entry.
+    issues = ir.async_get(hass).issues
+    assert (DOMAIN, f"plant_topology_changed_{mock_config_entry.entry_id}") in issues
+    # And a reload was queued.
+    reload_mock.assert_called_with(mock_config_entry.entry_id)
+
+
+async def test_cold_start_saves_capabilities_on_first_successful_refresh(
+    hass, mock_client, mock_config_entry
+):
+    """On a cold start (no cache, no mismatch), save fires once with the
+    confirmed live capabilities so the next restart is a warm start."""
+    mock_config_entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.givenergy_local._load_capabilities",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("custom_components.givenergy_local._save_capabilities", new=AsyncMock()) as save_mock,
+    ):
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    mock_client.detect.assert_awaited_once_with(prior=None)
+    save_mock.assert_awaited_with(hass, mock_config_entry.entry_id, mock_client.plant.capabilities)
+
+
+# ---------------------------------------------------------------------------
+# Capabilities Store helper unit tests
+# ---------------------------------------------------------------------------
+
+
+def _sample_capabilities() -> PlantCapabilities:
+    return PlantCapabilities(
+        device_type=Model.HYBRID,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
+
+
+async def test_load_capabilities_returns_none_on_cache_miss(hass):
+    """A missing on-disk file returns None — caller will run a cold detect()."""
+    from custom_components.givenergy_local import _load_capabilities
+
+    fake_store = AsyncMock()
+    fake_store.async_load = AsyncMock(return_value=None)
+    with patch("custom_components.givenergy_local._capabilities_store", return_value=fake_store):
+        result = await _load_capabilities(hass, "entry_id")
+    assert result is None
+
+
+async def test_load_capabilities_absorbs_library_rejection(hass):
+    """A payload the library can't decode (corrupt or library-schema-bumped) is a miss."""
+    from custom_components.givenergy_local import _load_capabilities
+
+    fake_store = AsyncMock()
+    fake_store.async_load = AsyncMock(return_value={"schema_version": 99})
+    with patch("custom_components.givenergy_local._capabilities_store", return_value=fake_store):
+        result = await _load_capabilities(hass, "entry_id")
+    assert result is None
+
+
+async def test_load_capabilities_absorbs_typeerror_from_hand_edited_payload(hass):
+    """A hand-edited cache file with non-tuple bcu_stacks trips library TypeError.
+    The helper must absorb it as a miss rather than crashing setup."""
+    from custom_components.givenergy_local import _load_capabilities
+
+    broken = _sample_capabilities().to_dict()
+    broken["bcu_stacks"] = [42]  # bare int → TypeError on tuple unpack
+
+    fake_store = AsyncMock()
+    fake_store.async_load = AsyncMock(return_value=broken)
+    with patch("custom_components.givenergy_local._capabilities_store", return_value=fake_store):
+        result = await _load_capabilities(hass, "entry_id")
+    assert result is None
+
+
+async def test_save_capabilities_writes_library_dict_directly(hass):
+    """save writes capabilities.to_dict() verbatim — no envelope."""
+    from custom_components.givenergy_local import _save_capabilities
+
+    caps = _sample_capabilities()
+    fake_store = AsyncMock()
+    with patch("custom_components.givenergy_local._capabilities_store", return_value=fake_store):
+        await _save_capabilities(hass, "entry_id", caps)
+    fake_store.async_save.assert_awaited_once_with(caps.to_dict())
