@@ -61,6 +61,27 @@ def _battery_attr(name: str) -> Callable[[Battery], Any]:
     return lambda bat: getattr(bat, name)
 
 
+def _battery_hex(name: str, width: int) -> Callable[[Battery], Any]:
+    """Return a value_fn that renders the named attr as a fixed-width hex string.
+
+    The BMS status and warning registers carry bit-packed flags whose
+    individual bit meanings aren't documented upstream yet. Rendering as
+    `0xNN`/`0xNNNN` makes bit transitions visible at a glance in history
+    rather than forcing the user to mentally decode decimal integers.
+
+    Returns None for missing attributes so the sensor surfaces as
+    `unknown` instead of raising during model construction or formatting.
+    """
+
+    def fn(bat: Battery) -> Any:
+        val = getattr(bat, name, None)
+        if val is None:
+            return None
+        return f"0x{val:0{width}X}"
+
+    return fn
+
+
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyCoordinatorSensorDescription(SensorEntityDescription):
     value_fn: Callable[[GivEnergyUpdateCoordinator], Any] = field(default=lambda _: None)
@@ -782,31 +803,63 @@ BATTERY_SENSORS: tuple[GivEnergyBatterySensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     # BMS status and warning flag bytes — no enum mapping exists upstream yet,
-    # but the raw values let users spot state changes in history and build
-    # template automations in the meantime.
+    # but rendering them as hex lets users spot bit transitions in history
+    # without having to mentally decode the decimal forms. Bitmap state
+    # values aren't valid `MEASUREMENT` data, so we deliberately omit the
+    # state_class to keep them out of long-term statistics.
     *(
         GivEnergyBatterySensorDescription(
             key=f"status_{i}",
             name=f"BMS Status {i}",
-            state_class=SensorStateClass.MEASUREMENT,
             entity_category=EntityCategory.DIAGNOSTIC,
-            value_fn=_battery_attr(f"status_{i}"),
+            value_fn=_battery_hex(f"status_{i}", width=2),
         )
         for i in range(1, 8)
     ),
     GivEnergyBatterySensorDescription(
         key="warning_1",
         name="BMS Warning 1",
-        state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda bat: bat.warning_1,
+        value_fn=_battery_hex("warning_1", width=2),
     ),
     GivEnergyBatterySensorDescription(
         key="warning_2",
         name="BMS Warning 2",
-        state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda bat: bat.warning_2,
+        value_fn=_battery_hex("warning_2", width=2),
+    ),
+    GivEnergyBatterySensorDescription(
+        key="bms_firmware_version",
+        name="BMS Firmware Version",
+        value_fn=lambda bat: bat.bms_firmware_version,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyBatterySensorDescription(
+        # Alternate copy of the design capacity, populated on some firmware
+        # variants. Exposed alongside `cap_design` so users can spot when
+        # the two diverge — that's the same alt-source phenomenon we saw
+        # on the inverter side (the battery_2_* fields). See modbus#76.
+        key="cap_design2",
+        # No parens in the display name — keeps the auto-generated entity_id
+        # predictable as `design_capacity_alt` (slugify drops parentheses but
+        # leaves stray underscores around them, which the dashboard template
+        # would then have to special-case).
+        name="Design Capacity Alt",
+        native_unit_of_measurement="Ah",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda bat: bat.cap_design2,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyBatterySensorDescription(
+        # Per-battery USB-device register. Semantics are partially unverified
+        # upstream — manufacturer docs only define 0 and 8 but values like 11
+        # have been observed on D0.449-A0.449. Rendered as hex so unrecognised
+        # values are still readable as bit patterns rather than mystery
+        # decimals.
+        key="usb_device_inserted",
+        name="USB Device",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_battery_hex("usb_device_inserted", width=4),
     ),
     # Per-cell voltages — 16 entities; unused cells in smaller packs read ~0.
     # `attr` default-arg captures the loop variable to avoid the closure trap.

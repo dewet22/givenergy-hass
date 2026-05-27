@@ -121,6 +121,34 @@ async def test_bms_internal_sensors_present(hass, setup_integration):
     assert hass.states.get(_entity_id(hass, "sensor", "BT1234A001_num_cells")).state == "16"
 
 
+async def test_bms_diagnostic_sensors_present(hass, setup_integration):
+    """The bms_firmware_version, cap_design2 and usb_device_inserted sensors are exposed."""
+    assert (
+        hass.states.get(_entity_id(hass, "sensor", "BT1234A001_bms_firmware_version")).state
+        == "3005"
+    )
+    cap_alt = hass.states.get(_entity_id(hass, "sensor", "BT1234A001_cap_design2"))
+    assert float(cap_alt.state) == 9.5
+    assert cap_alt.attributes["unit_of_measurement"] == "Ah"
+    # usb_device_inserted is rendered as 4-char hex (uint16 value).
+    assert (
+        hass.states.get(_entity_id(hass, "sensor", "BT1234A001_usb_device_inserted")).state
+        == "0x0008"
+    )
+
+
+async def test_bms_status_warning_rendered_as_hex(hass, setup_integration):
+    """BMS status / warning bytes surface as 2-char hex strings, not decimals."""
+    # status_3 is set to 0xA5 in the fixture; the rest are 0x00.
+    assert hass.states.get(_entity_id(hass, "sensor", "BT1234A001_status_3")).state == "0xA5"
+    assert hass.states.get(_entity_id(hass, "sensor", "BT1234A001_status_1")).state == "0x00"
+    assert hass.states.get(_entity_id(hass, "sensor", "BT1234A001_warning_1")).state == "0x00"
+    # Hex-formatted sensors deliberately omit state_class so HA doesn't
+    # try to roll them into long-term statistics.
+    state = hass.states.get(_entity_id(hass, "sensor", "BT1234A001_status_3"))
+    assert "state_class" not in state.attributes
+
+
 async def test_cell_voltages_attached_to_battery_device(hass, setup_integration):
     """Per-cell sensors live on the battery device, not the inverter device."""
     from homeassistant.helpers import device_registry as dr

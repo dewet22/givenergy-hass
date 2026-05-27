@@ -122,12 +122,21 @@ def mock_battery() -> MagicMock:
     bat.t_min = 21.3
     bat.cap_remaining = 8.5
     bat.cap_design = 9.5
+    bat.cap_calibrated = 9.4
+    bat.cap_design2 = 9.5
     bat.num_cycles = 42
     bat.bms_firmware_version = 3005
+    bat.usb_device_inserted = 8
     # BMS internals
     bat.num_cells = 16
     bat.v_cells_sum = 52.412
     bat.t_bms_mosfet = 28.4
+    # BMS status / warning bitmaps (rendered as hex by the sensor layer).
+    for i in range(1, 8):
+        setattr(bat, f"status_{i}", 0)
+    bat.status_3 = 0xA5  # one non-zero status to exercise the formatter
+    bat.warning_1 = 0
+    bat.warning_2 = 0
     for i in range(1, 17):
         setattr(bat, f"v_cell_{i:02d}", 3.275 + i * 0.001)  # ~3.276–3.291 V
     bat.t_cells_01_04 = 22.1
