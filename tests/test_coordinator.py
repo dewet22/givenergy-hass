@@ -5,9 +5,24 @@ from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from givenergy_modbus.exceptions import PlantTopologyMismatch
+from givenergy_modbus.model.inverter import Model
+from givenergy_modbus.model.plant import PlantCapabilities
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.givenergy_local.coordinator import GivEnergyUpdateCoordinator
+
+
+def _caps(**overrides) -> PlantCapabilities:
+    """Build a PlantCapabilities for tests; override any field via kwargs."""
+    defaults = {
+        "device_type": Model.HYBRID,
+        "inverter_address": 0x32,
+        "meter_addresses": [],
+        "lv_battery_addresses": [0x32],
+        "bcu_stacks": [],
+    }
+    return PlantCapabilities(**{**defaults, **overrides})
 
 
 async def test_first_refresh_connects_and_fetches(hass, mock_client, setup_integration):
@@ -527,3 +542,98 @@ async def test_passive_none_system_time_skips_stale_check(hass, mock_plant):
         await coordinator._async_update_data()  # would raise if check wasn't skipped
 
     assert coordinator.consecutive_failures == 0
+
+
+# ---------------------------------------------------------------------------
+# PlantCapabilities cache integration (issue #48)
+# ---------------------------------------------------------------------------
+
+
+async def test_connect_passes_prior_capabilities_to_detect(hass, mock_plant):
+    """When seeded with a prior, _connect() must thread it through detect(prior=)."""
+    prior = _caps()
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, prior_capabilities=prior
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.detect = AsyncMock()
+        mock_cls.return_value = client
+
+        await coordinator._connect()
+
+    client.detect.assert_awaited_once_with(prior=prior)
+
+
+async def test_connect_passes_none_prior_when_no_cache(hass, mock_plant):
+    """No cache means a cold detect — explicitly prior=None, not a missing kwarg."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.detect = AsyncMock()
+        mock_cls.return_value = client
+
+        await coordinator._connect()
+
+    client.detect.assert_awaited_once_with(prior=None)
+
+
+async def test_topology_mismatch_accepts_actual_and_invokes_callback(hass, mock_plant):
+    """PlantTopologyMismatch: assign exc.actual to plant, update prior, call back, no raise."""
+    prior = _caps(lv_battery_addresses=[0x32])
+    actual = _caps(lv_battery_addresses=[0x32, 0x33])
+    mismatch = PlantTopologyMismatch("topology changed", prior=prior, actual=actual)
+    callback = AsyncMock()
+    coordinator = GivEnergyUpdateCoordinator(
+        hass,
+        "192.168.1.1",
+        8899,
+        30,
+        prior_capabilities=prior,
+        on_topology_changed=callback,
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant  # the assignment in _connect targets client.plant.capabilities
+        client.detect = AsyncMock(side_effect=mismatch)
+        mock_cls.return_value = client
+
+        await coordinator._connect()  # must NOT raise
+
+    # Capabilities accepted on the live plant so this tick's refresh dispatches correctly.
+    assert client.plant.capabilities is actual
+    # Coordinator's own prior is updated so any in-process reconnect uses the new topology.
+    assert coordinator._prior_capabilities is actual
+    # Callback fired with the new capabilities — the wiring in __init__.py uses
+    # this to persist and schedule a reload.
+    callback.assert_awaited_once_with(actual)
+
+
+async def test_topology_mismatch_without_callback_still_accepts_actual(hass, mock_plant):
+    """A coordinator constructed without a callback (e.g. in unit tests) must not raise."""
+    prior = _caps()
+    actual = _caps(lv_battery_addresses=[0x32, 0x33])
+    mismatch = PlantTopologyMismatch("changed", prior=prior, actual=actual)
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, prior_capabilities=prior
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.detect = AsyncMock(side_effect=mismatch)
+        mock_cls.return_value = client
+
+        await coordinator._connect()
+
+    assert client.plant.capabilities is actual
+    assert coordinator._prior_capabilities is actual

@@ -10,7 +10,9 @@ from givenergy_modbus.model.inverter import (
     BatteryPowerMode,
     BatteryType,
     MeterType,
+    Model,
 )
+from givenergy_modbus.model.plant import PlantCapabilities
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.givenergy_local.const import DOMAIN
@@ -154,6 +156,15 @@ def mock_plant(mock_inverter, mock_battery) -> MagicMock:
     plant.inverter = mock_inverter
     plant.batteries = [mock_battery]
     plant.number_batteries = 1
+    # A real PlantCapabilities — the integration's save-on-success path calls
+    # .to_dict() through CapabilitiesCache, which would choke on a MagicMock.
+    plant.capabilities = PlantCapabilities(
+        device_type=Model.HYBRID,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
     return plant
 
 

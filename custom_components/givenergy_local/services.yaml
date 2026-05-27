@@ -56,6 +56,21 @@ capture_frames:
           unit_of_measurement: s
           mode: box
 
+redetect_plant:
+  name: Re-detect plant topology
+  description: >
+    Clears the cached plant topology and reloads the integration, forcing a
+    full hardware detection sweep on the next connect. Use this after adding
+    or removing a battery, or any other change to the plant layout.
+  fields:
+    device_id:
+      name: Device
+      description: The GivEnergy inverter whose plant topology should be re-detected.
+      required: true
+      selector:
+        device:
+          integration: givenergy_local
+
 generate_dashboard:
   name: Generate dashboard
   description: >

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
 from givenergy_modbus.client.client import Client
+from givenergy_modbus.exceptions import PlantTopologyMismatch
 from givenergy_modbus.model.inverter import SinglePhaseInverter
 from givenergy_modbus.model.inverter_threephase import ThreePhaseInverter
-from givenergy_modbus.model.plant import Plant
+from givenergy_modbus.model.plant import Plant, PlantCapabilities
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -14,6 +16,12 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN
 
 InverterModel = SinglePhaseInverter | ThreePhaseInverter
+
+# Invoked after detect() raises PlantTopologyMismatch and the new topology
+# has been accepted on the live client. Receives the freshly-detected
+# capabilities so the caller can persist them and trigger an entry reload —
+# the coordinator itself stays free of HA UI / config-entry concerns.
+TopologyChangedCallback = Callable[[PlantCapabilities], Awaitable[None]]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,6 +55,8 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         passive: bool = False,
         timeout_tolerance: int = 3,
         retries: int = 1,
+        prior_capabilities: PlantCapabilities | None = None,
+        on_topology_changed: TopologyChangedCallback | None = None,
     ) -> None:
         super().__init__(
             hass,
@@ -59,6 +69,12 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self.passive = passive
         self.timeout_tolerance = timeout_tolerance
         self.retries = retries
+        # Keep the prior across reconnects (transient TCP drops re-enter
+        # _connect() and benefit from the same hint). The on-disk cache is
+        # the source of truth across process restarts and is re-seeded into
+        # this attribute at async_setup_entry time.
+        self._prior_capabilities = prior_capabilities
+        self._on_topology_changed = on_topology_changed
         self._client: Client | None = None
         self.last_successful_refresh: datetime | None = None
         self.consecutive_failures: int = 0
@@ -175,13 +191,39 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
     # ------------------------------------------------------------------
 
     async def _connect(self) -> None:
-        """Open a fresh TCP connection, discover topology, and reset staleness tracking."""
+        """Open a fresh TCP connection, discover topology, and reset staleness tracking.
+
+        Passes `prior=self._prior_capabilities` so the library can skip the
+        full peripheral-probe sweep when the topology hasn't changed since the
+        last process startup. On `PlantTopologyMismatch` the new topology is
+        accepted on the live client and the caller-provided callback is
+        invoked to persist it and schedule a reload — the reload is needed
+        because entity counts (notably batteries) are frozen at platform
+        setup time.
+
+        detect() populates plant.capabilities, which makes subsequent
+        refresh_plant() calls dispatch via model-aware load_config()/refresh()
+        — required for three-phase, AIO-HV, EMS and other non-default topologies.
+        """
         self._client = Client(host=self.host, port=self.port)
         await self._client.connect()
-        # detect() populates plant.capabilities, which makes subsequent
-        # refresh_plant() calls dispatch via model-aware load_config()/refresh()
-        # — required for three-phase, AIO-HV, EMS and other non-default topologies.
-        await self._client.detect()
+        try:
+            await self._client.detect(prior=self._prior_capabilities)
+        except PlantTopologyMismatch as exc:
+            _LOGGER.warning(
+                "Plant topology has changed since last seen — accepting new layout "
+                "(prior=%r, actual=%r); a reload will refresh entity counts",
+                exc.prior,
+                exc.actual,
+            )
+            # Library leaves plant.capabilities=None on mismatch; assign so this
+            # tick's refresh_plant() still dispatches correctly using the new
+            # topology before the reload tears things down.
+            assert self._client is not None  # set two lines above
+            self._client.plant.capabilities = exc.actual
+            self._prior_capabilities = exc.actual
+            if self._on_topology_changed is not None:
+                await self._on_topology_changed(exc.actual)
         self._last_inverter_time = None
         self._unchanged_ticks = 0
         self._active_tick = 0
