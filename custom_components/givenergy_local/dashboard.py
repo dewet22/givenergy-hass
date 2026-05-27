@@ -5,7 +5,7 @@ from __future__ import annotations
 # Increment whenever the generated YAML layout changes in a meaningful way.
 # __init__.py compares this against the last-generated version stored in HA's
 # persistent Store and raises a Repairs issue when they diverge.
-DASHBOARD_VERSION = 1
+DASHBOARD_VERSION = 2
 
 
 def generate_dashboard(inv: str, bats: list[str], max_power_kw: int = 10) -> str:

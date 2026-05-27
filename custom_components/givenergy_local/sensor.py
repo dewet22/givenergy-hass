@@ -77,7 +77,15 @@ def _battery_hex(name: str, width: int) -> Callable[[Battery], Any]:
         val = getattr(bat, name, None)
         if val is None:
             return None
-        return f"0x{val:0{width}X}"
+        # If upstream upgrades any of these fields to an Enum (the inverter's
+        # usb_device_inserted has already gone that way), pull the underlying
+        # numeric value before formatting.
+        if hasattr(val, "value"):
+            val = val.value
+        try:
+            return f"0x{int(val):0{width}X}"
+        except TypeError, ValueError:
+            return None
 
     return fn
 
@@ -847,7 +855,7 @@ BATTERY_SENSORS: tuple[GivEnergyBatterySensorDescription, ...] = (
         name="Design Capacity Alt",
         native_unit_of_measurement="Ah",
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda bat: bat.cap_design2,
+        value_fn=lambda bat: getattr(bat, "cap_design2", None),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyBatterySensorDescription(
