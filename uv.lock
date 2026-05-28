@@ -947,7 +947,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "givenergy-modbus", specifier = ">=2.0.5,<2.1" }]
+requires-dist = [{ name = "givenergy-modbus", specifier = ">=2.1.0a4,<3.0.0" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -960,15 +960,15 @@ dev = [
 
 [[package]]
 name = "givenergy-modbus"
-version = "2.0.5"
+version = "2.1.0a4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "crccheck" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/79/b3/848884fb7d7763fd9bd7df6ac01a9f2f7109a933c39ffcdc23ac56b86b09/givenergy_modbus-2.0.5.tar.gz", hash = "sha256:bf4525037268a942a72113796166f22e11b607a01684b92a2d42eae5f0918654", size = 185505, upload-time = "2026-05-28T23:27:21.39Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/18/95/d3b8a7f89f1870f1ff643256184ff3999ccc4dc49901d57113f5c4046cf3/givenergy_modbus-2.1.0a4.tar.gz", hash = "sha256:80dfcaea0339342576e5f6513a02949b6f875eae7f18d528e51b67ba460d2d16", size = 189632, upload-time = "2026-05-28T23:28:33.897Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/58/fe/7568371cbba17323f42cb653b09616ae78365ef56d2baf3c394a2f3f8e7b/givenergy_modbus-2.0.5-py3-none-any.whl", hash = "sha256:07bee687e07d68e97417670112d952a672c5c382d4585fdb2a71139d0c075980", size = 82858, upload-time = "2026-05-28T23:27:20.067Z" },
+    { url = "https://files.pythonhosted.org/packages/06/07/8f8e5bb5de820553024acb3fc0fc18aaf6cb3d224db9b401b5931475ca13/givenergy_modbus-2.1.0a4-py3-none-any.whl", hash = "sha256:6cf2264c70b8a0de8e664c100443a595534a308bc47272aedb04501f9253a3ba", size = 85034, upload-time = "2026-05-28T23:28:32.486Z" },
 ]
 
 [[package]]
