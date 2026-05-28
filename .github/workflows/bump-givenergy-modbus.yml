@@ -46,14 +46,17 @@ jobs:
             echo "::error::invalid givenergy-modbus version format (must match PEP 440-ish X.Y.Z[-?suffix])"
             exit 1
           fi
-          # Route the PR to the branch whose dependency range that major
-          # version belongs to. Update the case statement when a new release
-          # branch (and/or new modbus major) is introduced.
+          # Route the PR to the branch whose dependency range that minor
+          # version belongs to. Convention: hass v1.0 tracks modbus v2.0,
+          # hass main (v1.1+) tracks modbus v2.1+. Update when a new modbus
+          # minor or hass release branch is introduced.
           major="${NEW%%.*}"
-          case "$major" in
-            2) base=main ;;
+          minor="${NEW#*.}"; minor="${minor%%.*}"
+          case "$major.$minor" in
+            2.0) base=v1.0 ;;
+            2.1) base=main ;;
             *)
-              echo "::error::no target branch configured for givenergy-modbus major $major (version $NEW)"
+              echo "::error::no target branch configured for givenergy-modbus ${major}.${minor}.x (version $NEW)"
               exit 1
               ;;
           esac
