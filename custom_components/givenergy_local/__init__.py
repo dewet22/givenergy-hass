@@ -6,12 +6,17 @@ from pathlib import Path
 import voluptuous as vol
 from givenergy_modbus.client import commands
 from givenergy_modbus.model.plant import PlantCapabilities
+from homeassistant.components.homeassistant.exposed_entities import async_expose_entity
+from homeassistant.components.persistent_notification import (
+    async_create as async_create_notification,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 
@@ -23,9 +28,11 @@ from .const import (
     DEFAULT_PASSIVE,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    EXPOSE_RECOMMENDED_ENTITY_KEYS,
     PLATFORMS,
     SERVICE_CALIBRATE_BATTERY_SOC,
     SERVICE_CAPTURE_FRAMES,
+    SERVICE_EXPOSE_RECOMMENDED_ENTITIES,
     SERVICE_GENERATE_DASHBOARD,
     SERVICE_REBOOT_INVERTER,
     SERVICE_REDETECT_PLANT,
@@ -93,6 +100,19 @@ SERVICE_CAPTURE_FRAMES_SCHEMA = vol.Schema(
     {
         vol.Optional("device_id"): cv.string,
         vol.Optional("duration", default=60): vol.All(vol.Coerce(int), vol.Range(min=10, max=300)),
+    }
+)
+
+# Default targets `conversation`, which covers Assist, the LLM tools API, and
+# MCP-via-conversation. Users wanting Alexa/Google can override; they may also
+# add unknown values (e.g. a custom assistant) — async_expose_entity accepts
+# any string, so we don't validate against a known set here.
+SERVICE_EXPOSE_RECOMMENDED_ENTITIES_SCHEMA = vol.Schema(
+    {
+        vol.Required("device_id"): cv.string,
+        vol.Optional("assistants", default=["conversation"]): vol.All(
+            cv.ensure_list, vol.Length(min=1), [cv.string]
+        ),
     }
 )
 
@@ -351,6 +371,65 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await _capabilities_store(hass, target_entry_id).async_remove()
             hass.config_entries.async_schedule_reload(target_entry_id)
 
+        async def handle_expose_recommended_entities(call: ServiceCall) -> None:
+            # Mirrors the dashboard generator's UX: a one-shot service that
+            # seeds an opinionated starting set. Idempotent — re-running just
+            # re-confirms exposure for whatever subset still exists. Doesn't
+            # un-expose anything, so a user who manually removes one of these
+            # entities from Assist won't have their choice fought on next call.
+            device = dr.async_get(hass).async_get(call.data["device_id"])
+            if device is None:
+                raise HomeAssistantError(
+                    f"No GivEnergy device found for {call.data['device_id']!r}"
+                )
+            target_entry_id = next(
+                (eid for eid in device.config_entries if eid in hass.data.get(DOMAIN, {})),
+                None,
+            )
+            if target_entry_id is None:
+                raise HomeAssistantError(
+                    f"No GivEnergy config entry found for device {call.data['device_id']!r}"
+                )
+            assistants = call.data["assistants"]
+
+            # Match entries by unique_id suffix — sensor.py builds these as
+            # `f"{serial}_{description.key}"`, so endswith(_key) is unambiguous
+            # for the keys in EXPOSE_RECOMMENDED_ENTITY_KEYS (none of them are
+            # suffixes of another key).
+            entity_reg = er.async_get(hass)
+            matched: list[tuple[str, str]] = []  # (entity_id, display_name)
+            for entry in er.async_entries_for_config_entry(entity_reg, target_entry_id):
+                # Disabled entities can't usefully be exposed — they have no
+                # state in the registry for the assistant to consume.
+                if entry.disabled_by is not None:
+                    continue
+                for key in EXPOSE_RECOMMENDED_ENTITY_KEYS:
+                    if entry.unique_id.endswith(f"_{key}"):
+                        for assistant in assistants:
+                            async_expose_entity(hass, assistant, entry.entity_id, True)
+                        matched.append((entry.entity_id, entry.name or entry.original_name or key))
+                        break
+
+            if not matched:
+                raise HomeAssistantError(
+                    f"No headline entities found for device {call.data['device_id']!r} — "
+                    "the integration may still be initialising"
+                )
+
+            names = "\n".join(f"- {name} (`{entity_id}`)" for entity_id, name in matched)
+            assistant_list = ", ".join(assistants)
+            async_create_notification(
+                hass,
+                (
+                    f"Exposed {len(matched)} entities to {assistant_list} for "
+                    f"`{device.name_by_user or device.name}`:\n\n{names}\n\n"
+                    "Review or un-expose any of these in "
+                    "**Settings → Voice assistants → Expose**."
+                ),
+                title="GivEnergy: headline entities exposed",
+                notification_id=f"givenergy_exposed_{target_entry_id}",
+            )
+
         hass.services.async_register(
             DOMAIN,
             SERVICE_CAPTURE_FRAMES,
@@ -362,6 +441,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_REDETECT_PLANT,
             handle_redetect_plant,
             SERVICE_DEVICE_SCHEMA,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_EXPOSE_RECOMMENDED_ENTITIES,
+            handle_expose_recommended_entities,
+            SERVICE_EXPOSE_RECOMMENDED_ENTITIES_SCHEMA,
         )
 
     return True
@@ -379,5 +464,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, SERVICE_GENERATE_DASHBOARD)
         hass.services.async_remove(DOMAIN, SERVICE_CAPTURE_FRAMES)
         hass.services.async_remove(DOMAIN, SERVICE_REDETECT_PLANT)
+        hass.services.async_remove(DOMAIN, SERVICE_EXPOSE_RECOMMENDED_ENTITIES)
 
     return unload_ok

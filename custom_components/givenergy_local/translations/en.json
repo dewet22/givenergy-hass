@@ -59,6 +59,20 @@
         }
       }
     },
+    "expose_recommended_entities": {
+      "name": "Expose recommended entities to voice assistants",
+      "description": "One-shot service that exposes an opinionated headline set of entities (battery SOC, PV/grid/load power, today's and lifetime energy totals, inverter status) to one or more voice/LLM assistants. Idempotent and never un-exposes anything.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The GivEnergy inverter whose entities should be exposed."
+        },
+        "assistants": {
+          "name": "Assistants",
+          "description": "Which assistant platforms to expose entities to. Defaults to `conversation`."
+        }
+      }
+    },
     "capture_frames": {
       "name": "Capture debug frames",
       "description": "Records raw Modbus wire frames from the inverter for a set duration and saves them as a redacted text file in /local/.",

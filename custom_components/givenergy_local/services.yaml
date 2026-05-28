@@ -56,6 +56,40 @@ capture_frames:
           unit_of_measurement: s
           mode: box
 
+expose_recommended_entities:
+  name: Expose recommended entities to voice assistants
+  description: >
+    One-shot service that exposes an opinionated headline set of entities
+    (battery SOC, PV/grid/load power, today's and lifetime energy totals,
+    inverter status) to one or more voice/LLM assistants. Idempotent — safe
+    to re-run; never un-exposes entities, so any manual changes you make
+    afterwards survive subsequent calls.
+  fields:
+    device_id:
+      name: Device
+      description: The GivEnergy inverter whose entities should be exposed.
+      required: true
+      selector:
+        device:
+          integration: givenergy_local
+    assistants:
+      name: Assistants
+      description: >
+        Which assistant platforms to expose entities to. Defaults to
+        `conversation`, which covers Assist, the LLM tools API, and
+        MCP-via-conversation. Add `cloud.alexa` or `cloud.google_assistant`
+        if you also want those platforms to see the entities.
+      default:
+        - conversation
+      selector:
+        select:
+          multiple: true
+          custom_value: true
+          options:
+            - conversation
+            - cloud.alexa
+            - cloud.google_assistant
+
 redetect_plant:
   name: Re-detect plant topology
   description: >

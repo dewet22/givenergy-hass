@@ -7,6 +7,7 @@ from givenergy_modbus.model.inverter import Model
 from givenergy_modbus.model.plant import PlantCapabilities
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -14,6 +15,8 @@ from custom_components.givenergy_local.const import (
     CONF_RETRIES,
     CONF_TIMEOUT_TOLERANCE,
     DOMAIN,
+    EXPOSE_RECOMMENDED_ENTITY_KEYS,
+    SERVICE_EXPOSE_RECOMMENDED_ENTITIES,
     SERVICE_REDETECT_PLANT,
 )
 
@@ -249,3 +252,86 @@ async def test_save_capabilities_writes_library_dict_directly(hass):
     with patch("custom_components.givenergy_local._capabilities_store", return_value=fake_store):
         await _save_capabilities(hass, "entry_id", caps)
     fake_store.async_save.assert_awaited_once_with(caps.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# Voice-assistant exposure (issue #65)
+# ---------------------------------------------------------------------------
+
+
+async def test_expose_recommended_entities_service(hass, mock_client, setup_integration):
+    """The service walks the entry's registered entities, matches the curated key
+    set against unique_id suffixes, and calls async_expose_entity for each."""
+    device_reg = dr.async_get(hass)
+    inverter_device = next(
+        d for d in device_reg.devices.values() if setup_integration.entry_id in d.config_entries
+    )
+
+    with patch("custom_components.givenergy_local.async_expose_entity") as expose_mock:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_EXPOSE_RECOMMENDED_ENTITIES,
+            {"device_id": inverter_device.id},
+            blocking=True,
+        )
+
+    exposed_entity_ids = {call.args[2] for call in expose_mock.call_args_list}
+
+    # Look entities up by their unique_id (which IS `{serial}_{description.key}`,
+    # so it tracks the curated key list directly) and assert their entity_ids
+    # are in the exposed set. Catches the class of bug where a curated key
+    # silently doesn't match any entity — e.g. listing the entity's
+    # translation_key instead of its description key.
+    entity_reg = er.async_get(hass)
+    inverter_serial = "SA1234G123"  # from mock_config_entry fixture
+    for key in ("p_pv", "battery_soc", "p_grid_out", "p_load_demand", "status"):
+        entry = entity_reg.async_get_entity_id("sensor", DOMAIN, f"{inverter_serial}_{key}")
+        assert entry is not None, (
+            f"No entity registered with unique_id {inverter_serial}_{key!r} — "
+            "curated key may be a translation_key rather than the description key"
+        )
+        assert entry in exposed_entity_ids, f"Entity {entry} was registered but not exposed"
+
+    # All of the curated, enabled keys present as entities should be exposed;
+    # nothing outside the set or disabled should be.
+    for entry in er.async_entries_for_config_entry(entity_reg, setup_integration.entry_id):
+        if entry.disabled_by is not None:
+            assert entry.entity_id not in exposed_entity_ids, (
+                f"Disabled entity {entry.entity_id} should not have been exposed"
+            )
+            continue
+        in_curated = any(entry.unique_id.endswith(f"_{k}") for k in EXPOSE_RECOMMENDED_ENTITY_KEYS)
+        assert (entry.entity_id in exposed_entity_ids) == in_curated, (
+            f"Entity {entry.entity_id} (unique_id={entry.unique_id}) "
+            f"{'should' if in_curated else 'should not'} be exposed"
+        )
+
+    # All exposure calls targeted the default "conversation" assistant.
+    for call in expose_mock.call_args_list:
+        assert call.args[1] == "conversation"
+        assert call.args[3] is True
+
+
+async def test_expose_recommended_entities_honours_custom_assistants_list(
+    hass, mock_client, setup_integration
+):
+    """The `assistants` parameter routes a single exposure call per (entity, assistant)."""
+    device_reg = dr.async_get(hass)
+    inverter_device = next(
+        d for d in device_reg.devices.values() if setup_integration.entry_id in d.config_entries
+    )
+
+    with patch("custom_components.givenergy_local.async_expose_entity") as expose_mock:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_EXPOSE_RECOMMENDED_ENTITIES,
+            {
+                "device_id": inverter_device.id,
+                "assistants": ["conversation", "cloud.alexa"],
+            },
+            blocking=True,
+        )
+
+    # Two assistants × N entities → 2N total exposure calls.
+    assistants_called = {call.args[1] for call in expose_mock.call_args_list}
+    assert assistants_called == {"conversation", "cloud.alexa"}

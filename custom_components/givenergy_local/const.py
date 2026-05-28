@@ -19,3 +19,35 @@ SERVICE_CALIBRATE_BATTERY_SOC = "calibrate_battery_soc"
 SERVICE_GENERATE_DASHBOARD = "generate_dashboard"
 SERVICE_CAPTURE_FRAMES = "capture_frames"
 SERVICE_REDETECT_PLANT = "redetect_plant"
+SERVICE_EXPOSE_RECOMMENDED_ENTITIES = "expose_recommended_entities"
+
+# Curated headline entities for the expose_recommended_entities service.
+# Each value is an entity-description `key` (the suffix portion of unique_id).
+# Topology variation is handled implicitly: keys with no corresponding entity
+# for a given entry (e.g. battery_* on PV-only installs) are silently skipped.
+EXPOSE_RECOMMENDED_ENTITY_KEYS = (
+    # PV
+    "p_pv",
+    "e_pv_day",
+    "e_pv_total",
+    # Battery (auto-skipped on PV-only installs)
+    "battery_soc",
+    "p_battery",
+    "e_battery_charge_day",
+    "e_battery_discharge_day",
+    "e_battery_throughput",
+    # Grid
+    "p_grid_out",
+    "e_grid_in_day",
+    "e_grid_out_day",
+    "e_grid_in_total",
+    "e_grid_out_total",
+    # Load
+    "p_load_demand",
+    "e_load_day",
+    # Inverter output
+    "e_inverter_out_total",
+    # Health — entity description's `key` is "status"; `inverter_status` is
+    # the translation_key, which is not what's in the unique_id suffix.
+    "status",
+)

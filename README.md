@@ -192,6 +192,8 @@ The integration registers the following services under the `givenergy_local` dom
 | Service | Description |
 |---|---|
 | `givenergy_local.generate_dashboard` | Generates a topology-aware Lovelace dashboard YAML for your inverter and battery configuration, saves it to `/local/`, and sends a persistent notification with a download link. Import via **Settings → Dashboards → Add Dashboard**. Accepts an optional `max_power_kw` parameter (default 10). |
+| `givenergy_local.expose_recommended_entities` | Exposes an opinionated headline set of entities (battery SOC, PV/grid/load power, today's and lifetime energy totals, inverter status) to one or more voice/LLM assistants. Defaults to the `conversation` assistant (Assist, the LLM tools API, MCP-via-conversation); pass `assistants` to override. See **Voice assistants & LLM access** below. |
+| `givenergy_local.redetect_plant` | Clears the cached plant topology for the inverter and reloads the integration, forcing a full hardware-detection sweep. Use after adding or removing a battery. Requires a `device_id`. |
 | `givenergy_local.capture_frames` | Captures raw Modbus wire frames for a configurable duration (10–300 s, default 60 s), writes a redacted copy to `/local/`, and sends a download link via persistent notification. Serial numbers are zeroed before the file is written. Attach the file to a GitHub issue when reporting connectivity problems. |
 | `givenergy_local.reboot_inverter` | Sends the inverter reboot command. Requires a `device_id`. |
 | `givenergy_local.calibrate_battery_soc` | Triggers a BMS SOC calibration cycle. Requires a `device_id`. |
@@ -205,6 +207,55 @@ After running `generate_dashboard`, a notification appears with a download link:
 If the dashboard schema is updated in a future release, the integration raises a fixable HA Repairs issue — click **Fix** to regenerate automatically with your settings preserved.
 
 ![Dashboard outdated repair issue](docs/repairs-fix.png)
+
+### Voice assistants & LLM access
+
+Home Assistant's voice assistants (Assist) and LLM tools (Claude / OpenAI via MCP) can only see entities that are explicitly **exposed**. HA auto-exposes a curated allowlist of sensor device classes — `temperature`, `humidity`, and a few others — but `power`, `energy`, and `battery` are **not** on that list, so none of this integration's headline sensors are visible to voice or LLM queries by default. Asking "what's my battery at?" silently returns nothing until you fix it.
+
+#### Option 1: run the `expose_recommended_entities` service (recommended)
+
+From **Developer Tools → Services**, pick **GivEnergy Local: Expose recommended entities to voice assistants**, choose your inverter device, and run it. You'll get a persistent notification listing what was exposed. The service is idempotent — re-run any time without losing manual customisations (it only ever exposes; it never un-exposes).
+
+By default it targets the `conversation` assistant, which covers Assist, the LLM tools API, and MCP-via-conversation. Pass `assistants` to also target `cloud.alexa` or `cloud.google_assistant`.
+
+The opinionated set covers ~17 entities, scoped to the questions a voice user actually asks:
+
+| Question | Entities |
+|---|---|
+| "What's my battery at?" / "Is it charging?" | Battery SOC, Battery Power |
+| "How much did I charge/discharge today?" | Battery Charge Today, Battery Discharge Today, Battery Throughput |
+| "Am I generating?" / "Solar today?" / "Lifetime PV?" | PV Power, PV Energy Today, PV Energy Total |
+| "Importing or exporting?" / "Today and lifetime grid?" | Grid Power, Grid Import Today, Grid Export Today, Grid Import Total, Grid Export Total |
+| "What's the house using?" | Load Power, Load Today |
+| "Lifetime inverter output?" | Inverter Output Total |
+| "Is everything ok?" | Inverter Status |
+
+Topology variation is handled implicitly: PV-only installs simply skip the battery entries, and three-phase inverters use the same keys.
+
+#### Option 2: expose manually
+
+Go to **Settings → Voice assistants → Expose** and tick the entities you want. The list above is a good starting set.
+
+#### Suggested aliases
+
+Default entity names like `GivEnergy Inverter SA1234G123 Battery SOC` are unwieldy for voice. After exposing, open each entity's voice-assistants tab (**Settings → Devices & Services → GivEnergy Local → \<entity\> → Aliases**) and add short aliases. A conservative starting set:
+
+| Entity | Suggested aliases |
+|---|---|
+| Battery SOC | `battery`, `battery level` |
+| Battery Power | `battery power` |
+| PV Power | `solar`, `panels`, `pv` |
+| PV Energy Today | `solar today`, `pv today` |
+| Grid Power | `grid` |
+| Grid Import Today | `import today` |
+| Grid Export Today | `export today` |
+| Load Power | `load`, `house power` |
+
+Aliases are deliberately not shipped by the integration: the entity-registry alias field has no provenance marker, so we can't distinguish "we set this" from "the user set this" — which means we couldn't preserve user edits cleanly across restarts. Add only the aliases that match your household's vocabulary; less is usually more, since each alias becomes its own intent-match candidate.
+
+#### Why these aren't auto-exposed
+
+HA's conversation agent filters sensor entities by `device_class` against an allowlist tied to its intent matchers; `power`, `energy`, and `battery` aren't on the list. There's no `_attr_*` an integration can set to override this — exposure is intentionally a user-controlled decision. Background: [community thread on Assist auto-exposure](https://community.home-assistant.io/t/wth-are-all-new-entities-exposed-to-assist-by-default/803889).
 
 ### Not exposed by default
 
