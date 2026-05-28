@@ -267,20 +267,6 @@ async def test_expose_recommended_entities_service(hass, mock_client, setup_inte
         d for d in device_reg.devices.values() if setup_integration.entry_id in d.config_entries
     )
 
-    # Snapshot all entity unique_ids we'd expect to match — depends on which
-    # of the curated keys actually have entities for this test's fake plant.
-    entity_reg = er.async_get(hass)
-    expected_entity_ids = {
-        entry.entity_id
-        for entry in er.async_entries_for_config_entry(entity_reg, setup_integration.entry_id)
-        for key in EXPOSE_RECOMMENDED_ENTITY_KEYS
-        if entry.unique_id.endswith(f"_{key}")
-    }
-    # Sanity: the fixture's mock plant produces enough sensors that at least
-    # the universal headline keys (p_pv, p_grid_out, inverter_status, etc.)
-    # should be present. If this drops to 0 the test no longer proves anything.
-    assert len(expected_entity_ids) >= 5
-
     with patch("custom_components.givenergy_local.async_expose_entity") as expose_mock:
         await hass.services.async_call(
             DOMAIN,
@@ -289,9 +275,33 @@ async def test_expose_recommended_entities_service(hass, mock_client, setup_inte
             blocking=True,
         )
 
-    # Each matched entity got exposed once to the default "conversation" assistant.
     exposed_entity_ids = {call.args[2] for call in expose_mock.call_args_list}
-    assert exposed_entity_ids == expected_entity_ids
+
+    # Look entities up by their unique_id (which IS `{serial}_{description.key}`,
+    # so it tracks the curated key list directly) and assert their entity_ids
+    # are in the exposed set. Catches the class of bug where a curated key
+    # silently doesn't match any entity — e.g. listing the entity's
+    # translation_key instead of its description key.
+    entity_reg = er.async_get(hass)
+    inverter_serial = "SA1234G123"  # from mock_config_entry fixture
+    for key in ("p_pv", "battery_soc", "p_grid_out", "p_load_demand", "status"):
+        entry = entity_reg.async_get_entity_id("sensor", DOMAIN, f"{inverter_serial}_{key}")
+        assert entry is not None, (
+            f"No entity registered with unique_id {inverter_serial}_{key!r} — "
+            "curated key may be a translation_key rather than the description key"
+        )
+        assert entry in exposed_entity_ids, f"Entity {entry} was registered but not exposed"
+
+    # All of the curated keys present as entities should be exposed; nothing
+    # outside the set should be.
+    for entry in er.async_entries_for_config_entry(entity_reg, setup_integration.entry_id):
+        in_curated = any(entry.unique_id.endswith(f"_{k}") for k in EXPOSE_RECOMMENDED_ENTITY_KEYS)
+        assert (entry.entity_id in exposed_entity_ids) == in_curated, (
+            f"Entity {entry.entity_id} (unique_id={entry.unique_id}) "
+            f"{'should' if in_curated else 'should not'} be exposed"
+        )
+
+    # All exposure calls targeted the default "conversation" assistant.
     for call in expose_mock.call_args_list:
         assert call.args[1] == "conversation"
         assert call.args[3] is True

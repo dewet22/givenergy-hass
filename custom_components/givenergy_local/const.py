@@ -47,6 +47,7 @@ EXPOSE_RECOMMENDED_ENTITY_KEYS = (
     "e_load_day",
     # Inverter output
     "e_inverter_out_total",
-    # Health
-    "inverter_status",
+    # Health — entity description's `key` is "status"; `inverter_status` is
+    # the translation_key, which is not what's in the unique_id suffix.
+    "status",
 )
