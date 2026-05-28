@@ -292,9 +292,14 @@ async def test_expose_recommended_entities_service(hass, mock_client, setup_inte
         )
         assert entry in exposed_entity_ids, f"Entity {entry} was registered but not exposed"
 
-    # All of the curated keys present as entities should be exposed; nothing
-    # outside the set should be.
+    # All of the curated, enabled keys present as entities should be exposed;
+    # nothing outside the set or disabled should be.
     for entry in er.async_entries_for_config_entry(entity_reg, setup_integration.entry_id):
+        if entry.disabled_by is not None:
+            assert entry.entity_id not in exposed_entity_ids, (
+                f"Disabled entity {entry.entity_id} should not have been exposed"
+            )
+            continue
         in_curated = any(entry.unique_id.endswith(f"_{k}") for k in EXPOSE_RECOMMENDED_ENTITY_KEYS)
         assert (entry.entity_id in exposed_entity_ids) == in_curated, (
             f"Entity {entry.entity_id} (unique_id={entry.unique_id}) "

@@ -110,7 +110,9 @@ SERVICE_CAPTURE_FRAMES_SCHEMA = vol.Schema(
 SERVICE_EXPOSE_RECOMMENDED_ENTITIES_SCHEMA = vol.Schema(
     {
         vol.Required("device_id"): cv.string,
-        vol.Optional("assistants", default=["conversation"]): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("assistants", default=["conversation"]): vol.All(
+            cv.ensure_list, vol.Length(min=1), [cv.string]
+        ),
     }
 )
 
@@ -397,6 +399,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             entity_reg = er.async_get(hass)
             matched: list[tuple[str, str]] = []  # (entity_id, display_name)
             for entry in er.async_entries_for_config_entry(entity_reg, target_entry_id):
+                # Disabled entities can't usefully be exposed — they have no
+                # state in the registry for the assistant to consume.
+                if entry.disabled_by is not None:
+                    continue
                 for key in EXPOSE_RECOMMENDED_ENTITY_KEYS:
                     if entry.unique_id.endswith(f"_{key}"):
                         for assistant in assistants:
@@ -410,7 +416,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "the integration may still be initialising"
                 )
 
-            names = ", ".join(name for _, name in matched)
+            names = "\n".join(f"- {name} (`{entity_id}`)" for entity_id, name in matched)
             assistant_list = ", ".join(assistants)
             async_create_notification(
                 hass,
