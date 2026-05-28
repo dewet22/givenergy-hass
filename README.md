@@ -78,13 +78,21 @@ Add the integration via **Settings → Devices & Services → Add Integration �
 | Inverter IP Address | — | Local IP of the inverter's data adapter |
 | Modbus Port | `8899` | Modbus TCP port |
 | Scan Interval | `30` s | How often HA polls for updated values |
-| [Passive mode](#passive-mode) | off | Listen only — use when another Modbus client (e.g. the GivEnergy app) is already polling and this integration should just observe |
+| [Passive mode](#passive-mode) | off | Listen only — use when another local polling client is already driving the inverter and this integration should just observe |
 
 To change any of these later, open the integration's **⋮** menu in **Settings → Devices & Services → GivEnergy Local** and choose **Reconfigure**. The integration reloads automatically when you save.
 
-### Passive mode
+### Running alongside other local polling clients
 
-When enabled, the integration connects to the inverter but does not send any Modbus read requests after the initial connection. Instead, it reads the library's register cache on each scan interval tick. This is useful when you have another client (e.g. GivTCP or a mobile app) already polling the inverter — having multiple clients requesting large register bank reads tend to get the inverter confused by stepping on each other. This is also useful if you are migrating from GivTCP and want to keep both running for the time being.
+Both this integration and other local polling solutions (GivTCP, the GivEnergy app, custom scripts) can run in active mode at the same time without issue. The inverter handles concurrent Modbus clients reliably — earlier reports of polling conflicts were largely a consequence of retry and error-recovery behaviour in the older shared library, not an inverter limitation. Running multiple clients in parallel has been solid in practice, even at faster-than-default poll intervals.
+
+#### GivTCP long-term stats migration
+
+Running both integrations in parallel makes it easy to evaluate a switch without committing: you get a live side-by-side comparison and can cut over at your own pace. A script to migrate your long-term recorder statistics from GivTCP entity IDs to the new ones is in progress — see [`docs/migration-from-givtcp.md`](docs/migration-from-givtcp.md) — so there will be a clear path to carrying your energy history across when you're ready.
+
+#### Passive mode
+
+When enabled, the integration connects to the inverter but sends no Modbus read requests after the initial connection. Instead, it reads the library's register cache on each scan interval tick. This is a secondary option for setups where you'd prefer this integration to observe rather than poll — the main case being a client you can't reconfigure (e.g. the GivEnergy app) where you want to avoid any overlap.
 
 ## Entities
 
@@ -303,7 +311,7 @@ The daily counters reset at midnight; Home Assistant's recorder detects the rese
 
 - **Transient connection drops are normal.** TCP-level timeouts and the occasional connection reset get logged at WARNING level and the next scan tick re-establishes the connection. The `Last Successful Refresh` and `Consecutive Refresh Failures` diagnostic sensors will tell you if something more persistent is going on.
 - **"Register cache unchanged" failures in passive mode** mean no peer client is refreshing the inverter. Switch back to active mode, or start the other client that's supposed to be driving the bus.
-- **Conflicts with another Modbus client** (GivTCP, the GivEnergy app, etc.) — the inverter doesn't always cope well with two clients issuing large reads concurrently. Use [passive mode](#passive-mode).
+- **Conflicts with another Modbus client** — concurrent active polling is generally reliable on current firmware; if you do see persistent connection errors with two clients running, [passive mode](#passive-mode) may help.
 - **Wrong number of battery devices appearing** — battery count is auto-discovered at startup by probing the Modbus bus; there is no manual override. If detection misfires (e.g. a battery was slow to respond), reloading the integration usually fixes it. If the count is consistently wrong, [open an issue](https://github.com/dewet22/givenergy-hass/issues/48) and attach a frame capture (see [Supported inverters](#supported-inverters)).
 
 For anything else, please [open an issue](https://github.com/dewet22/givenergy-hass/issues) with the relevant HA log lines and your inverter model.
