@@ -93,9 +93,8 @@ def _battery_hex(name: str, width: int) -> Callable[[Battery], Any]:
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyCoordinatorSensorDescription(SensorEntityDescription):
     value_fn: Callable[[GivEnergyUpdateCoordinator], Any] = field(default=lambda _: None)
-    attributes_fn: Callable[[GivEnergyUpdateCoordinator], dict[str, Any] | None] = field(
-        default=lambda _: None
-    )
+    # None (not a dummy lambda) so sensors without attributes skip the call entirely.
+    attributes_fn: Callable[[GivEnergyUpdateCoordinator], dict[str, Any] | None] | None = None
 
 
 INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
@@ -914,7 +913,9 @@ def _partial_failure_attributes(
         "last_failed_devices": sorted({f"0x{f.device_address:02x}" for f in failures}),
         "last_failure_count": len(failures),
         "last_failures": [
-            f"0x{f.device_address:02x} {f.request_type} @ {f.base_register}+{f.register_count}"
+            f"0x{f.device_address:02x} "
+            f"{getattr(f.request_type, 'value', f.request_type)} "
+            f"@ {f.base_register}+{f.register_count}"
             for f in failures
         ],
     }
@@ -1092,4 +1093,6 @@ class GivEnergyCoordinatorSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], 
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
+        if self.entity_description.attributes_fn is None:
+            return None
         return self.entity_description.attributes_fn(self.coordinator)
