@@ -11,5 +11,5 @@
   "requirements": [
     "givenergy-modbus>=2.0.6,<2.1"
   ],
-  "version": "1.0.3"
+  "version": "1.0.4"
 }
