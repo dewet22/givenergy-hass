@@ -173,7 +173,8 @@ def mock_client(mock_plant) -> AsyncMock:
     client = AsyncMock()
     client.connected = True
     client.plant = mock_plant
-    client.refresh_plant = AsyncMock(return_value=mock_plant)
+    client.refresh = AsyncMock(return_value=mock_plant)
+    client.load_config = AsyncMock(return_value=mock_plant)
     client.connect = AsyncMock()
     client.detect = AsyncMock()
     client.close = AsyncMock()

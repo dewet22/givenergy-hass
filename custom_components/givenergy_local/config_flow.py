@@ -5,6 +5,7 @@ from typing import Any
 
 import voluptuous as vol
 from givenergy_modbus.client.client import Client
+from givenergy_modbus.exceptions import RefreshPartiallySucceeded
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PORT
 
@@ -94,10 +95,18 @@ class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-
         try:
             await client.connect()
             # detect() resolves the device model and topology before any reads
-            # so refresh_plant() picks the right register layout (single vs.
+            # so refresh() picks the right register layout (single vs.
             # three-phase) from the first request.
             await client.detect()
-            plant = await client.refresh_plant(full_refresh=False)
+            try:
+                plant = await client.refresh()
+            except RefreshPartiallySucceeded as exc:
+                # A connectivity probe only needs to identify the inverter
+                # (device 0x32), which is virtually always among the successful
+                # reads — a partial usually means a peripheral battery/meter
+                # dropped. A usable snapshot is enough here; RefreshFailed (no
+                # data at all) falls through to "cannot_connect" below.
+                plant = exc.plant
             return plant.inverter_serial_number, None
         except Exception:
             _LOGGER.exception("Connection test failed for %s:%s", host, port)

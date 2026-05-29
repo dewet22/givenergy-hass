@@ -1,5 +1,6 @@
 """Tests for the GivEnergy Local config flow."""
 
+from givenergy_modbus.exceptions import RefreshFailed, RefreshPartiallySucceeded
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PORT
 
@@ -50,6 +51,43 @@ async def test_cannot_connect_shows_error(hass, mock_client):
     assert result["errors"] == {"base": "cannot_connect"}
 
 
+async def test_partial_success_during_setup_returns_serial(hass, mock_client, mock_plant):
+    """A partial poll during the connection test still identifies the inverter:
+    the serial (device 0x32) is virtually always among the reads that succeeded."""
+    mock_client.refresh.side_effect = RefreshPartiallySucceeded(
+        "partial",
+        plant=mock_plant,
+        failures=[],
+        cause=ExceptionGroup("reads", [TimeoutError()]),
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], VALID_USER_INPUT)
+    await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert result["title"] == "GivEnergy SA1234G123"
+
+
+async def test_refresh_failed_during_setup_shows_cannot_connect(hass, mock_client):
+    """A total failure (no data at all) during the connection test → cannot_connect."""
+    mock_client.refresh.side_effect = RefreshFailed(
+        "link dead",
+        failures=[],
+        cause=ExceptionGroup("reads", [TimeoutError()]),
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], VALID_USER_INPUT)
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
 async def test_duplicate_entry_aborted(hass, mock_client, mock_config_entry):
     mock_config_entry.add_to_hass(hass)
 
@@ -82,7 +120,8 @@ async def test_reconfigure_updates_settings_without_retesting_connection(
     hass, mock_client, setup_integration
 ):
     """Changing only scan_interval/passive should skip the explicit connection test."""
-    mock_client.refresh_plant.reset_mock()  # ignore the initial setup refresh
+    mock_client.refresh.reset_mock()  # ignore the initial setup refresh
+    mock_client.load_config.reset_mock()
 
     result = await setup_integration.start_reconfigure_flow(hass)
     new_input = {**VALID_USER_INPUT, CONF_SCAN_INTERVAL: 60, CONF_PASSIVE: True}
@@ -94,14 +133,10 @@ async def test_reconfigure_updates_settings_without_retesting_connection(
     assert setup_integration.data[CONF_SCAN_INTERVAL] == 60
     assert setup_integration.data[CONF_PASSIVE] is True
 
-    # The post-reload coordinator calls refresh_plant(full_refresh=True).
-    # _test_connection (used only when host/port changes) calls
-    # refresh_plant(full_refresh=False) — the latter should not appear if
-    # the host didn't change.
-    test_connection_calls = [
-        c for c in mock_client.refresh_plant.call_args_list if c.kwargs.get("full_refresh") is False
-    ]
-    assert test_connection_calls == []
+    # _test_connection (host/port change only) issues a bare refresh() with no
+    # preceding load_config(); the post-reload coordinator always pairs the two
+    # on its first (full) tick. Equal counts ⇒ _test_connection did not run.
+    assert mock_client.refresh.call_count == mock_client.load_config.call_count
 
 
 async def test_reconfigure_with_host_change_succeeds_for_same_inverter(
