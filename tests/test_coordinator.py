@@ -339,6 +339,27 @@ async def test_partial_success_increments_partial_failures_cumulatively(hass, mo
     assert coordinator.total_failures == 0
 
 
+async def test_clean_poll_clears_stale_partial_detail(hass, mock_plant):
+    """After a partial, a later clean poll clears last_partial_failures so the
+    diagnostic stops naming a recovered device — but the cumulative counter stays."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh = AsyncMock(side_effect=[_partial(mock_plant), mock_plant])
+        mock_cls.return_value = client
+        coordinator._client = client
+
+        await coordinator._async_update_data()  # partial — detail populated
+        assert coordinator.last_partial_failures
+        await coordinator._async_update_data()  # clean — detail cleared
+
+    assert coordinator.last_partial_failures == []
+    assert coordinator.partial_failures == 1  # counter is cumulative, retained
+
+
 async def test_partial_on_cold_seed_raises_update_failed(hass, mock_plant):
     """A partial on a cold (re)connect seed (no prior data) must NOT be served —
     it fails so HA retries setup (→ ConfigEntryNotReady) rather than locking in a
@@ -653,7 +674,7 @@ async def test_active_mode_nth_tick_is_full_refresh(hass, mock_plant):
         mock_cls.return_value = client
         coordinator._client = client
 
-        for _ in range(11):  # ticks 0–10
+        for _ in range(11):  # ticks 0-10
             await coordinator._async_update_data()
 
     # load_config on ticks 0 and 10; refresh on all 11.

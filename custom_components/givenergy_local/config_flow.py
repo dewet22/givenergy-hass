@@ -107,7 +107,13 @@ class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-
                 # dropped. A usable snapshot is enough here; RefreshFailed (no
                 # data at all) falls through to "cannot_connect" below.
                 plant = exc.plant
-            return plant.inverter_serial_number, None
+            serial = plant.inverter_serial_number
+            if not serial:
+                # The partial dropped the inverter read itself — no usable
+                # unique ID, so treat it as a failed connection rather than
+                # creating an entry with an empty serial.
+                return "", "cannot_connect"
+            return serial, None
         except Exception:
             _LOGGER.exception("Connection test failed for %s:%s", host, port)
             return "", "cannot_connect"

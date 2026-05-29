@@ -71,6 +71,28 @@ async def test_partial_success_during_setup_returns_serial(hass, mock_client, mo
     assert result["title"] == "GivEnergy SA1234G123"
 
 
+async def test_partial_without_serial_during_setup_shows_cannot_connect(
+    hass, mock_client, mock_plant
+):
+    """If the partial dropped the inverter read itself (no serial), there's no
+    usable unique ID — treat it as cannot_connect rather than a blank entry."""
+    mock_plant.inverter_serial_number = ""
+    mock_client.refresh.side_effect = RefreshPartiallySucceeded(
+        "partial",
+        plant=mock_plant,
+        failures=[],
+        cause=ExceptionGroup("reads", [TimeoutError()]),
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], VALID_USER_INPUT)
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
 async def test_refresh_failed_during_setup_shows_cannot_connect(hass, mock_client):
     """A total failure (no data at all) during the connection test → cannot_connect."""
     mock_client.refresh.side_effect = RefreshFailed(

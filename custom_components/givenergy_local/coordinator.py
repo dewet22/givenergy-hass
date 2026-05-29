@@ -114,6 +114,10 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                 else await self._active_update()
             )
 
+            # A fully clean poll — clear any stale partial-failure detail so the
+            # diagnostic sensor stops naming devices that have since recovered.
+            # (The cumulative partial_failures counter is left untouched.)
+            self.last_partial_failures = []
             self._mark_success(plant)
             return plant
         except RefreshPartiallySucceeded as exc:
