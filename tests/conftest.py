@@ -170,7 +170,21 @@ def mock_plant(mock_inverter, mock_battery) -> MagicMock:
 
 @pytest.fixture
 def mock_client(mock_plant) -> AsyncMock:
-    client = AsyncMock()
+    # spec_set deliberately omits the deprecated refresh_plant() so any lingering
+    # call to it fails fast (AttributeError) rather than silently auto-mocking —
+    # guards the #125 migration against regressions.
+    client = AsyncMock(
+        spec_set=[
+            "connected",
+            "plant",
+            "refresh",
+            "load_config",
+            "connect",
+            "detect",
+            "close",
+            "one_shot_command",
+        ]
+    )
     client.connected = True
     client.plant = mock_plant
     client.refresh = AsyncMock(return_value=mock_plant)
