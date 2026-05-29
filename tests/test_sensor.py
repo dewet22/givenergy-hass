@@ -217,7 +217,7 @@ async def test_diagnostic_sensors_available_during_coordinator_failure(
     await hass.async_block_till_done()
 
     # Make subsequent refreshes time out
-    mock_client.refresh_plant.side_effect = TimeoutError()
+    mock_client.refresh.side_effect = TimeoutError()
     from custom_components.givenergy_local.const import DOMAIN as _DOMAIN
 
     coordinator = hass.data[_DOMAIN][mock_config_entry.entry_id]
@@ -232,3 +232,45 @@ async def test_diagnostic_sensors_available_during_coordinator_failure(
 
     assert hass.states.get(failures_id).state == "1"
     assert hass.states.get(refresh_id).state != "unavailable"
+
+
+async def test_partial_failures_starts_at_zero(hass, setup_integration):
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_partial_failures"))
+    assert state.state == "0"
+
+
+async def test_partial_failures_increments_and_attributes_name_device(
+    hass, mock_client, mock_plant, mock_config_entry
+):
+    """After a partial poll, the sensor increments and its attributes name the
+    device(s) that dropped — the only UI signal of a flaky device, since its
+    entities stay available with stale data."""
+    from givenergy_modbus.exceptions import ReadFailure, RefreshPartiallySucceeded
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # A steady-state partial: battery 0x34's input bank dropped.
+    mock_client.refresh.side_effect = RefreshPartiallySucceeded(
+        "partial",
+        plant=mock_plant,
+        failures=[
+            ReadFailure(
+                device_address=0x34,
+                request_type="ReadInputRegisters",
+                base_register=60,
+                register_count=60,
+            )
+        ],
+        cause=ExceptionGroup("reads", [TimeoutError()]),
+    )
+
+    coordinator = hass.data[DOMAIN][mock_config_entry.entry_id]
+    await coordinator.async_refresh()
+    await hass.async_block_till_done()
+
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_partial_failures"))
+    assert state.state == "1"
+    assert "0x34" in state.attributes["last_failed_devices"]
+    assert state.attributes["last_failure_count"] == 1

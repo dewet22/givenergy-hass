@@ -5,7 +5,12 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
 from givenergy_modbus.client.client import Client
-from givenergy_modbus.exceptions import PlantTopologyMismatch
+from givenergy_modbus.exceptions import (
+    PlantTopologyMismatch,
+    ReadFailure,
+    RefreshFailed,
+    RefreshPartiallySucceeded,
+)
 from givenergy_modbus.model.inverter import SinglePhaseInverter
 from givenergy_modbus.model.inverter_threephase import ThreePhaseInverter
 from givenergy_modbus.model.plant import Plant, PlantCapabilities
@@ -79,6 +84,15 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self.last_successful_refresh: datetime | None = None
         self.consecutive_failures: int = 0
         self.total_failures: int = 0
+        # Cumulative count of polls that returned *some* data but had one or
+        # more register reads fail (RefreshPartiallySucceeded). Distinct from
+        # total_failures (which counts polls that yielded no usable data) so a
+        # flaky single device — e.g. dodgy RS485 wiring to one battery — shows
+        # up here without eroding the hard-failure metrics.
+        self.partial_failures: int = 0
+        # The ReadFailure records from the most recent partial poll, surfaced as
+        # a diagnostic sensor attribute so users can see *which* device dropped.
+        self.last_partial_failures: list[ReadFailure] = []
         self._last_inverter_time: datetime | None = None
         self._unchanged_ticks: int = 0
         self._active_tick: int = 0
@@ -100,38 +114,116 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                 else await self._active_update()
             )
 
-            self._last_inverter_time = plant.inverter.system_time
-            self.last_successful_refresh = dt_util.utcnow()
-            self.consecutive_failures = 0
+            # A fully clean poll — clear any stale partial-failure detail so the
+            # diagnostic sensor stops naming devices that have since recovered.
+            # (The cumulative partial_failures counter is left untouched.)
+            self.last_partial_failures = []
+            self._mark_success(plant)
             return plant
+        except RefreshPartiallySucceeded as exc:
+            if reconnecting:
+                # No reliable per-device fallback on a (re)connect seed: a
+                # half-populated initial plant (the dropped device reads
+                # "unknown") is worse than a clean full retry. detect() already
+                # gated device presence, so a partial seed is most likely a
+                # transient hiccup on a present device. Route through the same
+                # tolerance gate as a timeout — serves last-known data on an
+                # in-process reconnect, or raises UpdateFailed (→
+                # ConfigEntryNotReady) on a cold start so HA retries setup.
+                self._record_failure()
+                return await self._serve_last_known_or_fail("Partial data on (re)connect seed", exc)
+            # Steady state: serve the partial. The dropped device's last-known
+            # register values ride along (frozen) while the rest stay fresh —
+            # this is the behaviour change #125 buys us (one offline battery no
+            # longer discards every other reading for the tick).
+            self._record_partial(exc)
+            self._mark_success(exc.plant)
+            return exc.plant
         except UpdateFailed:
-            self.consecutive_failures += 1
-            self.total_failures += 1
+            self._record_failure()
             raise
-        except TimeoutError:
-            # Keep the client alive — timeouts are transient and the TCP
-            # connection is likely still valid.
-            self.consecutive_failures += 1
-            self.total_failures += 1
-            if self.data is None or self.consecutive_failures >= self.timeout_tolerance:
-                await self._reset_client()
-                raise UpdateFailed(
-                    f"Timed out communicating with inverter "
-                    f"({self.consecutive_failures} consecutive failures)"
+        except RefreshFailed as err:
+            self._record_failure()
+            if self._is_timeout_failure(err):
+                # Every read timed out — treat like the bare-TimeoutError path
+                # below: transient, keep the client and serve last-known data
+                # until the tolerance window is exhausted.
+                return await self._serve_last_known_or_fail(
+                    "Timed out communicating with inverter", err
                 )
-            _LOGGER.warning(
-                "Timed out communicating with inverter (failure %d/%d); serving last known data",
-                self.consecutive_failures,
-                self.timeout_tolerance,
+            await self._reset_client()
+            raise UpdateFailed(f"Error communicating with inverter: {err}") from err
+        except TimeoutError as err:
+            # Defensive: a timeout not wrapped in RefreshFailed. Keep the client
+            # alive — timeouts are transient and the TCP connection is likely
+            # still valid.
+            self._record_failure()
+            return await self._serve_last_known_or_fail(
+                "Timed out communicating with inverter", err
             )
-            return self.data
         except Exception as err:
-            self.consecutive_failures += 1
-            self.total_failures += 1
+            self._record_failure()
             await self._reset_client()
             raise UpdateFailed(
                 f"Error communicating with inverter: {str(err) or type(err).__name__}"
             ) from err
+
+    # ------------------------------------------------------------------
+    # Failure / success bookkeeping
+    # ------------------------------------------------------------------
+
+    def _mark_success(self, plant: Plant) -> None:
+        """Record a tick that yielded usable data (full or partial success)."""
+        self._last_inverter_time = plant.inverter.system_time
+        self.last_successful_refresh = dt_util.utcnow()
+        self.consecutive_failures = 0
+
+    def _record_failure(self) -> None:
+        """Count a poll that yielded no usable data."""
+        self.consecutive_failures += 1
+        self.total_failures += 1
+
+    def _record_partial(self, exc: RefreshPartiallySucceeded) -> None:
+        """Count a degraded-but-usable poll and surface which reads dropped."""
+        self.partial_failures += 1
+        self.last_partial_failures = exc.failures
+        _LOGGER.warning(
+            "Partial refresh: %d register read(s) failed; serving last-known "
+            "values for those banks. Failures: %s",
+            len(exc.failures),
+            exc.failures,
+        )
+
+    def _is_timeout_failure(self, err: RefreshFailed) -> bool:
+        """True if every underlying cause of a RefreshFailed is a timeout.
+
+        Timeout-only failures are treated as transient (tolerance window);
+        anything else resets the client and fails immediately.
+        """
+        cause = err.cause
+        if isinstance(cause, BaseExceptionGroup):
+            _, rest = cause.split(TimeoutError)
+            return rest is None
+        return isinstance(cause, TimeoutError)
+
+    async def _serve_last_known_or_fail(self, message: str, err: BaseException) -> Plant:
+        """Serve last-known data within the tolerance window, else reset and fail.
+
+        Mirrors the long-standing timeout-tolerance behaviour: a transient blip
+        keeps the client and replays `self.data` up to `timeout_tolerance`
+        consecutive failures; past that (or with no data yet) the client is
+        reset and UpdateFailed raised.
+        """
+        if self.data is not None and self.consecutive_failures < self.timeout_tolerance:
+            _LOGGER.warning(
+                "%s (failure %d/%d); serving last known data",
+                message,
+                self.consecutive_failures,
+                self.timeout_tolerance,
+            )
+            return self.data
+        await self._reset_client()
+        raise UpdateFailed(f"{message} ({self.consecutive_failures} consecutive failures)") from err
 
     # ------------------------------------------------------------------
     # Update strategies
@@ -143,12 +235,17 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         Holding registers (config, charge slots, …) are re-read only every
         _full_refresh_every ticks; input registers (real-time data) are read
         every tick.
+
+        Raises RefreshPartiallySucceeded / RefreshFailed straight up to
+        _async_update_data, which owns the seed-vs-steady-state policy (it's the
+        only caller that knows whether this tick is a reconnect seed).
         """
         assert self._client is not None  # _async_update_data ensures this
         full_refresh = self._active_tick % self._full_refresh_every == 0
         self._active_tick += 1
-        await self._client.refresh_plant(full_refresh=full_refresh, retries=self.retries)
-        return self._client.plant
+        if full_refresh:
+            await self._client.load_config(retries=self.retries)
+        return await self._client.refresh(retries=self.retries)
 
     async def _passive_update(self, reconnecting: bool) -> Plant:
         """Seed the cache on (re)connect; on subsequent ticks read the cached plant.
@@ -158,8 +255,8 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         """
         assert self._client is not None  # _async_update_data ensures this
         if reconnecting:
-            await self._client.refresh_plant(full_refresh=True, retries=self.retries)
-            return self._client.plant
+            await self._client.load_config(retries=self.retries)
+            return await self._client.refresh(retries=self.retries)
 
         plant = self._client.plant
         self._check_cache_freshness(plant)
