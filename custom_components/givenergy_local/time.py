@@ -6,6 +6,7 @@ from datetime import time as dt_time
 
 from givenergy_modbus.client import commands
 from givenergy_modbus.model import TimeSlot
+from givenergy_modbus.model.ems import Ems
 from homeassistant.components.time import TimeEntity, TimeEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -111,15 +112,67 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
 )
 
 
+# --- EMS plant-level slots (only created for EMS plants) ---
+
+
+@dataclass(frozen=True, kw_only=True)
+class GivEnergyEmsTimeEntityDescription(TimeEntityDescription):
+    slot_fn: Callable[[Ems], TimeSlot | None] = field(default=lambda _: None)
+    is_start: bool = True
+    # EMS setters bake in the slot index and write just the relevant endpoint;
+    # unlike the inverter setters they need no slot_map.
+    setter_fn: Callable[[dt_time], list] = field(default=lambda _: [])
+
+
+def _slot_getter(attr: str) -> Callable[[Ems], TimeSlot | None]:
+    return lambda ems: getattr(ems, attr)
+
+
+def _endpoint_setter(cmd: Callable[[int, dt_time], list], idx: int) -> Callable[[dt_time], list]:
+    return lambda value: cmd(idx, value)
+
+
+def _ems_time_descriptions() -> tuple[GivEnergyEmsTimeEntityDescription, ...]:
+    """Start/end time entities for EMS charge & discharge slots 1-3."""
+    descriptions: list[GivEnergyEmsTimeEntityDescription] = []
+    for kind in ("charge", "discharge"):
+        endpoints = (
+            ("start", True, getattr(commands, f"set_ems_{kind}_slot_start")),
+            ("end", False, getattr(commands, f"set_ems_{kind}_slot_end")),
+        )
+        for idx in (1, 2, 3):
+            for endpoint, is_start, cmd in endpoints:
+                descriptions.append(
+                    GivEnergyEmsTimeEntityDescription(
+                        key=f"ems_{kind}_slot_{idx}_{endpoint}",
+                        name=f"EMS {kind.title()} Slot {idx} {endpoint.title()}",
+                        slot_fn=_slot_getter(f"{kind}_slot_{idx}"),
+                        is_start=is_start,
+                        setter_fn=_endpoint_setter(cmd, idx),
+                        entity_category=EntityCategory.CONFIG,
+                    )
+                )
+    return tuple(descriptions)
+
+
+EMS_TIME_DESCRIPTIONS: tuple[GivEnergyEmsTimeEntityDescription, ...] = _ems_time_descriptions()
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: GivEnergyUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
+    entities: list[TimeEntity] = [
         GivEnergyTimeEntity(coordinator, description) for description in TIME_DESCRIPTIONS
-    )
+    ]
+    if coordinator.data.ems is not None:
+        entities.extend(
+            GivEnergyEmsTimeEntity(coordinator, description)
+            for description in EMS_TIME_DESCRIPTIONS
+        )
+    async_add_entities(entities)
 
 
 class GivEnergyTimeEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], TimeEntity):
@@ -154,4 +207,41 @@ class GivEnergyTimeEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], TimeEnt
         if self.entity_description.slot_fn(inverter) is None:
             return
         await client.one_shot_command(self.entity_description.setter_fn(value, inverter))
+        await self.coordinator.async_request_refresh()
+
+
+class GivEnergyEmsTimeEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], TimeEntity):
+    """Start/end time control for an EMS plant-level charge/discharge slot."""
+
+    _attr_has_entity_name = True
+    entity_description: GivEnergyEmsTimeEntityDescription
+
+    def __init__(
+        self,
+        coordinator: GivEnergyUpdateCoordinator,
+        description: GivEnergyEmsTimeEntityDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        serial = coordinator.data.inverter_serial_number
+        self._attr_unique_id = f"{serial}_{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, serial)},
+        )
+
+    @property
+    def native_value(self) -> dt_time | None:
+        ems = self.coordinator.data.ems
+        if ems is None:
+            return None
+        slot = self.entity_description.slot_fn(ems)
+        if slot is None:
+            return None
+        return slot.start if self.entity_description.is_start else slot.end
+
+    async def async_set_value(self, value: dt_time) -> None:
+        client = self.coordinator._client
+        if client is None or not client.connected:
+            return
+        await client.one_shot_command(self.entity_description.setter_fn(value))
         await self.coordinator.async_request_refresh()
