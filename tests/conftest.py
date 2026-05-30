@@ -162,6 +162,9 @@ def mock_plant(mock_inverter, mock_battery) -> MagicMock:
     plant.inverter = mock_inverter
     plant.batteries = [mock_battery]
     plant.number_batteries = 1
+    # No EMS by default; the EMS-specific tests override this with a mock Ems so
+    # the EMS scheduling entities are only created for EMS plants.
+    plant.ems = None
     # A real PlantCapabilities — the integration's save-on-success path calls
     # .to_dict() through CapabilitiesCache, which would choke on a MagicMock.
     plant.capabilities = PlantCapabilities(
