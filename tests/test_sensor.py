@@ -27,6 +27,7 @@ def test_enum_value_fns_tolerate_none_attribute():
         "battery_type",
         "battery_calibration_stage",
         "usb_device_inserted",
+        "battery_maintenance_mode",
     ):
         setattr(empty, key, None)
         assert _inverter_desc(key).value_fn(empty) is None, f"{key} value_fn crashed on None"
