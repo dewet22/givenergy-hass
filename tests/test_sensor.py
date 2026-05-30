@@ -17,6 +17,13 @@ def _entity_id(hass, platform: str, unique_id: str) -> str:
     return entity_id
 
 
+def _suggested_precision(hass, unique_id: str) -> int | None:
+    """The sensor's suggested display precision, as stored in the entity registry."""
+    registry = er.async_get(hass)
+    entry = registry.async_get(_entity_id(hass, "sensor", unique_id))
+    return entry.options.get("sensor", {}).get("suggested_display_precision")
+
+
 async def test_expected_sensor_count(hass, setup_integration):
     registry = er.async_get(hass)
     entries = er.async_entries_for_config_entry(registry, setup_integration.entry_id)
@@ -274,3 +281,29 @@ async def test_partial_failures_increments_and_attributes_name_device(
     assert state.state == "1"
     assert "0x34" in state.attributes["last_failed_devices"]
     assert state.attributes["last_failure_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Native display precision (derived from the library's register scaling)
+# ---------------------------------------------------------------------------
+
+
+async def test_native_precision_derived_for_register_backed_sensors(hass, setup_integration):
+    """Register-backed numeric sensors get the decimals implied by their scaling."""
+    assert _suggested_precision(hass, "BT1234A001_v_cell_01") == 3  # milli
+    assert _suggested_precision(hass, "BT1234A001_t_bms_mosfet") == 1  # deci
+    assert _suggested_precision(hass, "BT1234A001_cap_design2") == 2  # uint32 -> centi
+    assert _suggested_precision(hass, "BT1234A001_soc") == 0  # uint16
+
+
+async def test_string_rendered_sensor_has_no_precision(hass, setup_integration):
+    """usb_device_inserted is a uint16 register rendered as a hex string; it must
+    NOT get a display precision (no state_class) or HA would mis-format it."""
+    assert _suggested_precision(hass, "BT1234A001_usb_device_inserted") is None
+
+
+async def test_computed_sensors_use_explicit_precision(hass, setup_integration):
+    """Computed (non-register-backed) sensors pin precision in their descriptor."""
+    assert _suggested_precision(hass, "SA1234G123_e_pv_day") == 1
+    assert _suggested_precision(hass, "SA1234G123_battery_capacity_kwh") == 2
+    assert _suggested_precision(hass, "SA1234G123_p_pv") == 0
