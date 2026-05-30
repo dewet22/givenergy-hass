@@ -5,12 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from givenergy_modbus.model import TimeSlot
+from givenergy_modbus.model.battery import Battery
 from givenergy_modbus.model.inverter import (
     SINGLE_PHASE_SLOTS,
     BatteryPowerMode,
     BatteryType,
     MeterType,
     Model,
+    SinglePhaseInverter,
 )
 from givenergy_modbus.model.plant import PlantCapabilities
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -26,6 +28,9 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 @pytest.fixture
 def mock_inverter() -> MagicMock:
     inv = MagicMock()
+    # Delegate precision_of to the real model classmethod so the display-precision
+    # derivation is exercised against the library's actual register scaling.
+    inv.precision_of = SinglePhaseInverter.precision_of
     inv.status = MagicMock()
     inv.status.name = "NORMAL"
     inv.fault_code = "00000000"
@@ -117,6 +122,7 @@ def mock_inverter() -> MagicMock:
 @pytest.fixture
 def mock_battery() -> MagicMock:
     bat = MagicMock()
+    bat.precision_of = Battery.precision_of
     bat.serial_number = "BT1234A001"
     bat.soc = 85
     bat.v_out = 52.4

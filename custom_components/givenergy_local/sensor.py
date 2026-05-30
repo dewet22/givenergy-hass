@@ -194,6 +194,8 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
+        # Computed (p_pv1 + p_pv2) so not register-backed; watts -> 0 decimals.
+        suggested_display_precision=0,
         value_fn=lambda inv: inv.p_pv(),
     ),
     GivEnergyInverterSensorDescription(
@@ -254,6 +256,8 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
+        # Computed (e_pv1_day + e_pv2_day, each deci-scaled kWh) -> 1 decimal.
+        suggested_display_precision=1,
         value_fn=lambda inv: inv.e_pv_day(),
     ),
     GivEnergyInverterSensorDescription(
@@ -633,6 +637,9 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.HOURS,
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.TOTAL_INCREASING,
+        # Library key is work_time_total_hours (uint32, whole hours); this sensor
+        # reads the alias, so set 0 explicitly rather than deriving.
+        suggested_display_precision=0,
         value_fn=lambda inv: inv.work_time_total,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
@@ -998,6 +1005,25 @@ _MODEL_NAMES: dict[Model, str] = {
 }
 
 
+def _derive_display_precision(description: SensorEntityDescription, model: Any) -> int | None:
+    """Native display precision for a sensor, from the library's register scaling.
+
+    Returns None (leave HA's default) when:
+    - the description already pins a precision — an explicit value always wins;
+    - the sensor has no ``state_class`` — display precision only applies to
+      numeric measurement/total sensors, never to the enum / hex-string /
+      version diagnostics, several of which are register-backed integers that
+      hass deliberately renders as non-numeric strings;
+    - the library has no precision for the attribute (non-numeric register, or a
+      computed value not backed by a single register).
+    """
+    if description.suggested_display_precision is not None:
+        return None
+    if description.state_class is None:
+        return None
+    return model.precision_of(description.key)
+
+
 class GivEnergyInverterSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
     _attr_has_entity_name = True
     entity_description: GivEnergyInverterSensorDescription
@@ -1009,6 +1035,9 @@ class GivEnergyInverterSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Sen
     ) -> None:
         super().__init__(coordinator)
         self.entity_description = description
+        precision = _derive_display_precision(description, coordinator.data.inverter)
+        if precision is not None:
+            self._attr_suggested_display_precision = precision
         serial = coordinator.data.inverter_serial_number
         self._attr_unique_id = f"{serial}_{description.key}"
         self._attr_device_info = DeviceInfo(
@@ -1041,6 +1070,9 @@ class GivEnergyBatterySensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Sens
         self.entity_description = description
         self._battery_index = battery_index
         battery = coordinator.data.batteries[battery_index]
+        precision = _derive_display_precision(description, battery)
+        if precision is not None:
+            self._attr_suggested_display_precision = precision
         serial = battery.serial_number
         self._attr_unique_id = f"{serial}_{description.key}"
         self._attr_device_info = DeviceInfo(
