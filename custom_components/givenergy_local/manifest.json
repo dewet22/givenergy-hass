@@ -1,6 +1,10 @@
 {
   "domain": "givenergy_local",
   "name": "GivEnergy Local",
+  "after_dependencies": [
+    "frontend",
+    "http"
+  ],
   "codeowners": [
     "@dewet22"
   ],

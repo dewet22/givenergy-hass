@@ -6,7 +6,9 @@ from pathlib import Path
 import voluptuous as vol
 from givenergy_modbus.client import commands
 from givenergy_modbus.model.plant import PlantCapabilities
+from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.homeassistant.exposed_entities import async_expose_entity
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.persistent_notification import (
     async_create as async_create_notification,
 )
@@ -44,6 +46,14 @@ _LOGGER = logging.getLogger(__name__)
 
 _DASHBOARD_STORAGE_KEY = f"{DOMAIN}.dashboard"
 _DASHBOARD_STORAGE_VERSION = 1
+
+# Bundled cell-balance heatmap card, served from this integration's package and
+# auto-loaded on the frontend so the generated dashboard's custom:ge-cell-heatmap
+# resolves without a manual HACS/resource install. Bump _CARD_VERSION whenever
+# the JS changes, to bust the browser cache.
+_CARD_FILENAME = "ge-cell-heatmap.js"
+_CARD_URL = f"/{DOMAIN}/{_CARD_FILENAME}"
+_CARD_VERSION = "2"
 
 # Per-config-entry topology cache. PlantCapabilities is persisted as
 # `to_dict()` directly (no envelope) following HA Core's Store convention —
@@ -149,7 +159,63 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+async def _async_register_frontend_card(hass: HomeAssistant) -> None:
+    """Serve and auto-load the bundled cell-heatmap card (once per instance).
+
+    The card module ships inside this integration's ``www/`` dir; we expose it
+    at a stable URL and register it as an extra frontend module so the generated
+    dashboard's ``custom:ge-cell-heatmap`` resolves on any dashboard without a
+    manual HACS/resource install. Guarded so repeat config entries don't
+    re-register the static path (which raises on a duplicate).
+    """
+    data = hass.data.setdefault(DOMAIN, {})
+    if data.get("_frontend_registered"):
+        return
+    if hass.http is None:
+        # http isn't initialised (e.g. the test harness has no web server). In
+        # production it's a bootstrap dependency and always present, so this only
+        # skips where there is nothing to serve from anyway.
+        return
+    card_path = Path(__file__).parent / "www" / _CARD_FILENAME
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(_CARD_URL, str(card_path), False)]
+    )
+    add_extra_js_url(hass, f"{_CARD_URL}?v={_CARD_VERSION}")
+    data["_frontend_registered"] = True
+
+
+# External HACS cards the generated dashboard depends on (the bundled
+# ge-cell-heatmap is served by us and needs no check). Keep in sync with the
+# custom: cards emitted in dashboard.py.
+_REQUIRED_HACS_CARDS = ("apexcharts-card", "power-flow-card-plus")
+
+
+async def _missing_dashboard_cards(hass: HomeAssistant) -> list[str]:
+    """Best-effort list of required HACS cards with no registered Lovelace resource.
+
+    Returns [] when all are present *or* when the resource registry can't be
+    read — we warn only on a confident miss, never cry wolf. Only storage-mode
+    resources are enumerable; YAML-mode users register resources in
+    configuration.yaml and won't appear here, so the warning is advisory.
+    """
+    try:
+        resources = getattr(hass.data.get("lovelace"), "resources", None)
+        if resources is None:
+            return []
+        items = resources.async_items()
+        if not items and hasattr(resources, "async_load"):
+            await resources.async_load()
+            items = resources.async_items()
+        urls = " ".join(str(item.get("url", "")) for item in items)
+    except Exception as exc:  # noqa: BLE001 - advisory check must never break generation
+        _LOGGER.debug("Could not read Lovelace resources for pre-flight check: %s", exc)
+        return []
+    return [card for card in _REQUIRED_HACS_CARDS if card not in urls]
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    await _async_register_frontend_card(hass)
+
     # Persisted topology lets the coordinator skip the cold-detect sweep on
     # most reconnects/restarts. Client.detect(prior=...) accepts the cached
     # topology as a hint and only re-probes slots the prior asserts non-empty;
@@ -252,6 +318,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             from .dashboard import generate_dashboard
 
             max_power_kw = call.data["max_power_kw"]
+            missing = await _missing_dashboard_cards(hass)
+            warning = ""
+            if missing:
+                warning = (
+                    "\n\n**Note:** these cards the dashboard needs don't appear to be "
+                    "installed — affected cards will show \"Custom element doesn't "
+                    'exist" until you add them via **HACS → Frontend**:\n'
+                    + "\n".join(f"- `{card}`" for card in missing)
+                    + "\n\n(If you register Lovelace resources via YAML, ignore this.)"
+                )
             for coordinator in hass.data.get(DOMAIN, {}).values():
                 if coordinator.data is None:
                     continue
@@ -272,7 +348,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         "message": (
                             f"Dashboard ready — [download YAML]({url})\n\n"
                             "Go to **Settings → Dashboards → Add Dashboard** "
-                            "and paste the contents into the raw config editor."
+                            "and paste the contents into the raw config editor." + warning
                         ),
                         "notification_id": f"givenergy_dashboard_{inv}",
                     },
