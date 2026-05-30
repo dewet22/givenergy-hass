@@ -105,7 +105,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENUM,
         options=[s.name.lower() for s in Status],
         translation_key="inverter_status",
-        value_fn=lambda inv: inv.status.name.lower(),
+        # inv.status can be None while the library serves an empty model during
+        # partial / pre-first-poll windows (givenergy-modbus's .inverter accessor
+        # returns an empty model rather than raising); guard like the other enums.
+        value_fn=lambda inv: inv.status.name.lower() if inv.status is not None else None,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(

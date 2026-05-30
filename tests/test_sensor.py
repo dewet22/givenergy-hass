@@ -1,5 +1,7 @@
 """Tests for the GivEnergy Local sensor platform."""
 
+from unittest.mock import MagicMock
+
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.givenergy_local.const import DOMAIN
@@ -8,6 +10,34 @@ from custom_components.givenergy_local.sensor import (
     COORDINATOR_SENSORS,
     INVERTER_SENSORS,
 )
+
+
+def _inverter_desc(key: str):
+    return next(d for d in INVERTER_SENSORS if d.key == key)
+
+
+def test_enum_value_fns_tolerate_none_attribute():
+    """value_fns reading `.name` off an enum attribute must return None, not crash,
+    when the attribute is None — the library serves an empty model (all attrs None)
+    during partial / pre-first-poll windows (issue #52)."""
+    empty = MagicMock()
+    for key in (
+        "status",
+        "meter_type",
+        "battery_type",
+        "battery_calibration_stage",
+        "usb_device_inserted",
+        "battery_maintenance_mode",
+    ):
+        setattr(empty, key, None)
+        assert _inverter_desc(key).value_fn(empty) is None, f"{key} value_fn crashed on None"
+
+
+def test_status_value_fn_renders_when_present():
+    """Sanity: the guarded status value_fn still renders a real status."""
+    inv = MagicMock()
+    inv.status.name = "NORMAL"
+    assert _inverter_desc("status").value_fn(inv) == "normal"
 
 
 def _entity_id(hass, platform: str, unique_id: str) -> str:
