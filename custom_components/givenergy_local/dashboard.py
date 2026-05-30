@@ -2,10 +2,79 @@
 
 from __future__ import annotations
 
+import textwrap
+
+import yaml
+
 # Increment whenever the generated YAML layout changes in a meaningful way.
 # __init__.py compares this against the last-generated version stored in HA's
 # persistent Store and raises a Repairs issue when they diverge.
-DASHBOARD_VERSION = 3
+DASHBOARD_VERSION = 4
+
+
+class _NoAliasDumper(yaml.SafeDumper):
+    """Expand repeated nodes inline rather than emitting YAML anchors/aliases.
+
+    The Battery Health view reuses the same colour and JS-filter strings across
+    dozens of series; without this, PyYAML would replace the repeats with ``*id``
+    references — valid YAML, but unreadable in a file users may inspect or edit.
+    """
+
+    def ignore_aliases(self, data: object) -> bool:
+        return True
+
+
+# Battery Health palettes. Pack-identity colours (voltage + SoC traces) avoid
+# the red/amber of the danger bands and the teal/purple of the temperature
+# traces; the temperature palette is parallel (one hue per pack) so a pack's
+# temperature reads as a distinct metric from its voltage. Indexed modulo length
+# so 7+ packs cycle rather than crash.
+_PACK_COLOURS = ("#1e88e5", "#fb8c00", "#43a047", "#6d4c41", "#3949ab", "#c0ca33")
+_TEMP_COLOURS = ("#00897b", "#8e24aa", "#d81b60", "#00838f", "#7cb342", "#5e35b1")
+
+# Reject physically-impossible single-sample reads (dongle garbage, see
+# givenergy-modbus#78) so a stray 0 V / 6.5 V / 0 °C spike becomes a gap instead
+# of wrecking the fixed y-scale. A debounced alert is the real fix; this is the
+# chart-readability stopgap until the library filters them upstream.
+# parseFloat (not Number) is deliberate: Number(null) and Number('') are 0,
+# which is *inside* the temp/power ranges, so a blank/unknown state would plot a
+# spurious 0; parseFloat yields NaN for those and falls through to a gap.
+_VOLT_FILTER = "const v = parseFloat(x); return (!isNaN(v) && v > 2.0 && v < 4.0) ? v : null;"
+_TEMP_FILTER = "const v = parseFloat(x); return (!isNaN(v) && v > -40 && v < 100) ? v : null;"
+_POWER_FILTER = "const v = parseFloat(x); return (!isNaN(v) && v > -20000 && v < 20000) ? v : null;"
+
+# The BMS samples one thermistor per 4-cell group.
+_TEMP_GROUPS = ((1, 4), (5, 8), (9, 12), (13, 16))
+
+
+def _health_annotations() -> list[dict]:
+    """LFP warn bands, shared by the voltage (left) and temperature (right) axes.
+
+    The right axis is scaled so 3.00 V <-> 10 °C and 3.50 V <-> 45 °C coincide,
+    so the single amber band is meaningful for both metrics at once.
+    """
+    amber = "#f9a825"
+
+    def warn_line(y: float, text: str) -> dict:
+        return {
+            "y": y,
+            "borderColor": amber,
+            "strokeDashArray": 0,
+            "label": {
+                "text": text,
+                "position": "left",
+                "textAnchor": "start",
+                "borderColor": amber,
+                "style": {"color": "#000", "background": amber},
+            },
+        }
+
+    return [
+        {"y": 3.5, "y2": 3.6, "fillColor": amber, "opacity": 0.14},
+        {"y": 2.9, "y2": 3.0, "fillColor": amber, "opacity": 0.14},
+        warn_line(3.5, "warn · 3.50 V / 45 °C"),
+        warn_line(3.0, "warn · 3.00 V / 10 °C"),
+    ]
 
 
 def generate_dashboard(inv: str, bats: list[str], max_power_kw: int = 10) -> str:
@@ -23,6 +92,9 @@ def generate_dashboard(inv: str, bats: list[str], max_power_kw: int = 10) -> str
             _overview_view(inv, max_power_kw),
             _energy_view(inv),
             _battery_view(bats),
+            # Skip the cross-pack health view on inverter-only installs — the
+            # heatmap card rejects an empty battery list.
+            *([_battery_health_view(inv, bats)] if bats else []),
             _controls_view(inv),
             _diagnostics_view(inv, max_power_kw),
         ]
@@ -36,8 +108,9 @@ def generate_dashboard(inv: str, bats: list[str], max_power_kw: int = 10) -> str
         f"#\n"
         f"# Required custom cards (install via HACS → Frontend):\n"
         f"#   - power-flow-card-plus  (flixlix/power-flow-card-plus)\n"
-        f"#   - mini-graph-card  (kalkih/mini-graph-card)\n"
         f"#   - apexcharts-card  (RomRider/apexcharts-card)\n"
+        f"# The Battery Health view's cell-balance heatmap (custom:ge-cell-heatmap) is\n"
+        f"# bundled with this integration and served automatically — no install needed.\n"
         f"\n"
         f"title: GivEnergy\n"
         f"views:\n"
@@ -228,7 +301,6 @@ def _battery_section(serial: str) -> str:
             ("cell_count", "Cell Count"),
         ],
     )
-    cells = _bat_entity_rows(serial, [(f"cell_{i}_voltage", f"Cell {i}") for i in range(1, 17)])
     temps = _bat_entity_rows(
         serial,
         [
@@ -272,11 +344,6 @@ def _battery_section(serial: str) -> str:
 {pack}
 
           - type: entities
-            title: Cell Voltages
-            entities:
-{cells}
-
-          - type: entities
             title: Cell Temperatures
             entities:
 {temps}
@@ -286,6 +353,169 @@ def _battery_section(serial: str) -> str:
             entities:
 {diagnostics}
 """
+
+
+def _battery_health_view(inv: str, bats: list[str]) -> str:
+    """Plant-level cell diagnostics: balance heatmap + cell/temp & power/SoC charts.
+
+    Cross-pack by nature (the heatmap and line charts span every pack), so this
+    is its own ``sections`` view rather than per-battery sections. It depends on
+    the bundled ``custom:ge-cell-heatmap`` card (served automatically by this
+    integration) plus ``apexcharts-card``. Each card is given full width via
+    ``grid_options`` since the time-series read best wide.
+
+    Built as Python dicts and serialised with PyYAML — the apexcharts cards carry
+    40+ series with quoting-sensitive JS transforms, which hand-written YAML
+    f-strings would mangle.
+    """
+    volt_series: list[dict] = []
+    temp_series: list[dict] = []
+    soc_series: list[dict] = []
+    for index, serial in enumerate(bats):
+        # Pack ordinal (B1, B2, ...) keeps labels unique and matches the heatmap's
+        # 1..N pack numbering; serials are too long for tooltips and collide when
+        # packs share a model prefix.
+        tag = f"B{index + 1}"
+        pack_colour = _PACK_COLOURS[index % len(_PACK_COLOURS)]
+        temp_colour = _TEMP_COLOURS[index % len(_TEMP_COLOURS)]
+        for cell in range(1, 17):
+            volt_series.append(
+                {
+                    "entity": f"sensor.givenergy_battery_{serial}_cell_{cell}_voltage",
+                    "name": f"{tag} {cell}",
+                    "color": pack_colour,
+                    "stroke_width": 1,
+                    "yaxis_id": "v",
+                    "transform": _VOLT_FILTER,
+                }
+            )
+        for lo, hi in _TEMP_GROUPS:
+            temp_series.append(
+                {
+                    "entity": f"sensor.givenergy_battery_{serial}_cells_{lo}_{hi}_temperature",
+                    "name": f"{tag} T{lo}-{hi}",
+                    "color": temp_colour,
+                    "stroke_width": 1,
+                    "yaxis_id": "temp",
+                    "transform": _TEMP_FILTER,
+                }
+            )
+        soc_series.append(
+            {
+                "entity": f"sensor.givenergy_battery_{serial}_soc",
+                "name": f"{tag} SoC",
+                "color": pack_colour,
+                "stroke_width": 1,
+                "yaxis_id": "soc",
+            }
+        )
+
+    note = {
+        "type": "markdown",
+        "content": (
+            "## Battery health\n"
+            "Cross-pack cell diagnostics. **Heatmap**: each cell coloured by its "
+            "mV deviation from its own pack's mean (imbalance shows at any charge "
+            "level). **Cell voltages + temperatures**: every cell (left) with "
+            "cell-group temperatures (right) on a shared warn band. **Power + "
+            "SoC**: the charge/discharge rate driving each pack's state of charge. "
+            "Implausible single-sample reads are filtered to gaps."
+        ),
+    }
+    heatmap = {
+        "type": "custom:ge-cell-heatmap",
+        "title": "Cell balance — deviation from pack mean",
+        "batteries": list(bats),
+    }
+    cell_chart = {
+        "type": "custom:apexcharts-card",
+        "header": {
+            "show": True,
+            "title": (
+                "Cell voltages (left, V) + cell-group temps (right, °C — warn bands shared) — 24h"
+            ),
+        },
+        "graph_span": "24h",
+        "chart_type": "line",
+        "yaxis": [
+            {"id": "v", "min": 2.9, "max": 3.6, "decimals": 2},
+            {"id": "temp", "opposite": True, "min": 3, "max": 52, "decimals": 0},
+        ],
+        "apex_config": {
+            "legend": {"show": False},
+            "annotations": {"yaxis": _health_annotations()},
+            "chart": {"height": 330},
+        },
+        "series": volt_series + temp_series,
+    }
+    power_chart = {
+        "type": "custom:apexcharts-card",
+        "header": {
+            "show": True,
+            "title": "Battery power (left, W, 2-min avg) + pack SoC (right) — 24h",
+        },
+        "graph_span": "24h",
+        "chart_type": "line",
+        "apex_config": {
+            "legend": {"show": False},
+            "annotations": {
+                "yaxis": [
+                    {
+                        "y": 0,
+                        "borderColor": "#616161",
+                        "strokeDashArray": 3,
+                        "label": {
+                            "text": "0 W (idle)",
+                            "position": "left",
+                            "textAnchor": "start",
+                            "style": {"color": "#000", "background": "#e0e0e0"},
+                        },
+                    }
+                ]
+            },
+            "chart": {"height": 330},
+        },
+        "series": [
+            {
+                "entity": f"sensor.givenergy_inverter_{inv}_battery_power",
+                "name": "Battery power",
+                "color": "#8e24aa",
+                "stroke_width": 1,
+                "transform": _POWER_FILTER,
+                "yaxis_id": "w",
+                "group_by": {"duration": "2m", "func": "avg"},
+            },
+            *soc_series,
+        ],
+        "yaxis": [
+            {"id": "w", "decimals": 0},
+            {"id": "soc", "opposite": True, "min": 0, "max": 100, "decimals": 0},
+        ],
+    }
+
+    cards: list[dict] = [note, heatmap, cell_chart, power_chart]
+    for card in cards:
+        card["grid_options"] = {"columns": "full"}
+
+    view = {
+        "title": "Battery Health",
+        "path": "battery-health",
+        "type": "sections",
+        "icon": "mdi:heart-pulse",
+        "sections": [{"type": "grid", "cards": cards}],
+    }
+
+    body = yaml.dump(
+        [view],
+        Dumper=_NoAliasDumper,
+        sort_keys=False,
+        allow_unicode=True,
+        default_flow_style=False,
+        indent=2,
+        width=10**9,
+    )
+    header = "  # ── Battery Health ──────────────────────────────────────────────────────────\n"
+    return header + textwrap.indent(body, "  ").rstrip("\n")
 
 
 def _controls_view(inv: str) -> str:

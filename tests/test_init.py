@@ -1,6 +1,6 @@
 """Tests for integration setup, unload, and config-entry migration."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from givenergy_modbus.exceptions import PlantTopologyMismatch
 from givenergy_modbus.model.inverter import Model
@@ -11,6 +11,12 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.givenergy_local import (
+    _CARD_URL,
+    _CARD_VERSION,
+    _async_register_frontend_card,
+    _missing_dashboard_cards,
+)
 from custom_components.givenergy_local.const import (
     CONF_RETRIES,
     CONF_TIMEOUT_TOLERANCE,
@@ -19,6 +25,71 @@ from custom_components.givenergy_local.const import (
     SERVICE_EXPOSE_RECOMMENDED_ENTITIES,
     SERVICE_REDETECT_PLANT,
 )
+
+
+def _hass_with_resources(urls: list[str]) -> MagicMock:
+    hass = MagicMock()
+    resources = MagicMock()
+    resources.async_items = MagicMock(return_value=[{"url": u} for u in urls])
+    hass.data = {"lovelace": MagicMock(resources=resources)}
+    return hass
+
+
+async def test_missing_dashboard_cards_flags_absent_only():
+    hass = _hass_with_resources(["/hacsfiles/apexcharts-card/apexcharts-card.js"])
+    assert await _missing_dashboard_cards(hass) == ["power-flow-card-plus"]
+
+
+async def test_missing_dashboard_cards_empty_when_all_present():
+    hass = _hass_with_resources(
+        [
+            "/hacsfiles/apexcharts-card/apexcharts-card.js",
+            "/hacsfiles/power-flow-card-plus/power-flow-card-plus.js",
+        ]
+    )
+    assert await _missing_dashboard_cards(hass) == []
+
+
+async def test_missing_dashboard_cards_silent_when_registry_absent():
+    hass = MagicMock()
+    hass.data = {}  # no lovelace data at all
+    assert await _missing_dashboard_cards(hass) == []
+
+
+async def test_missing_dashboard_cards_swallows_registry_errors():
+    hass = MagicMock()
+    resources = MagicMock()
+    resources.async_items = MagicMock(side_effect=RuntimeError("boom"))
+    hass.data = {"lovelace": MagicMock(resources=resources)}
+    assert await _missing_dashboard_cards(hass) == []
+
+
+async def test_frontend_card_served_and_autoloaded_once():
+    """The bundled heatmap card is served + auto-loaded, exactly once."""
+    hass = MagicMock()
+    hass.data = {}
+    hass.http.async_register_static_paths = AsyncMock()
+
+    with patch("custom_components.givenergy_local.add_extra_js_url") as add_js:
+        await _async_register_frontend_card(hass)
+        await _async_register_frontend_card(hass)  # idempotent: must no-op
+
+    hass.http.async_register_static_paths.assert_awaited_once()
+    (paths,) = hass.http.async_register_static_paths.call_args[0]
+    assert paths[0].url_path == _CARD_URL
+    add_js.assert_called_once_with(hass, f"{_CARD_URL}?v={_CARD_VERSION}")
+
+
+async def test_frontend_card_skipped_when_http_unavailable():
+    """No http server (minimal env / tests) -> skip cleanly, never raise."""
+    hass = MagicMock()
+    hass.data = {}
+    hass.http = None
+
+    with patch("custom_components.givenergy_local.add_extra_js_url") as add_js:
+        await _async_register_frontend_card(hass)
+
+    add_js.assert_not_called()
 
 
 async def test_migrate_v1_entry_strips_retries_and_tolerance(hass, mock_client):
