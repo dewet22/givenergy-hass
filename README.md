@@ -61,6 +61,15 @@ Or if that doesn't work:
 2. Add `https://github.com/dewet22/givenergy-hass` and select category **Integration**
 3. Install **GivEnergy Local** and restart Home Assistant
 
+### Installing a beta / pre-release via HACS
+
+New features often ship as a pre-release (e.g. `v1.1.0rc4`) before a stable release. To install one:
+
+1. Open **GivEnergy Local** in HACS, then the **⋮ menu (top-right) → Redownload**
+2. Expand **"Need a different version?"**
+3. Pick the pre-release from the **Release** dropdown (they're tagged with a **pre-release** badge)
+4. **Download**, then **restart Home Assistant** (custom-component changes only apply after a restart)
+
 ### Manual
 
 1. Download [`givenergy_local.zip`](https://github.com/dewet22/givenergy-hass/releases/latest/download/givenergy_local.zip) from the latest release
