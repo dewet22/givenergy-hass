@@ -35,6 +35,12 @@ _LOGGER = logging.getLogger(__name__)
 # so polling them every tick is wasteful.
 _FULL_REFRESH_INTERVAL = 300  # seconds (~5 minutes)
 
+# During a sustained run of partial polls, re-emit the partial warning at this
+# cadence (in polls) instead of every cycle. The first partial of a run always
+# warns; the in-between ones drop to DEBUG so a flaky/contended plant doesn't
+# flood the log. The cumulative partial_failures counter/sensor is unaffected.
+_PARTIAL_LOG_EVERY = 20
+
 
 class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
     """Wraps a long-lived Modbus Client, polling the inverter on a fixed interval.
@@ -93,6 +99,9 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         # The ReadFailure records from the most recent partial poll, surfaced as
         # a diagnostic sensor attribute so users can see *which* device dropped.
         self.last_partial_failures: list[ReadFailure] = []
+        # Length of the current unbroken run of partial polls, used only to
+        # throttle the partial log (see _record_partial). Reset by a clean poll.
+        self._consecutive_partials: int = 0
         self._last_inverter_time: datetime | None = None
         self._unchanged_ticks: int = 0
         self._active_tick: int = 0
@@ -115,9 +124,11 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             )
 
             # A fully clean poll — clear any stale partial-failure detail so the
-            # diagnostic sensor stops naming devices that have since recovered.
+            # diagnostic sensor stops naming devices that have since recovered,
+            # and end the partial run so the next one warns afresh.
             # (The cumulative partial_failures counter is left untouched.)
             self.last_partial_failures = []
+            self._consecutive_partials = 0
             self._mark_success(plant)
             return plant
         except RefreshPartiallySucceeded as exc:
@@ -184,15 +195,38 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self.total_failures += 1
 
     def _record_partial(self, exc: RefreshPartiallySucceeded) -> None:
-        """Count a degraded-but-usable poll and surface which reads dropped."""
+        """Count a degraded-but-usable poll and surface which reads dropped.
+
+        Partials are expected on flaky/contended plants (device-level dongle
+        garbage, multi-client contention), so the per-poll log is throttled:
+        the first partial of a run warns, a sustained run re-warns every
+        ``_PARTIAL_LOG_EVERY`` polls, and the rest drop to DEBUG. The cumulative
+        ``partial_failures`` counter and the diagnostic sensor are unaffected.
+        """
         self.partial_failures += 1
         self.last_partial_failures = exc.failures
-        _LOGGER.warning(
-            "Partial refresh: %d register read(s) failed; serving last-known "
-            "values for those banks. Failures: %s",
-            len(exc.failures),
-            exc.failures,
-        )
+        self._consecutive_partials += 1
+        if self._consecutive_partials == 1:
+            _LOGGER.warning(
+                "Partial refresh: %d register read(s) failed; serving last-known "
+                "values for those banks (further partials this run at debug). "
+                "Failures: %s",
+                len(exc.failures),
+                exc.failures,
+            )
+        elif self._consecutive_partials % _PARTIAL_LOG_EVERY == 0:
+            _LOGGER.warning(
+                "Partial refresh still occurring (%d consecutive polls); serving "
+                "last-known values. Failures: %s",
+                self._consecutive_partials,
+                exc.failures,
+            )
+        else:
+            _LOGGER.debug(
+                "Partial refresh: %d register read(s) failed; serving last-known. Failures: %s",
+                len(exc.failures),
+                exc.failures,
+            )
 
     def _is_timeout_failure(self, err: RefreshFailed) -> bool:
         """True if every underlying cause of a RefreshFailed is a timeout.
