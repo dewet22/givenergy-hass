@@ -20,6 +20,7 @@ SERVICE_GENERATE_DASHBOARD = "generate_dashboard"
 SERVICE_CAPTURE_FRAMES = "capture_frames"
 SERVICE_REDETECT_PLANT = "redetect_plant"
 SERVICE_EXPOSE_RECOMMENDED_ENTITIES = "expose_recommended_entities"
+SERVICE_SET_SYSTEM_DATETIME = "set_system_datetime"
 
 # Curated headline entities for the expose_recommended_entities service.
 # Each value is an entity-description `key` (the suffix portion of unique_id).

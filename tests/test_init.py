@@ -24,6 +24,7 @@ from custom_components.givenergy_local.const import (
     EXPOSE_RECOMMENDED_ENTITY_KEYS,
     SERVICE_EXPOSE_RECOMMENDED_ENTITIES,
     SERVICE_REDETECT_PLANT,
+    SERVICE_SET_SYSTEM_DATETIME,
 )
 
 
@@ -194,6 +195,21 @@ async def test_redetect_plant_service_clears_cache_and_reloads(
     store_factory.assert_called_with(hass, setup_integration.entry_id)
     fake_store.async_remove.assert_awaited_once()
     reload_mock.assert_called_with(setup_integration.entry_id)
+
+
+async def test_set_system_datetime_service_sends_command(hass, mock_client, setup_integration):
+    """The set_system_datetime service writes the inverter clock for the device."""
+    device_reg = dr.async_get(hass)
+    inverter_device = next(
+        d for d in device_reg.devices.values() if setup_integration.entry_id in d.config_entries
+    )
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SYSTEM_DATETIME,
+        {"device_id": inverter_device.id},
+        blocking=True,
+    )
+    mock_client.one_shot_command.assert_called_once()
 
 
 async def test_topology_mismatch_persists_actual_and_raises_repairs_issue(

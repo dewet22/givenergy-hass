@@ -27,6 +27,21 @@ calibrate_battery_soc:
         device:
           integration: givenergy_local
 
+set_system_datetime:
+  name: Set inverter date & time
+  description: >
+    Sets the GivEnergy inverter's internal clock to Home Assistant's current
+    local time. Useful if the inverter's clock has drifted — it affects
+    charge/discharge slot scheduling.
+  fields:
+    device_id:
+      name: Device
+      description: The GivEnergy inverter whose clock to set.
+      required: true
+      selector:
+        device:
+          integration: givenergy_local
+
 capture_frames:
   name: Capture debug frames
   description: >
