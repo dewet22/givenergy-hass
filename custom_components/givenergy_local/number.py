@@ -84,6 +84,18 @@ NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
         set_value_cmd=lambda v: commands.set_battery_power_reserve(int(v)),
         entity_category=EntityCategory.CONFIG,
     ),
+    GivEnergyNumberEntityDescription(
+        key="active_power_rate",
+        name="Inverter Max Output Active Power",
+        native_unit_of_measurement=PERCENTAGE,
+        native_min_value=0,
+        native_max_value=100,
+        native_step=1,
+        mode=NumberMode.BOX,
+        value_fn=lambda inv: inv.active_power_rate,
+        set_value_cmd=lambda v: commands.set_active_power_rate(int(v)),
+        entity_category=EntityCategory.CONFIG,
+    ),
 )
 
 
@@ -105,9 +117,9 @@ def _target_setter(cmd: Callable[[int, int], list], idx: int) -> Callable[[float
 
 
 def _ems_number_descriptions() -> tuple[GivEnergyEmsNumberEntityDescription, ...]:
-    """Per-slot SoC target controls for EMS charge & discharge slots 1-3."""
+    """Per-slot SoC target controls for EMS charge, discharge & export slots 1-3."""
     descriptions: list[GivEnergyEmsNumberEntityDescription] = []
-    for kind in ("charge", "discharge"):
+    for kind in ("charge", "discharge", "export"):
         cmd = getattr(commands, f"set_ems_{kind}_target_soc")
         for idx in (1, 2, 3):
             descriptions.append(
