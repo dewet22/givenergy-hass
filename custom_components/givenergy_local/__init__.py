@@ -21,6 +21,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_PASSIVE,
@@ -38,6 +39,7 @@ from .const import (
     SERVICE_GENERATE_DASHBOARD,
     SERVICE_REBOOT_INVERTER,
     SERVICE_REDETECT_PLANT,
+    SERVICE_SET_SYSTEM_DATETIME,
 )
 from .coordinator import GivEnergyUpdateCoordinator
 from .dashboard import DASHBOARD_VERSION
@@ -314,6 +316,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
             await c._client.one_shot_command(commands.set_calibrate_battery_soc())
 
+        async def handle_set_system_datetime(call: ServiceCall) -> None:
+            c = _coordinator_for_device(hass, call.data["device_id"])
+            if c is None or c._client is None or not c._client.connected:
+                raise HomeAssistantError(
+                    f"GivEnergy inverter for device {call.data['device_id']!r} "
+                    "is not currently connected"
+                )
+            # Sync the inverter's clock to Home Assistant's current local time.
+            await c._client.one_shot_command(commands.set_system_date_time(dt_util.now()))
+
         async def handle_generate_dashboard(call: ServiceCall) -> None:
             from .dashboard import generate_dashboard
 
@@ -417,6 +429,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             DOMAIN,
             SERVICE_CALIBRATE_BATTERY_SOC,
             handle_calibrate_battery_soc,
+            SERVICE_DEVICE_SCHEMA,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_SYSTEM_DATETIME,
+            handle_set_system_datetime,
             SERVICE_DEVICE_SCHEMA,
         )
         hass.services.async_register(
@@ -537,6 +555,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.data.get(DOMAIN):
         hass.services.async_remove(DOMAIN, SERVICE_REBOOT_INVERTER)
         hass.services.async_remove(DOMAIN, SERVICE_CALIBRATE_BATTERY_SOC)
+        hass.services.async_remove(DOMAIN, SERVICE_SET_SYSTEM_DATETIME)
         hass.services.async_remove(DOMAIN, SERVICE_GENERATE_DASHBOARD)
         hass.services.async_remove(DOMAIN, SERVICE_CAPTURE_FRAMES)
         hass.services.async_remove(DOMAIN, SERVICE_REDETECT_PLANT)
