@@ -15,7 +15,10 @@ from givenergy_modbus.model.inverter import Model
 from givenergy_modbus.model.plant import PlantCapabilities
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from custom_components.givenergy_local.coordinator import GivEnergyUpdateCoordinator
+from custom_components.givenergy_local.coordinator import (
+    _PARTIAL_LOG_EVERY,
+    GivEnergyUpdateCoordinator,
+)
 
 
 def _caps(**overrides) -> PlantCapabilities:
@@ -337,6 +340,55 @@ async def test_partial_success_increments_partial_failures_cumulatively(hass, mo
     assert coordinator.partial_failures == 3
     assert coordinator.consecutive_failures == 0
     assert coordinator.total_failures == 0
+
+
+async def test_partial_log_throttled_and_resets(hass, mock_plant, caplog):
+    """First partial of a run warns; subsequent ones drop to debug; a clean poll
+    ends the run so the next partial warns afresh. (partial_failures unaffected.)"""
+    caplog.set_level(logging.DEBUG, logger="custom_components.givenergy_local.coordinator")
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+
+    def partial_warnings() -> list:
+        return [
+            r
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "Partial refresh" in r.getMessage()
+        ]
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        mock_cls.return_value = client
+        coordinator._client = client
+
+        client.refresh = AsyncMock(side_effect=_partial(mock_plant))
+        for _ in range(3):
+            await coordinator._async_update_data()
+        assert len(partial_warnings()) == 1  # only the first of the run warned
+        assert coordinator.partial_failures == 3  # counter still bumps every poll
+
+        client.refresh = AsyncMock(return_value=mock_plant)
+        await coordinator._async_update_data()  # clean poll ends the run
+        assert coordinator._consecutive_partials == 0
+
+        client.refresh = AsyncMock(side_effect=_partial(mock_plant))
+        await coordinator._async_update_data()
+        assert len(partial_warnings()) == 2  # next run warns afresh
+
+
+async def test_partial_log_periodic_rewarn(hass, mock_plant, caplog):
+    """A sustained partial run re-warns every _PARTIAL_LOG_EVERY polls."""
+    caplog.set_level(logging.DEBUG, logger="custom_components.givenergy_local.coordinator")
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+    exc = _partial(mock_plant)
+
+    for _ in range(_PARTIAL_LOG_EVERY):
+        coordinator._record_partial(exc)
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2  # poll 1 (first) + poll _PARTIAL_LOG_EVERY (periodic)
+    assert coordinator.partial_failures == _PARTIAL_LOG_EVERY
 
 
 async def test_clean_poll_clears_stale_partial_detail(hass, mock_plant):
