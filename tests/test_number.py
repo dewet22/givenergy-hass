@@ -36,3 +36,17 @@ async def test_set_battery_discharge_limit_sends_command(hass, mock_client, setu
         "number", "set_value", {"entity_id": entity_id, "value": 25}, blocking=True
     )
     mock_client.one_shot_command.assert_called_once()
+
+
+async def test_active_power_rate_present(hass, setup_integration):
+    # Entity is wired (the write path is covered below); this fixture's register
+    # set doesn't populate active_power_rate, so the decoded value may be unknown.
+    assert hass.states.get(_entity_id(hass, "SA1234G123_active_power_rate")) is not None
+
+
+async def test_set_active_power_rate_sends_command(hass, mock_client, setup_integration):
+    entity_id = _entity_id(hass, "SA1234G123_active_power_rate")
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": entity_id, "value": 90}, blocking=True
+    )
+    mock_client.one_shot_command.assert_called_once()

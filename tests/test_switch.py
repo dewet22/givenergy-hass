@@ -32,3 +32,14 @@ async def test_turn_on_discharge_sends_command(hass, mock_client, setup_integrat
     entity_id = _entity_id(hass, "SA1234G123_enable_discharge")
     await hass.services.async_call("switch", "turn_on", {"entity_id": entity_id}, blocking=True)
     mock_client.one_shot_command.assert_called_once()
+
+
+async def test_enable_rtc_present_and_decodes(hass, setup_integration):
+    state = hass.states.get(_entity_id(hass, "SA1234G123_enable_rtc"))
+    assert state.state in ("on", "off")
+
+
+async def test_toggle_rtc_sends_command(hass, mock_client, setup_integration):
+    entity_id = _entity_id(hass, "SA1234G123_enable_rtc")
+    await hass.services.async_call("switch", "turn_off", {"entity_id": entity_id}, blocking=True)
+    mock_client.one_shot_command.assert_called_once()

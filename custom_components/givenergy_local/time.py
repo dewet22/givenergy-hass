@@ -133,9 +133,9 @@ def _endpoint_setter(cmd: Callable[[int, dt_time], list], idx: int) -> Callable[
 
 
 def _ems_time_descriptions() -> tuple[GivEnergyEmsTimeEntityDescription, ...]:
-    """Start/end time entities for EMS charge & discharge slots 1-3."""
+    """Start/end time entities for EMS charge, discharge & export slots 1-3."""
     descriptions: list[GivEnergyEmsTimeEntityDescription] = []
-    for kind in ("charge", "discharge"):
+    for kind in ("charge", "discharge", "export"):
         endpoints = (
             ("start", True, getattr(commands, f"set_ems_{kind}_slot_start")),
             ("end", False, getattr(commands, f"set_ems_{kind}_slot_end")),
