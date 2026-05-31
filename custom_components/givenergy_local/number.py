@@ -99,6 +99,41 @@ NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
 )
 
 
+# --- AC-coupled-only controls (only created for AC-coupled inverters) ---
+
+# The AC charge/discharge power limits (HR313/314) are distinct from the DC-side
+# limits above (HR111/112) and are only meaningful on AC-coupled inverters.
+# Gated via PlantCapabilities.is_ac_coupled (and not is_three_phase — three-phase AC
+# remaps the read-back to different registers than the command writes; see modbus#75).
+# The setter rejects values below 1, hence the 1–100 range.
+AC_COUPLED_NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
+    GivEnergyNumberEntityDescription(
+        key="battery_charge_limit_ac",
+        name="Battery AC Charge Limit",
+        native_unit_of_measurement=PERCENTAGE,
+        native_min_value=1,
+        native_max_value=100,
+        native_step=1,
+        mode=NumberMode.BOX,
+        value_fn=lambda inv: inv.battery_charge_limit_ac,
+        set_value_cmd=lambda v: commands.set_battery_charge_limit_ac(int(v)),
+        entity_category=EntityCategory.CONFIG,
+    ),
+    GivEnergyNumberEntityDescription(
+        key="battery_discharge_limit_ac",
+        name="Battery AC Discharge Limit",
+        native_unit_of_measurement=PERCENTAGE,
+        native_min_value=1,
+        native_max_value=100,
+        native_step=1,
+        mode=NumberMode.BOX,
+        value_fn=lambda inv: inv.battery_discharge_limit_ac,
+        set_value_cmd=lambda v: commands.set_battery_discharge_limit_ac(int(v)),
+        entity_category=EntityCategory.CONFIG,
+    ),
+)
+
+
 # --- EMS plant-level per-slot SoC targets (only created for EMS plants) ---
 
 
@@ -157,6 +192,12 @@ async def async_setup_entry(
         entities.extend(
             GivEnergyEmsNumberEntity(coordinator, description)
             for description in EMS_NUMBER_DESCRIPTIONS
+        )
+    caps = coordinator.data.capabilities
+    if caps is not None and caps.is_ac_coupled and not caps.is_three_phase:
+        entities.extend(
+            GivEnergyNumberEntity(coordinator, description)
+            for description in AC_COUPLED_NUMBER_DESCRIPTIONS
         )
     async_add_entities(entities)
 
