@@ -21,6 +21,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
+from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -162,28 +163,45 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_register_frontend_card(hass: HomeAssistant) -> None:
-    """Serve and auto-load the bundled cell-heatmap card (once per instance).
+    """Serve and auto-load the bundled cell-heatmap card.
 
     The card module ships inside this integration's ``www/`` dir; we expose it
     at a stable URL and register it as an extra frontend module so the generated
     dashboard's ``custom:ge-cell-heatmap`` resolves on any dashboard without a
-    manual HACS/resource install. Guarded so repeat config entries don't
-    re-register the static path (which raises on a duplicate).
+    manual HACS/resource install.
+
+    Called once from :func:`async_setup` (component scope), so the static-path
+    registration happens a single time for the integration regardless of how
+    many inverters/EMS config entries exist — no per-entry race on the shared URL.
     """
-    data = hass.data.setdefault(DOMAIN, {})
-    if data.get("_frontend_registered"):
-        return
     if hass.http is None:
         # http isn't initialised (e.g. the test harness has no web server). In
         # production it's a bootstrap dependency and always present, so this only
         # skips where there is nothing to serve from anyway.
         return
-    card_path = Path(__file__).parent / "www" / _CARD_FILENAME
-    await hass.http.async_register_static_paths(
-        [StaticPathConfig(_CARD_URL, str(card_path), False)]
-    )
-    add_extra_js_url(hass, f"{_CARD_URL}?v={_CARD_VERSION}")
-    data["_frontend_registered"] = True
+    try:
+        card_path = Path(__file__).parent / "www" / _CARD_FILENAME
+        await hass.http.async_register_static_paths(
+            [StaticPathConfig(_CARD_URL, str(card_path), False)]
+        )
+        add_extra_js_url(hass, f"{_CARD_URL}?v={_CARD_VERSION}")
+    except Exception as exc:  # noqa: BLE001
+        # The bundled card is cosmetic (a dashboard heatmap). Registering it once
+        # at component scope means a failure here is genuinely unexpected, but it
+        # must still never take down the integration — log and carry on.
+        _LOGGER.warning("Could not register the bundled cell-heatmap card: %s", exc)
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Integration-wide setup, run once before any config entry.
+
+    The bundled frontend card is an integration-level singleton (one JS module,
+    one custom element), so it's registered here rather than per config entry —
+    which previously raced on the shared static path when several entries set up
+    concurrently.
+    """
+    await _async_register_frontend_card(hass)
+    return True
 
 
 # External HACS cards the generated dashboard depends on (the bundled
@@ -216,8 +234,6 @@ async def _missing_dashboard_cards(hass: HomeAssistant) -> list[str]:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    await _async_register_frontend_card(hass)
-
     # Persisted topology lets the coordinator skip the cold-detect sweep on
     # most reconnects/restarts. Client.detect(prior=...) accepts the cached
     # topology as a hint and only re-probes slots the prior asserts non-empty;
