@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -37,6 +38,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -331,12 +334,14 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: inv.t_battery,
     ),
     GivEnergyInverterSensorDescription(
+        # key kept (unique_id suffix); the library field was renamed to
+        # e_battery_charge_today, routed per-model, in givenergy-modbus #76.
         key="e_battery_charge_day",
         name="Battery Charge Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_battery_charge_day,
+        value_fn=lambda inv: inv.e_battery_charge_today,
     ),
     GivEnergyInverterSensorDescription(
         key="e_battery_discharge_day",
@@ -344,7 +349,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_battery_discharge_day,
+        value_fn=lambda inv: inv.e_battery_discharge_today,
     ),
     GivEnergyInverterSensorDescription(
         key="e_battery_throughput",
@@ -532,41 +537,28 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_discharge_year,
     ),
-    # --- Alternate battery energy registers (present on some models only) ---
+    # --- Lifetime battery energy totals (routed per-model in givenergy-modbus
+    # #76; return None on models with no known total register — e.g. AC-coupled
+    # — so they're skipped there rather than shown blank). These replace the
+    # provisional `e_battery_*_alt` sensors, which were an anomaly: their keys
+    # change, so any pre-existing "Battery Alt …" entities orphan and the user
+    # removes them. Acceptable churn at this pre-release stage. ---
     GivEnergyInverterSensorDescription(
-        key="e_battery_charge_alt",
-        name="Battery Alt Charge Total",
+        key="e_battery_charge_total",
+        name="Battery Charge Total",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_battery_charge_alt,
+        value_fn=lambda inv: inv.e_battery_charge_total,
         skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
-        key="e_battery_discharge_alt",
-        name="Battery Alt Discharge Total",
+        key="e_battery_discharge_total",
+        name="Battery Discharge Total",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_battery_discharge_alt,
-        skip_if_none=True,
-    ),
-    GivEnergyInverterSensorDescription(
-        key="e_battery_charge_day_alt",
-        name="Battery Alt Charge Today",
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_battery_charge_day_alt,
-        skip_if_none=True,
-    ),
-    GivEnergyInverterSensorDescription(
-        key="e_battery_discharge_day_alt",
-        name="Battery Alt Discharge Today",
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_battery_discharge_day_alt,
+        value_fn=lambda inv: inv.e_battery_discharge_total,
         skip_if_none=True,
     ),
     # --- Solar diverter ---
@@ -640,10 +632,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.HOURS,
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        # Library key is work_time_total_hours (uint32, whole hours); this sensor
-        # reads the alias, so set 0 explicitly rather than deriving.
+        # Library field is work_time_total_hours (uint32, whole hours); the bare
+        # work_time_total alias is deprecated (#84) and slated for removal in 3.0.
         suggested_display_precision=0,
-        value_fn=lambda inv: inv.work_time_total,
+        value_fn=lambda inv: inv.work_time_total_hours,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(
@@ -970,6 +962,30 @@ COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
 )
 
 
+def _include_inverter_sensor(
+    description: GivEnergyInverterSensorDescription, inverter: InverterModel
+) -> bool:
+    """Whether to create an inverter sensor at setup.
+
+    `skip_if_none` descriptions have their `value_fn` evaluated eagerly here, so a
+    single bad descriptor — e.g. a library field renamed out from under us — must
+    not be allowed to raise and abort the *entire* sensor platform (which is how a
+    field rename in givenergy-modbus once dropped every sensor). Guard the call:
+    skip the offending sensor with a warning, but keep the rest.
+    """
+    if not description.skip_if_none:
+        return True
+    try:
+        return description.value_fn(inverter) is not None
+    except Exception:  # noqa: BLE001 - one bad descriptor must not sink the platform
+        _LOGGER.warning(
+            "Skipping sensor %s: its value_fn raised at setup (library field drift?)",
+            description.key,
+            exc_info=True,
+        )
+        return False
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -981,7 +997,7 @@ async def async_setup_entry(
     entities: list[SensorEntity] = [
         GivEnergyInverterSensor(coordinator, description)
         for description in INVERTER_SENSORS
-        if not description.skip_if_none or description.value_fn(inverter) is not None
+        if _include_inverter_sensor(description, inverter)
     ]
 
     for battery_index, battery in enumerate(coordinator.data.batteries):

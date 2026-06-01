@@ -9,6 +9,8 @@ from custom_components.givenergy_local.sensor import (
     BATTERY_SENSORS,
     COORDINATOR_SENSORS,
     INVERTER_SENSORS,
+    GivEnergyInverterSensorDescription,
+    _include_inverter_sensor,
 )
 
 
@@ -38,6 +40,55 @@ def test_status_value_fn_renders_when_present():
     inv = MagicMock()
     inv.status.name = "NORMAL"
     assert _inverter_desc("status").value_fn(inv) == "normal"
+
+
+def test_inverter_value_fns_resolve_against_real_model():
+    """Every INVERTER_SENSORS value_fn must resolve against a REAL inverter model,
+    not just the MagicMock fixture (which fabricates any attribute and so masks
+    field drift vs givenergy-modbus). Regression for the rc8 breakage where the
+    library renamed battery-energy fields (#76) and the skip_if_none setup filter
+    raised AttributeError, taking down the whole sensor platform.
+
+    Mirrors the eager filter in sensor.async_setup_entry, then exercises every
+    value_fn (the native_value path) — both must run without raising on a
+    cold, all-None model.
+    """
+    from givenergy_modbus.model.inverter import SinglePhaseInverter
+
+    inv = SinglePhaseInverter()  # all fields None, like a pre-first-poll model
+
+    # The setup-time filter evaluates skip_if_none value_fns eagerly; a field the
+    # library no longer exposes would raise AttributeError here.
+    [d for d in INVERTER_SENSORS if not d.skip_if_none or d.value_fn(inv) is not None]
+
+    # And the native_value path for every sensor must resolve too.
+    for d in INVERTER_SENSORS:
+        d.value_fn(inv)
+
+
+def test_setup_filter_skips_bad_descriptor_instead_of_crashing():
+    """A skip_if_none descriptor whose value_fn raises must be skipped (logged),
+    not propagate — so one bad descriptor can't take down the whole platform the
+    way the renamed-field bug did. A healthy descriptor is still included."""
+
+    def _boom(_inv):
+        raise AttributeError("field renamed out from under us")
+
+    bad = GivEnergyInverterSensorDescription(
+        key="bad", name="Bad", value_fn=_boom, skip_if_none=True
+    )
+    good = GivEnergyInverterSensorDescription(
+        key="good", name="Good", value_fn=lambda _inv: 1.0, skip_if_none=True
+    )
+    plain = GivEnergyInverterSensorDescription(
+        key="plain", name="Plain", value_fn=_boom, skip_if_none=False
+    )
+
+    inv = MagicMock()
+    assert _include_inverter_sensor(bad, inv) is False  # skipped, no raise
+    assert _include_inverter_sensor(good, inv) is True
+    # non-skip descriptors aren't evaluated at setup, so they're always included
+    assert _include_inverter_sensor(plain, inv) is True
 
 
 def _entity_id(hass, platform: str, unique_id: str) -> str:

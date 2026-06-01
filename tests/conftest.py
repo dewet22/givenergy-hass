@@ -37,7 +37,7 @@ def mock_inverter() -> MagicMock:
     inv.model = MagicMock()
     inv.model.name = "HYBRID"
     inv.firmware_version = "D0.19-A0.21"
-    inv.work_time_total = 36055  # hours of operation (raw register unit)
+    inv.work_time_total_hours = 36055  # hours of operation (raw register unit)
     inv.p_pv.return_value = 2500
     inv.p_pv1 = 1500
     inv.p_pv2 = 1000
@@ -54,8 +54,12 @@ def mock_inverter() -> MagicMock:
     inv.v_battery = 52.4
     inv.i_battery = 9.54
     inv.t_battery = 22.5
-    inv.e_battery_charge_day = 8.2
-    inv.e_battery_discharge_day = 3.1
+    # Canonical battery-energy field names (givenergy-modbus #76). Mirror the
+    # real model so the mock can't fabricate fields the sensors then break on.
+    inv.e_battery_charge_today = 8.2
+    inv.e_battery_discharge_today = 3.1
+    inv.e_battery_charge_total = 980.5
+    inv.e_battery_discharge_total = 845.1
     inv.e_battery_throughput = 1250.3
     inv.p_grid_out = -800
     inv.e_grid_out_day = 2.1
