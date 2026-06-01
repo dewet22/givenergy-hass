@@ -40,6 +40,30 @@ def test_status_value_fn_renders_when_present():
     assert _inverter_desc("status").value_fn(inv) == "normal"
 
 
+def test_inverter_value_fns_resolve_against_real_model():
+    """Every INVERTER_SENSORS value_fn must resolve against a REAL inverter model,
+    not just the MagicMock fixture (which fabricates any attribute and so masks
+    field drift vs givenergy-modbus). Regression for the rc8 breakage where the
+    library renamed battery-energy fields (#76) and the skip_if_none setup filter
+    raised AttributeError, taking down the whole sensor platform.
+
+    Mirrors the eager filter in sensor.async_setup_entry, then exercises every
+    value_fn (the native_value path) — both must run without raising on a
+    cold, all-None model.
+    """
+    from givenergy_modbus.model.inverter import SinglePhaseInverter
+
+    inv = SinglePhaseInverter()  # all fields None, like a pre-first-poll model
+
+    # The setup-time filter evaluates skip_if_none value_fns eagerly; a field the
+    # library no longer exposes would raise AttributeError here.
+    [d for d in INVERTER_SENSORS if not d.skip_if_none or d.value_fn(inv) is not None]
+
+    # And the native_value path for every sensor must resolve too.
+    for d in INVERTER_SENSORS:
+        d.value_fn(inv)
+
+
 def _entity_id(hass, platform: str, unique_id: str) -> str:
     registry = er.async_get(hass)
     entity_id = registry.async_get_entity_id(platform, DOMAIN, unique_id)

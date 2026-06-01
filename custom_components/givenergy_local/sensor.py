@@ -331,12 +331,14 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: inv.t_battery,
     ),
     GivEnergyInverterSensorDescription(
+        # key kept (unique_id suffix); the library field was renamed to
+        # e_battery_charge_today, routed per-model, in givenergy-modbus #76.
         key="e_battery_charge_day",
         name="Battery Charge Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_battery_charge_day,
+        value_fn=lambda inv: inv.e_battery_charge_today,
     ),
     GivEnergyInverterSensorDescription(
         key="e_battery_discharge_day",
@@ -344,7 +346,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_battery_discharge_day,
+        value_fn=lambda inv: inv.e_battery_discharge_today,
     ),
     GivEnergyInverterSensorDescription(
         key="e_battery_throughput",
@@ -532,41 +534,25 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_discharge_year,
     ),
-    # --- Alternate battery energy registers (present on some models only) ---
+    # --- Lifetime battery energy totals (routed per-model in givenergy-modbus
+    # #76; return None on models with no known total register — e.g. AC-coupled
+    # — so they're skipped there rather than shown blank). ---
     GivEnergyInverterSensorDescription(
-        key="e_battery_charge_alt",
-        name="Battery Alt Charge Total",
+        key="e_battery_charge_total",
+        name="Battery Charge Total",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_battery_charge_alt,
+        value_fn=lambda inv: inv.e_battery_charge_total,
         skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
-        key="e_battery_discharge_alt",
-        name="Battery Alt Discharge Total",
+        key="e_battery_discharge_total",
+        name="Battery Discharge Total",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_battery_discharge_alt,
-        skip_if_none=True,
-    ),
-    GivEnergyInverterSensorDescription(
-        key="e_battery_charge_day_alt",
-        name="Battery Alt Charge Today",
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_battery_charge_day_alt,
-        skip_if_none=True,
-    ),
-    GivEnergyInverterSensorDescription(
-        key="e_battery_discharge_day_alt",
-        name="Battery Alt Discharge Today",
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_battery_discharge_day_alt,
+        value_fn=lambda inv: inv.e_battery_discharge_total,
         skip_if_none=True,
     ),
     # --- Solar diverter ---
@@ -640,10 +626,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfTime.HOURS,
         device_class=SensorDeviceClass.DURATION,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        # Library key is work_time_total_hours (uint32, whole hours); this sensor
-        # reads the alias, so set 0 explicitly rather than deriving.
+        # Library field is work_time_total_hours (uint32, whole hours); the bare
+        # work_time_total alias is deprecated (#84) and slated for removal in 3.0.
         suggested_display_precision=0,
-        value_fn=lambda inv: inv.work_time_total,
+        value_fn=lambda inv: inv.work_time_total_hours,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(
