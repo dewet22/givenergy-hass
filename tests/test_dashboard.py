@@ -32,7 +32,7 @@ def test_dashboard_is_valid_yaml_with_expected_views():
 
 
 def test_dashboard_version_is_current():
-    assert DASHBOARD_VERSION == 4
+    assert DASHBOARD_VERSION == 5
 
 
 def test_battery_health_is_full_width_sections():
@@ -122,3 +122,57 @@ def test_cell_voltages_list_removed_from_batteries_view():
     # the per-pack detail we keep is still there
     assert "Cell Temperatures" in titles
     assert "Pack Details" in titles
+
+
+# ── EMS plant dashboard ─────────────────────────────────────────────────────
+
+EMS = "ems2522018"
+
+
+def _ems_views() -> dict[str, dict]:
+    out = generate_dashboard(EMS, [], is_ems=True)
+    doc = yaml.safe_load(out)  # asserts well-formed YAML
+    return {v["title"]: v for v in doc["views"]}
+
+
+def test_ems_dashboard_has_tailored_views_only():
+    """An EMS plant gets scheduling controls + health, none of the inverter views."""
+    views = _ems_views()
+    assert set(views) == {"EMS Controls", "Diagnostics"}
+    for inverter_view in ("Overview", "Energy", "Batteries", "Controls"):
+        assert inverter_view not in views
+
+
+def test_ems_dashboard_entity_ids_resolve():
+    """EMS entity ids use the givenergy_ems_ prefix and name-slug convention."""
+    out = generate_dashboard(EMS, [], is_ems=True)
+    assert "givenergy_inverter_" not in out  # no inverter-prefixed ids on an EMS
+    for must in (
+        f"switch.givenergy_ems_{EMS}_flexi_ems_control",
+        f"time.givenergy_ems_{EMS}_ems_charge_slot_1_start",
+        f"time.givenergy_ems_{EMS}_ems_discharge_slot_2_end",
+        # number slug is from the NAME ("… Slot 3 Target SOC"), not key ems_export_target_soc_3
+        f"number.givenergy_ems_{EMS}_ems_export_slot_3_target_soc",
+        f"sensor.givenergy_ems_{EMS}_total_refresh_failures",
+    ):
+        assert must in out, f"missing {must}"
+
+
+def test_ems_dashboard_excludes_inverter_controls():
+    """None of the inverter-only controls (which render blank on an EMS) leak in."""
+    out = generate_dashboard(EMS, [], is_ems=True)
+    for leaked in (
+        "battery_power_mode",
+        "enable_charge",
+        "battery_charge_limit",
+        "battery_discharge_limit",
+        "custom:ge-cell-heatmap",
+    ):
+        assert leaked not in out, f"leaked inverter content: {leaked}"
+
+
+def test_ems_dashboard_covers_all_slot_kinds_and_indices():
+    out = generate_dashboard(EMS, [], is_ems=True)
+    for kind in ("charge", "discharge", "export"):
+        for idx in (1, 2, 3):
+            assert f"ems_{kind}_slot_{idx}_target_soc" in out

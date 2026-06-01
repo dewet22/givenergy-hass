@@ -9,7 +9,10 @@ from unittest.mock import MagicMock
 
 import pytest
 from givenergy_modbus.model import TimeSlot
+from givenergy_modbus.model.inverter import Model
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 
 from custom_components.givenergy_local.const import DOMAIN
 
@@ -40,9 +43,10 @@ def mock_ems() -> MagicMock:
 
 
 @pytest.fixture
-async def ems_setup(hass, mock_client, mock_plant, mock_ems, mock_config_entry):
+async def ems_setup(hass, mock_client, mock_plant, mock_inverter, mock_ems, mock_config_entry):
     """Set up the integration with the plant presenting as an EMS."""
     mock_plant.ems = mock_ems
+    mock_inverter.model = Model.EMS  # an EMS plant's controller decodes as Model.EMS
     mock_config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -158,3 +162,51 @@ async def test_set_ems_charge_target_soc_writes_register(hass, mock_client, ems_
     (request,) = mock_client.one_shot_command.call_args[0][0]
     # EMS charge slot 1 target SoC = HR 2055.
     assert (request.register, request.value, request.device_address) == (2055, 75, 0x11)
+
+
+# ---------------------------------------------------------------------------
+# EMS device identity (name → givenergy_ems_ entity-id prefix) + realignment
+# ---------------------------------------------------------------------------
+
+
+async def test_ems_device_named_ems(hass, ems_setup):
+    """An EMS controller gets its own device identity, so its entities slug to
+    givenergy_ems_ rather than givenergy_inverter_."""
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, "SA1234G123")})
+    assert device is not None
+    assert device.name == "GivEnergy EMS SA1234G123"
+
+
+async def test_no_realignment_issue_on_fresh_ems_install(hass, ems_setup):
+    """A fresh EMS install already has givenergy_ems_ ids, so no recreate prompt."""
+    issue = ir.async_get(hass).async_get_issue(
+        DOMAIN, f"ems_entity_ids_outdated_{ems_setup.entry_id}"
+    )
+    assert issue is None
+
+
+async def test_realignment_issue_raised_for_stale_inverter_prefixed_entities(
+    hass, mock_client, mock_plant, mock_inverter, mock_ems, mock_config_entry
+):
+    """An existing EMS install whose entities still carry the pre-rename
+    givenergy_inverter_ prefix gets the 'Recreate entity IDs' repair issue."""
+    mock_plant.ems = mock_ems
+    mock_inverter.model = Model.EMS
+    mock_config_entry.add_to_hass(hass)
+
+    # Pre-seed a stale entity id (as a pre-rename install would have).
+    er.async_get(hass).async_get_or_create(
+        "sensor",
+        DOMAIN,
+        "SA1234G123_status",
+        config_entry=mock_config_entry,
+        suggested_object_id="givenergy_inverter_sa1234g123_status",
+    )
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    issue = ir.async_get(hass).async_get_issue(
+        DOMAIN, f"ems_entity_ids_outdated_{mock_config_entry.entry_id}"
+    )
+    assert issue is not None

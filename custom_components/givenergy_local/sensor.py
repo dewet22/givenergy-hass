@@ -1024,6 +1024,23 @@ _MODEL_NAMES: dict[Model, str] = {
 }
 
 
+def _device_kind(model: Model) -> str:
+    """The device-name noun, which also drives the entity_id prefix.
+
+    Buckets to one of Inverter / EMS / Gateway — NOT the fine-grained model name —
+    so every actual inverter stays "GivEnergy Inverter {serial}" (unchanged), while
+    an EMS controller / gateway gets its own identity ("GivEnergy EMS …" →
+    `givenergy_ems_…` entity ids). This is the single place that decides a device's
+    kind; when the typed-plant model lands (modbus#106) it swaps its source here
+    (model → plant device type) without touching anything downstream.
+    """
+    if model is Model.EMS:
+        return "EMS"
+    if model is Model.GATEWAY:
+        return "Gateway"
+    return "Inverter"
+
+
 def _derive_display_precision(description: SensorEntityDescription, model: Any) -> int | None:
     """Native display precision for a sensor, from the library's register scaling.
 
@@ -1059,13 +1076,12 @@ class GivEnergyInverterSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Sen
             self._attr_suggested_display_precision = precision
         serial = coordinator.data.inverter_serial_number
         self._attr_unique_id = f"{serial}_{description.key}"
+        model = coordinator.data.inverter.model
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, serial)},
-            name=f"GivEnergy Inverter {serial}",
+            name=f"GivEnergy {_device_kind(model)} {serial}",
             manufacturer="GivEnergy",
-            model=_MODEL_NAMES.get(
-                coordinator.data.inverter.model, coordinator.data.inverter.model.name
-            ),
+            model=_MODEL_NAMES.get(model, model.name),
             sw_version=coordinator.data.inverter.firmware_version,
             serial_number=serial,
         )

@@ -312,6 +312,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         ir.async_delete_issue(hass, DOMAIN, f"dashboard_outdated_v{DASHBOARD_VERSION}")
 
+    # EMS entity-id realignment prompt. An EMS controller's entities are now named
+    # `givenergy_ems_…` (sensor._device_kind); existing installs still carry the old
+    # `givenergy_inverter_…` ids until the user runs HA's "Recreate entity IDs" on the
+    # device. Surface a repair issue while any stale ids remain — it self-clears once
+    # recreated. (We deliberately don't auto-migrate; see the dashboard module note.)
+    if coordinator.data.ems is not None:
+        reg = er.async_get(hass)
+        inv_serial = coordinator.data.inverter_serial_number.lower()
+        issue_id = f"ems_entity_ids_outdated_{entry.entry_id}"
+        has_stale = any(
+            e.entity_id.startswith(f"{e.domain}.givenergy_inverter_{inv_serial}_")
+            for e in er.async_entries_for_config_entry(reg, entry.entry_id)
+        )
+        if has_stale:
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                is_persistent=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key="ems_entity_ids_outdated",
+            )
+        else:
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
+
     if not hass.services.has_service(DOMAIN, SERVICE_REBOOT_INVERTER):
 
         async def handle_reboot_inverter(call: ServiceCall) -> None:
@@ -361,7 +387,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     continue
                 inv = coordinator.data.inverter.serial_number.lower()
                 bats = [b.serial_number.lower() for b in coordinator.data.batteries]
-                yaml = generate_dashboard(inv, bats, max_power_kw=max_power_kw)
+                is_ems = coordinator.data.ems is not None
+                yaml = generate_dashboard(inv, bats, max_power_kw=max_power_kw, is_ems=is_ems)
                 filename = f"dashboard_givenergy_{inv}.yaml"
                 www_dir = Path(hass.config.path("www"))
                 await hass.async_add_executor_job(lambda d=www_dir: d.mkdir(exist_ok=True))
