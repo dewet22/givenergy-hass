@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -37,6 +38,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -536,12 +539,12 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     ),
     # --- Lifetime battery energy totals (routed per-model in givenergy-modbus
     # #76; return None on models with no known total register — e.g. AC-coupled
-    # — so they're skipped there rather than shown blank). Keys retain the older
-    # `*_alt` suffix to preserve unique_ids for installs that already created
-    # these entities; only the value_fn (renamed library field) and display name
-    # change. ---
+    # — so they're skipped there rather than shown blank). These replace the
+    # provisional `e_battery_*_alt` sensors, which were an anomaly: their keys
+    # change, so any pre-existing "Battery Alt …" entities orphan and the user
+    # removes them. Acceptable churn at this pre-release stage. ---
     GivEnergyInverterSensorDescription(
-        key="e_battery_charge_alt",
+        key="e_battery_charge_total",
         name="Battery Charge Total",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
@@ -550,7 +553,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
-        key="e_battery_discharge_alt",
+        key="e_battery_discharge_total",
         name="Battery Discharge Total",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
@@ -959,6 +962,30 @@ COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
 )
 
 
+def _include_inverter_sensor(
+    description: GivEnergyInverterSensorDescription, inverter: InverterModel
+) -> bool:
+    """Whether to create an inverter sensor at setup.
+
+    `skip_if_none` descriptions have their `value_fn` evaluated eagerly here, so a
+    single bad descriptor — e.g. a library field renamed out from under us — must
+    not be allowed to raise and abort the *entire* sensor platform (which is how a
+    field rename in givenergy-modbus once dropped every sensor). Guard the call:
+    skip the offending sensor with a warning, but keep the rest.
+    """
+    if not description.skip_if_none:
+        return True
+    try:
+        return description.value_fn(inverter) is not None
+    except Exception:  # noqa: BLE001 - one bad descriptor must not sink the platform
+        _LOGGER.warning(
+            "Skipping sensor %s: its value_fn raised at setup (library field drift?)",
+            description.key,
+            exc_info=True,
+        )
+        return False
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -970,7 +997,7 @@ async def async_setup_entry(
     entities: list[SensorEntity] = [
         GivEnergyInverterSensor(coordinator, description)
         for description in INVERTER_SENSORS
-        if not description.skip_if_none or description.value_fn(inverter) is not None
+        if _include_inverter_sensor(description, inverter)
     ]
 
     for battery_index, battery in enumerate(coordinator.data.batteries):

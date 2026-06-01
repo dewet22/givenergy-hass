@@ -9,6 +9,8 @@ from custom_components.givenergy_local.sensor import (
     BATTERY_SENSORS,
     COORDINATOR_SENSORS,
     INVERTER_SENSORS,
+    GivEnergyInverterSensorDescription,
+    _include_inverter_sensor,
 )
 
 
@@ -62,6 +64,31 @@ def test_inverter_value_fns_resolve_against_real_model():
     # And the native_value path for every sensor must resolve too.
     for d in INVERTER_SENSORS:
         d.value_fn(inv)
+
+
+def test_setup_filter_skips_bad_descriptor_instead_of_crashing():
+    """A skip_if_none descriptor whose value_fn raises must be skipped (logged),
+    not propagate — so one bad descriptor can't take down the whole platform the
+    way the renamed-field bug did. A healthy descriptor is still included."""
+
+    def _boom(_inv):
+        raise AttributeError("field renamed out from under us")
+
+    bad = GivEnergyInverterSensorDescription(
+        key="bad", name="Bad", value_fn=_boom, skip_if_none=True
+    )
+    good = GivEnergyInverterSensorDescription(
+        key="good", name="Good", value_fn=lambda _inv: 1.0, skip_if_none=True
+    )
+    plain = GivEnergyInverterSensorDescription(
+        key="plain", name="Plain", value_fn=_boom, skip_if_none=False
+    )
+
+    inv = MagicMock()
+    assert _include_inverter_sensor(bad, inv) is False  # skipped, no raise
+    assert _include_inverter_sensor(good, inv) is True
+    # non-skip descriptors aren't evaluated at setup, so they're always included
+    assert _include_inverter_sensor(plain, inv) is True
 
 
 def _entity_id(hass, platform: str, unique_id: str) -> str:
