@@ -51,6 +51,22 @@ SWITCH_DESCRIPTIONS: tuple[GivEnergySwitchEntityDescription, ...] = (
 )
 
 
+# --- AC-coupled-only switches (only created for AC-coupled inverters) ---
+
+# EPS (HR317): only meaningful on AC-coupled inverters; three-phase AC excluded
+# pending per-model register work (modbus#75).
+AC_COUPLED_SWITCH_DESCRIPTIONS: tuple[GivEnergySwitchEntityDescription, ...] = (
+    GivEnergySwitchEntityDescription(
+        key="enable_eps",
+        name="Emergency Power Supply (EPS)",
+        is_on_fn=lambda inv: inv.enable_eps,
+        turn_on_cmd=lambda: commands.set_enable_eps(True),
+        turn_off_cmd=lambda: commands.set_enable_eps(False),
+        entity_category=EntityCategory.CONFIG,
+    ),
+)
+
+
 # --- EMS plant-level switches (only created for EMS plants) ---
 
 
@@ -82,6 +98,12 @@ async def async_setup_entry(
     entities: list[SwitchEntity] = [
         GivEnergySwitchEntity(coordinator, description) for description in SWITCH_DESCRIPTIONS
     ]
+    caps = coordinator.data.capabilities
+    if caps is not None and caps.is_ac_coupled and not caps.is_three_phase:
+        entities.extend(
+            GivEnergySwitchEntity(coordinator, description)
+            for description in AC_COUPLED_SWITCH_DESCRIPTIONS
+        )
     if coordinator.data.ems is not None:
         entities.extend(
             GivEnergyEmsSwitchEntity(coordinator, description)

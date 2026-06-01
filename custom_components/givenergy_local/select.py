@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from givenergy_modbus.client import commands
-from givenergy_modbus.model.battery import BatteryPauseMode
+from givenergy_modbus.model.battery import BatteryPauseMode, ExportPriority
 from givenergy_modbus.model.inverter import BatteryPowerMode
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.config_entries import ConfigEntry
@@ -74,15 +74,56 @@ SELECT_DESCRIPTIONS: tuple[GivEnergySelectEntityDescription, ...] = (
 )
 
 
+# --- AC-coupled-only select controls ---
+
+# Export priority (HR311): only meaningful on AC-coupled inverters; three-phase AC
+# excluded pending per-model register work (modbus#75).
+_EXPORT_PRIORITY_LABELS: dict[ExportPriority, str] = {
+    ExportPriority.BATTERY_FIRST: "Battery First",
+    ExportPriority.GRID_FIRST: "Grid First",
+    ExportPriority.LOAD_FIRST: "Load First",
+}
+_EXPORT_PRIORITY_BY_LABEL: dict[str, ExportPriority] = {
+    v: k for k, v in _EXPORT_PRIORITY_LABELS.items()
+}
+
+
+def _export_priority_current_option(inv: InverterModel) -> str | None:
+    if inv.export_priority is None:
+        return None
+    return _EXPORT_PRIORITY_LABELS.get(ExportPriority(inv.export_priority))
+
+
+AC_COUPLED_SELECT_DESCRIPTIONS: tuple[GivEnergySelectEntityDescription, ...] = (
+    GivEnergySelectEntityDescription(
+        key="export_priority",
+        name="Export Priority",
+        options=list(_EXPORT_PRIORITY_BY_LABEL.keys()),
+        current_option_fn=_export_priority_current_option,
+        select_option_cmd=lambda option: commands.set_export_priority(
+            _EXPORT_PRIORITY_BY_LABEL[option]
+        ),
+        entity_category=EntityCategory.CONFIG,
+    ),
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: GivEnergyUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
+    entities: list[SelectEntity] = [
         GivEnergySelectEntity(coordinator, description) for description in SELECT_DESCRIPTIONS
-    )
+    ]
+    caps = coordinator.data.capabilities
+    if caps is not None and caps.is_ac_coupled and not caps.is_three_phase:
+        entities.extend(
+            GivEnergySelectEntity(coordinator, description)
+            for description in AC_COUPLED_SELECT_DESCRIPTIONS
+        )
+    async_add_entities(entities)
 
 
 class GivEnergySelectEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], SelectEntity):
