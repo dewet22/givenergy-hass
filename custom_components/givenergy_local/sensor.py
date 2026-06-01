@@ -536,9 +536,12 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     ),
     # --- Lifetime battery energy totals (routed per-model in givenergy-modbus
     # #76; return None on models with no known total register — e.g. AC-coupled
-    # — so they're skipped there rather than shown blank). ---
+    # — so they're skipped there rather than shown blank). Keys retain the older
+    # `*_alt` suffix to preserve unique_ids for installs that already created
+    # these entities; only the value_fn (renamed library field) and display name
+    # change. ---
     GivEnergyInverterSensorDescription(
-        key="e_battery_charge_total",
+        key="e_battery_charge_alt",
         name="Battery Charge Total",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
@@ -547,7 +550,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
-        key="e_battery_discharge_total",
+        key="e_battery_discharge_alt",
         name="Battery Discharge Total",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
