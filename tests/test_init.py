@@ -14,8 +14,8 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.givenergy_local import (
     _CARD_URL,
     _CARD_VERSION,
-    _async_register_frontend_card,
     _missing_dashboard_cards,
+    async_setup,
 )
 from custom_components.givenergy_local.const import (
     CONF_RETRIES,
@@ -65,20 +65,31 @@ async def test_missing_dashboard_cards_swallows_registry_errors():
     assert await _missing_dashboard_cards(hass) == []
 
 
-async def test_frontend_card_served_and_autoloaded_once():
-    """The bundled heatmap card is served + auto-loaded, exactly once."""
+async def test_frontend_card_served_and_autoloaded():
+    """The bundled heatmap card is served + auto-loaded at component setup."""
     hass = MagicMock()
     hass.data = {}
     hass.http.async_register_static_paths = AsyncMock()
 
     with patch("custom_components.givenergy_local.add_extra_js_url") as add_js:
-        await _async_register_frontend_card(hass)
-        await _async_register_frontend_card(hass)  # idempotent: must no-op
+        assert await async_setup(hass, {}) is True
 
     hass.http.async_register_static_paths.assert_awaited_once()
     (paths,) = hass.http.async_register_static_paths.call_args[0]
     assert paths[0].url_path == _CARD_URL
     add_js.assert_called_once_with(hass, f"{_CARD_URL}?v={_CARD_VERSION}")
+
+
+async def test_frontend_card_registered_at_component_scope_only():
+    """Registration lives in async_setup (once per integration), not in
+    async_setup_entry — so multi-inverter/EMS installs can't race on the shared
+    static path (regression for hass#52)."""
+    import inspect
+
+    from custom_components.givenergy_local import async_setup_entry
+
+    assert "_async_register_frontend_card" not in inspect.getsource(async_setup_entry)
+    assert "_async_register_frontend_card" in inspect.getsource(async_setup)
 
 
 async def test_frontend_card_skipped_when_http_unavailable():
@@ -88,7 +99,19 @@ async def test_frontend_card_skipped_when_http_unavailable():
     hass.http = None
 
     with patch("custom_components.givenergy_local.add_extra_js_url") as add_js:
-        await _async_register_frontend_card(hass)
+        assert await async_setup(hass, {}) is True
+
+    add_js.assert_not_called()
+
+
+async def test_frontend_card_failure_does_not_break_setup():
+    """A registration error must be swallowed so component setup still succeeds."""
+    hass = MagicMock()
+    hass.data = {}
+    hass.http.async_register_static_paths = AsyncMock(side_effect=RuntimeError("boom"))
+
+    with patch("custom_components.givenergy_local.add_extra_js_url") as add_js:
+        assert await async_setup(hass, {}) is True  # must not raise
 
     add_js.assert_not_called()
 
