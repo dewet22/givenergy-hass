@@ -91,6 +91,19 @@ def test_setup_filter_skips_bad_descriptor_instead_of_crashing():
     assert _include_inverter_sensor(plain, inv) is True
 
 
+def test_device_kind_buckets_to_inverter_ems_gateway():
+    """Device-name noun (which drives the entity_id prefix) buckets correctly —
+    every actual inverter stays "Inverter"; EMS/Gateway get their own identity."""
+    from givenergy_modbus.model.inverter import Model
+
+    from custom_components.givenergy_local.sensor import _device_kind
+
+    assert _device_kind(Model.EMS) == "EMS"
+    assert _device_kind(Model.GATEWAY) == "Gateway"
+    for m in (Model.HYBRID, Model.AC, Model.AC_3PH, Model.ALL_IN_ONE, Model.HYBRID_3PH):
+        assert _device_kind(m) == "Inverter"
+
+
 def _entity_id(hass, platform: str, unique_id: str) -> str:
     registry = er.async_get(hass)
     entity_id = registry.async_get_entity_id(platform, DOMAIN, unique_id)
