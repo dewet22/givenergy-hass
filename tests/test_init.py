@@ -80,16 +80,26 @@ async def test_frontend_card_served_and_autoloaded():
     add_js.assert_called_once_with(hass, f"{_CARD_URL}?v={_CARD_VERSION}")
 
 
-async def test_frontend_card_registered_at_component_scope_only():
-    """Registration lives in async_setup (once per integration), not in
-    async_setup_entry — so multi-inverter/EMS installs can't race on the shared
-    static path (regression for hass#52)."""
-    import inspect
+async def test_frontend_card_registered_once_across_multiple_entries(hass, mock_client):
+    """With several config entries (multi-inverter / EMS), the card still registers
+    exactly once — it lives at component scope (async_setup), not per entry, so the
+    entries can't race on the shared static path (regression for hass#52). Under the
+    old per-entry registration this fires once per entry."""
+    entries = [
+        MockConfigEntry(
+            domain=DOMAIN,
+            data={"host": f"192.168.1.{n}", "port": 8899, "scan_interval": 30},
+            unique_id=f"entry-{n}",
+        )
+        for n in (10, 11, 12)
+    ]
+    with patch("custom_components.givenergy_local._async_register_frontend_card") as mock_register:
+        for entry in entries:
+            entry.add_to_hass(hass)
+            assert await hass.config_entries.async_setup(entry.entry_id) is True
+        await hass.async_block_till_done()
 
-    from custom_components.givenergy_local import async_setup_entry
-
-    assert "_async_register_frontend_card" not in inspect.getsource(async_setup_entry)
-    assert "_async_register_frontend_card" in inspect.getsource(async_setup)
+    mock_register.assert_called_once()
 
 
 async def test_frontend_card_skipped_when_http_unavailable():
