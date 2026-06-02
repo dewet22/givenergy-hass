@@ -208,14 +208,19 @@ async def async_setup_entry(
     entities: list[TimeEntity] = [
         GivEnergyTimeEntity(coordinator, description) for description in TIME_DESCRIPTIONS
     ]
-    entities.extend(
-        GivEnergyTimeEntity(coordinator, description)
-        for description in SMART_LOAD_TIME_DESCRIPTIONS
-    )
     if coordinator.data.ems is not None:
+        # EMS plant: the controller owns scheduling. Expose its slots and skip the
+        # inverter-level Smart Load slots — the library only populates HR(554-573)
+        # on non-EMS inverters, so creating them here would leave a block of
+        # permanently-unavailable config entities with silent-no-op writes.
         entities.extend(
             GivEnergyEmsTimeEntity(coordinator, description)
             for description in EMS_TIME_DESCRIPTIONS
+        )
+    else:
+        entities.extend(
+            GivEnergyTimeEntity(coordinator, description)
+            for description in SMART_LOAD_TIME_DESCRIPTIONS
         )
     async_add_entities(entities)
 
