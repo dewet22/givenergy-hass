@@ -74,10 +74,10 @@ SELECT_DESCRIPTIONS: tuple[GivEnergySelectEntityDescription, ...] = (
 )
 
 
-# --- AC-coupled-only select controls ---
+# --- AC-config-block select controls (AC-coupled inverters + single-phase All-in-One) ---
 
-# Export priority (HR311): only meaningful on AC-coupled inverters; three-phase AC
-# excluded pending per-model register work (modbus#75).
+# Export priority (HR311): only meaningful on models exposing the AC-config block;
+# three-phase AC excluded pending per-model register work (modbus#75).
 _EXPORT_PRIORITY_LABELS: dict[ExportPriority, str] = {
     ExportPriority.BATTERY_FIRST: "Battery First",
     ExportPriority.GRID_FIRST: "Grid First",
@@ -118,7 +118,7 @@ async def async_setup_entry(
         GivEnergySelectEntity(coordinator, description) for description in SELECT_DESCRIPTIONS
     ]
     caps = coordinator.data.capabilities
-    if caps is not None and caps.is_ac_coupled and not caps.is_three_phase:
+    if caps is not None and caps.has_ac_config_block and not caps.is_three_phase:
         entities.extend(
             GivEnergySelectEntity(coordinator, description)
             for description in AC_COUPLED_SELECT_DESCRIPTIONS

@@ -79,7 +79,7 @@ async def test_select_pause_both_sends_command(hass, mock_client, setup_integrat
 
 
 # ---------------------------------------------------------------------------
-# AC-coupled controls — only created for AC-coupled inverters (Model.AC)
+# AC-config-block controls — created for AC-coupled inverters and single-phase AIO
 # ---------------------------------------------------------------------------
 
 
@@ -121,3 +121,29 @@ async def test_select_export_priority_sends_command(hass, mock_client, ac_couple
         blocking=True,
     )
     mock_client.one_shot_command.assert_called_once()
+
+
+@pytest.fixture
+async def aio_setup(hass, mock_client, mock_plant, mock_inverter, mock_config_entry):
+    """Set up the integration with a single-phase All-in-One plant.
+
+    AIO exposes the AC-config register block (HR300+) despite not being AC-coupled,
+    so export priority must be created — gated on has_ac_config_block, not is_ac_coupled.
+    """
+    mock_plant.capabilities = PlantCapabilities(
+        device_type=Model.ALL_IN_ONE,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
+    mock_inverter.export_priority = ExportPriority.BATTERY_FIRST
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    return mock_config_entry
+
+
+async def test_export_priority_present_on_all_in_one_plant(hass, aio_setup):
+    """AIO exposes the AC-config block, so export priority must be created."""
+    assert _maybe_entity_id(hass, "SA1234G123_export_priority") is not None
