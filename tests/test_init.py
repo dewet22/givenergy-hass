@@ -307,7 +307,8 @@ async def test_cold_start_saves_capabilities_on_first_successful_refresh(
         await hass.config_entries.async_setup(mock_config_entry.entry_id)
         await hass.async_block_till_done()
 
-    mock_client.detect.assert_awaited_once_with(prior=None)
+    mock_client.detect.assert_awaited_once()
+    assert mock_client.detect.await_args.kwargs["prior"] is None
     save_mock.assert_awaited_with(hass, mock_config_entry.entry_id, mock_client.plant.capabilities)
 
 

@@ -17,6 +17,8 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.givenergy_local.coordinator import (
     _PARTIAL_LOG_EVERY,
+    PROBE_RETRIES,
+    PROBE_TIMEOUT_SECONDS,
     GivEnergyUpdateCoordinator,
 )
 
@@ -905,7 +907,9 @@ async def test_connect_passes_prior_capabilities_to_detect(hass, mock_plant):
 
         await coordinator._connect()
 
-    client.detect.assert_awaited_once_with(prior=prior)
+    client.detect.assert_awaited_once_with(
+        prior=prior, probe_timeout=PROBE_TIMEOUT_SECONDS, probe_retries=PROBE_RETRIES
+    )
 
 
 async def test_connect_passes_none_prior_when_no_cache(hass, mock_plant):
@@ -921,7 +925,9 @@ async def test_connect_passes_none_prior_when_no_cache(hass, mock_plant):
 
         await coordinator._connect()
 
-    client.detect.assert_awaited_once_with(prior=None)
+    client.detect.assert_awaited_once_with(
+        prior=None, probe_timeout=PROBE_TIMEOUT_SECONDS, probe_retries=PROBE_RETRIES
+    )
 
 
 async def test_topology_mismatch_accepts_actual_and_invokes_callback(hass, mock_plant):

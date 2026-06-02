@@ -41,6 +41,14 @@ _FULL_REFRESH_INTERVAL = 300  # seconds (~5 minutes)
 # flood the log. The cumulative partial_failures counter/sensor is unaffected.
 _PARTIAL_LOG_EVERY = 20
 
+# Per-slot probe budget for detect()'s peripheral sweep (batteries, meters).
+# More generous than the library defaults (0.5s / 1 retry): the battery sweep
+# breaks at the first non-responding slot, so a transiently slow BMS can
+# truncate the whole chain. The break means at most one empty slot is probed,
+# so the extra latency is bounded to ~one slow probe per detect.
+PROBE_TIMEOUT_SECONDS = 1.0
+PROBE_RETRIES = 3
+
 
 class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
     """Wraps a long-lived Modbus Client, polling the inverter on a fixed interval.
@@ -355,7 +363,20 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self._client = Client(host=self.host, port=self.port)
         await self._client.connect()
         try:
-            await self._client.detect(prior=self._prior_capabilities)
+            # The library's battery sweep probes additional packs (0x33+) with a
+            # stingy default budget (probe_timeout=0.5s, probe_retries=1) and
+            # BREAKS at the first non-responding slot — so a single transiently
+            # slow BMS during a reconnect truncates the whole battery chain, and
+            # that reduced topology then gets persisted (a 2nd battery silently
+            # vanished after a reconnect this way). Because of the break, a detect
+            # probes at most one empty slot, so a generous probe budget costs only
+            # ~one extra slow probe on a cold sweep — cheap insurance against
+            # dropping a real pack.
+            await self._client.detect(
+                prior=self._prior_capabilities,
+                probe_timeout=PROBE_TIMEOUT_SECONDS,
+                probe_retries=PROBE_RETRIES,
+            )
         except PlantTopologyMismatch as exc:
             _LOGGER.warning(
                 "Plant topology has changed since last seen — accepting new layout "
