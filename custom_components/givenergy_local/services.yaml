@@ -11,6 +11,8 @@ reboot_inverter:
       selector:
         device:
           integration: givenergy_local
+          entity:
+            domain: number
 
 calibrate_battery_soc:
   name: Calibrate battery state of charge
@@ -26,6 +28,8 @@ calibrate_battery_soc:
       selector:
         device:
           integration: givenergy_local
+          entity:
+            domain: number
 
 set_system_datetime:
   name: Set inverter date & time
@@ -41,6 +45,8 @@ set_system_datetime:
       selector:
         device:
           integration: givenergy_local
+          entity:
+            domain: number
 
 capture_frames:
   name: Capture debug frames
@@ -59,6 +65,8 @@ capture_frames:
       selector:
         device:
           integration: givenergy_local
+          entity:
+            domain: number
     duration:
       name: Duration (seconds)
       description: How long to capture frames for. Defaults to 60 seconds.
@@ -87,6 +95,8 @@ expose_recommended_entities:
       selector:
         device:
           integration: givenergy_local
+          entity:
+            domain: number
     assistants:
       name: Assistants
       description: >
@@ -119,6 +129,8 @@ redetect_plant:
       selector:
         device:
           integration: givenergy_local
+          entity:
+            domain: number
 
 generate_dashboard:
   name: Generate dashboard
