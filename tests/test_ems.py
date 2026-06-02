@@ -80,6 +80,18 @@ async def test_no_ems_entities_for_non_ems_plant(hass, setup_integration):
     assert _entity_id(hass, "number", "SA1234G123_ems_charge_target_soc_1") is None
 
 
+async def test_no_smart_load_entities_for_ems_plant(hass, ems_setup):
+    """Smart Load slots are inverter-level and superseded by the EMS controller.
+
+    The library only populates HR(554-573) on non-EMS inverters, so an EMS plant
+    must not register them (else a block of unavailable config entities appears).
+    """
+    registry = er.async_get(hass)
+    entries = er.async_entries_for_config_entry(registry, ems_setup.entry_id)
+    smart_load = [e for e in entries if e.domain == "time" and "_smart_load_slot_" in e.unique_id]
+    assert smart_load == []
+
+
 # ---------------------------------------------------------------------------
 # Initial values (read from coordinator.data.ems)
 # ---------------------------------------------------------------------------
