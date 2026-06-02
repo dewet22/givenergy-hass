@@ -280,7 +280,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # the read succeeds.
     if (
         prior_capabilities is None
-        and coordinator.data is not None
         and coordinator.data.capabilities is not None
         and not coordinator.last_partial_failures
     ):
