@@ -412,10 +412,10 @@ async def test_clean_poll_clears_stale_partial_detail(hass, mock_plant):
     assert coordinator.partial_failures == 1  # counter is cumulative, retained
 
 
-async def test_partial_on_cold_seed_raises_update_failed(hass, mock_plant):
-    """A partial on a cold (re)connect seed (no prior data) must NOT be served —
-    it fails so HA retries setup (→ ConfigEntryNotReady) rather than locking in a
-    half-populated initial plant."""
+async def test_partial_on_cold_seed_with_identity_serves(hass, mock_plant):
+    """A partial on a cold seed whose inverter identified itself (serial present) is
+    SERVED, so the integration loads — the failed reads' entities go unavailable
+    rather than the whole integration looping in ConfigEntryNotReady."""
     coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
 
     with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
@@ -424,12 +424,36 @@ async def test_partial_on_cold_seed_raises_update_failed(hass, mock_plant):
         client.plant = mock_plant
         client.refresh = AsyncMock(side_effect=_partial(mock_plant))
         mock_cls.return_value = client
-        # _client is None → reconnecting=True, and coordinator.data is None (cold).
+        # _client is None → reconnecting=True, coordinator.data is None (cold),
+        # mock_plant.inverter_serial_number is set → usable.
 
-        with pytest.raises(UpdateFailed):
+        result = await coordinator._async_update_data()
+
+    assert result is mock_plant  # served the partial, not a fail-hard
+    assert coordinator.partial_failures == 1
+    assert coordinator.consecutive_failures == 0  # served counts as success
+    assert coordinator.last_partial_failures  # set → blocks the cold-start persist
+    assert coordinator._client is client  # kept
+
+
+async def test_partial_on_cold_seed_without_identity_raises(hass, mock_plant):
+    """A cold-seed partial too sparse to set up (the inverter didn't even identify
+    itself) still fails so HA retries setup (→ ConfigEntryNotReady), and the message
+    names the failed register block."""
+    mock_plant.inverter_serial_number = None  # not identifiable → unusable seed
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh = AsyncMock(side_effect=_partial(mock_plant))
+        mock_cls.return_value = client
+
+        with pytest.raises(UpdateFailed, match=r"on device 0x34"):
             await coordinator._async_update_data()
 
-    # Counted as a hard failure, not a partial; client reset for a clean retry.
+    # Fail-hard, not counted as a partial; client reset for a clean retry.
     assert coordinator.partial_failures == 0
     assert coordinator.total_failures == 1
     assert coordinator.consecutive_failures == 1

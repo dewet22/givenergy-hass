@@ -311,6 +311,45 @@ async def test_cold_start_saves_capabilities_on_first_successful_refresh(
     save_mock.assert_awaited_with(hass, mock_config_entry.entry_id, mock_client.plant.capabilities)
 
 
+async def test_cold_start_skips_capabilities_persist_on_partial_seed(
+    hass, mock_client, mock_config_entry
+):
+    """A partial cold seed still loads the integration (the inverter identified
+    itself), but its possibly-degraded topology must NOT be persisted — otherwise
+    flaky kit could vanish permanently on the next warm start."""
+    from givenergy_modbus.exceptions import ReadFailure, RefreshPartiallySucceeded
+
+    failure = ReadFailure(
+        device_address=0x31,
+        request_type="ReadHoldingRegisters",
+        base_register=300,
+        register_count=60,
+    )
+    mock_client.refresh = AsyncMock(
+        side_effect=RefreshPartiallySucceeded(
+            "partial seed",
+            plant=mock_client.plant,
+            failures=[failure],
+            cause=ExceptionGroup("reads", [TimeoutError()]),
+        )
+    )
+    mock_config_entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.givenergy_local._load_capabilities",
+            new=AsyncMock(return_value=None),
+        ),
+        patch("custom_components.givenergy_local._save_capabilities", new=AsyncMock()) as save_mock,
+    ):
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    # Loaded (served the partial), but topology deliberately not committed.
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    save_mock.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # Capabilities Store helper unit tests
 # ---------------------------------------------------------------------------

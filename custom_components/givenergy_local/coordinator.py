@@ -133,16 +133,32 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             return plant
         except RefreshPartiallySucceeded as exc:
             if reconnecting:
-                # No reliable per-device fallback on a (re)connect seed: a
-                # half-populated initial plant (the dropped device reads
-                # "unknown") is worse than a clean full retry. detect() already
-                # gated device presence, so a partial seed is most likely a
-                # transient hiccup on a present device. Route through the same
-                # tolerance gate as a timeout — serves last-known data on an
-                # in-process reconnect, or raises UpdateFailed (→
-                # ConfigEntryNotReady) on a cold start so HA retries setup.
+                if self.data is None and exc.plant.inverter_serial_number:
+                    # Cold start with an identified inverter: serve the partial so
+                    # the integration *loads* (the failed reads' entities go
+                    # unavailable — a structurally-absent block like AC-config on a
+                    # hybrid, or a flaky device) instead of looping forever in
+                    # ConfigEntryNotReady. Those entities recover automatically if a
+                    # later poll reads them. _record_partial sets
+                    # last_partial_failures, which also blocks the cold-start
+                    # capabilities persist in __init__ — never commit a degraded
+                    # topology to disk.
+                    self._record_partial(exc)
+                    self._mark_success(exc.plant)
+                    return exc.plant
+                # Either an in-process reconnect (serve last-known within the
+                # tolerance window — unchanged) or a cold start too sparse to set up
+                # at all (no inverter identity → raise → ConfigEntryNotReady, retry).
                 self._record_failure()
-                return await self._serve_last_known_or_fail("Partial data on (re)connect seed", exc)
+                failure_summary = ", ".join(
+                    f"{'HR' if 'Holding' in f.request_type else 'IR'}({f.base_register})"
+                    f" on device 0x{f.device_address:02x}"
+                    for f in exc.failures
+                )
+                return await self._serve_last_known_or_fail(
+                    f"Partial data on (re)connect seed: {failure_summary}",
+                    exc,
+                )
             # Steady state: serve the partial. The dropped device's last-known
             # register values ride along (frozen) while the rest stay fresh —
             # this is the behaviour change #125 buys us (one offline battery no

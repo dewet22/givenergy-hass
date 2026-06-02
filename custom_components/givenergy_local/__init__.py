@@ -271,10 +271,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Seed the cache on cold start (no prior loaded). Warm-hit doesn't need a
     # write — the prior we just loaded is what's on the wire. Mismatch is
     # already covered by _on_topology_changed having saved exc.actual.
+    #
+    # Only persist a CLEAN seed: if the seed poll was partial (last_partial_failures
+    # non-empty), the integration still loads (coordinator serves the partial), but
+    # we don't commit a possibly-degraded topology to disk — flaky kit could
+    # otherwise vanish permanently on the next warm start. A permanently-partial
+    # plant re-detects fresh each cold start and self-heals to a clean persist once
+    # the read succeeds.
     if (
         prior_capabilities is None
         and coordinator.data is not None
         and coordinator.data.capabilities is not None
+        and not coordinator.last_partial_failures
     ):
         await _save_capabilities(hass, entry.entry_id, coordinator.data.capabilities)
 
