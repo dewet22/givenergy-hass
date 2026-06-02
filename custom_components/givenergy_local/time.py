@@ -133,7 +133,12 @@ def _endpoint_setter(cmd: Callable[[int, dt_time], list], idx: int) -> Callable[
 
 
 def _smart_load_slot_getter(idx: int) -> Callable[[InverterModel], TimeSlot | None]:
-    return lambda inv: getattr(inv, f"smart_load_slot_{idx}")
+    # Both single- and three-phase models define smart_load_slot_* as optional
+    # pydantic fields (default None), so direct access is safe today. The getattr
+    # default is cheap insurance: these entities are created unconditionally, so a
+    # future model that drops the field reads as None (entity unavailable) instead
+    # of raising AttributeError.
+    return lambda inv: getattr(inv, f"smart_load_slot_{idx}", None)
 
 
 def _smart_load_slot_setter(

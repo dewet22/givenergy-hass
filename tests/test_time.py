@@ -120,3 +120,20 @@ async def test_set_smart_load_slot_5_end_sends_command(hass, mock_client, setup_
         "time", "set_value", {"entity_id": entity_id, "time": "09:00:00"}, blocking=True
     )
     mock_client.one_shot_command.assert_called_once()
+
+
+def test_smart_load_slot_getter_returns_none_when_field_absent():
+    """The getter must read None, not raise, when the field is missing entirely.
+
+    Both current inverter models define smart_load_slot_* as optional pydantic fields,
+    so direct access is safe today. This guards the defensive getattr contract against a
+    future model that drops the field: since these entities are created unconditionally,
+    a missing field must surface as None (entity unavailable) rather than AttributeError.
+    """
+    from custom_components.givenergy_local.time import _smart_load_slot_getter
+
+    class _ModelWithoutSmartLoad:
+        """Stand-in for an inverter model lacking smart_load_slot_* attributes."""
+
+    getter = _smart_load_slot_getter(1)
+    assert getter(_ModelWithoutSmartLoad()) is None
