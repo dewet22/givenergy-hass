@@ -128,5 +128,5 @@ async def aio_setup(hass, mock_client, mock_plant, mock_inverter, mock_config_en
 
 async def test_ac_limits_present_on_all_in_one_plant(hass, aio_setup):
     """AIO exposes the AC-config block, so the AC limits must be created."""
-    assert _maybe_entity_id(hass, "SA1234G123_battery_charge_limit_ac") is not None
-    assert _maybe_entity_id(hass, "SA1234G123_battery_discharge_limit_ac") is not None
+    _entity_id(hass, "SA1234G123_battery_charge_limit_ac")
+    _entity_id(hass, "SA1234G123_battery_discharge_limit_ac")
