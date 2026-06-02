@@ -132,6 +132,42 @@ def _endpoint_setter(cmd: Callable[[int, dt_time], list], idx: int) -> Callable[
     return lambda value: cmd(idx, value)
 
 
+def _smart_load_slot_getter(idx: int) -> Callable[[InverterModel], TimeSlot | None]:
+    return lambda inv: getattr(inv, f"smart_load_slot_{idx}")
+
+
+def _smart_load_slot_setter(
+    cmd: Callable[[int, dt_time | None], list], idx: int
+) -> Callable[[dt_time, InverterModel], list]:
+    return lambda value, _inv: cmd(idx, value)
+
+
+def _smart_load_time_descriptions() -> tuple[GivEnergyTimeEntityDescription, ...]:
+    """Start/end time entities for Smart Load slots 1–10 (HR 554–573)."""
+    descriptions: list[GivEnergyTimeEntityDescription] = []
+    for idx in range(1, 11):
+        for endpoint, is_start, cmd in (
+            ("start", True, commands.set_smart_load_slot_start),
+            ("end", False, commands.set_smart_load_slot_end),
+        ):
+            descriptions.append(
+                GivEnergyTimeEntityDescription(
+                    key=f"smart_load_slot_{idx}_{endpoint}",
+                    name=f"Smart Load Slot {idx} {endpoint.title()}",
+                    slot_fn=_smart_load_slot_getter(idx),
+                    is_start=is_start,
+                    setter_fn=_smart_load_slot_setter(cmd, idx),
+                    entity_category=EntityCategory.CONFIG,
+                )
+            )
+    return tuple(descriptions)
+
+
+SMART_LOAD_TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
+    _smart_load_time_descriptions()
+)
+
+
 def _ems_time_descriptions() -> tuple[GivEnergyEmsTimeEntityDescription, ...]:
     """Start/end time entities for EMS charge, discharge & export slots 1-3."""
     descriptions: list[GivEnergyEmsTimeEntityDescription] = []
@@ -167,6 +203,10 @@ async def async_setup_entry(
     entities: list[TimeEntity] = [
         GivEnergyTimeEntity(coordinator, description) for description in TIME_DESCRIPTIONS
     ]
+    entities.extend(
+        GivEnergyTimeEntity(coordinator, description)
+        for description in SMART_LOAD_TIME_DESCRIPTIONS
+    )
     if coordinator.data.ems is not None:
         entities.extend(
             GivEnergyEmsTimeEntity(coordinator, description)

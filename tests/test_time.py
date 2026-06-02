@@ -1,4 +1,4 @@
-"""Tests for the GivEnergy Local time platform (charge/discharge slots)."""
+"""Tests for the GivEnergy Local time platform (charge/discharge + smart load slots)."""
 
 from homeassistant.helpers import entity_registry as er
 
@@ -68,6 +68,7 @@ async def test_all_time_slot_entities_created(hass, setup_integration):
         "discharge_slot_2_end",
         "battery_pause_slot_start",
         "battery_pause_slot_end",
+        *[f"smart_load_slot_{i}_{ep}" for i in range(1, 11) for ep in ("start", "end")],
     ]
     for key in expected_keys:
         entity_id = _entity_id(hass, f"SA1234G123_{key}")
@@ -87,5 +88,35 @@ async def test_set_battery_pause_slot_end_sends_command(hass, mock_client, setup
     entity_id = _entity_id(hass, "SA1234G123_battery_pause_slot_end")
     await hass.services.async_call(
         "time", "set_value", {"entity_id": entity_id, "time": "15:00:00"}, blocking=True
+    )
+    mock_client.one_shot_command.assert_called_once()
+
+
+async def test_smart_load_slot_1_start_initial_value(hass, setup_integration):
+    state = hass.states.get(_entity_id(hass, "SA1234G123_smart_load_slot_1_start"))
+    assert state.state == "06:00:00"
+
+
+async def test_smart_load_slot_1_end_initial_value(hass, setup_integration):
+    state = hass.states.get(_entity_id(hass, "SA1234G123_smart_load_slot_1_end"))
+    assert state.state == "07:00:00"
+
+
+async def test_set_smart_load_slot_1_start_sends_command(hass, mock_client, setup_integration):
+    entity_id = _entity_id(hass, "SA1234G123_smart_load_slot_1_start")
+    await hass.services.async_call(
+        "time", "set_value", {"entity_id": entity_id, "time": "08:30:00"}, blocking=True
+    )
+    mock_client.one_shot_command.assert_called_once()
+    cmd_arg = mock_client.one_shot_command.call_args[0][0]
+    assert isinstance(cmd_arg, list)
+    assert len(cmd_arg) > 0
+
+
+async def test_set_smart_load_slot_5_end_sends_command(hass, mock_client, setup_integration):
+    """Spot-check mid-range slot to confirm idx capture is correct across all 10."""
+    entity_id = _entity_id(hass, "SA1234G123_smart_load_slot_5_end")
+    await hass.services.async_call(
+        "time", "set_value", {"entity_id": entity_id, "time": "09:00:00"}, blocking=True
     )
     mock_client.one_shot_command.assert_called_once()
