@@ -51,10 +51,10 @@ SWITCH_DESCRIPTIONS: tuple[GivEnergySwitchEntityDescription, ...] = (
 )
 
 
-# --- AC-coupled-only switches (only created for AC-coupled inverters) ---
+# --- AC-config-block switches (AC-coupled inverters + single-phase All-in-One) ---
 
-# EPS (HR317): only meaningful on AC-coupled inverters; three-phase AC excluded
-# pending per-model register work (modbus#75).
+# EPS (HR317): only meaningful on models exposing the AC-config block; three-phase AC
+# excluded pending per-model register work (modbus#75).
 AC_COUPLED_SWITCH_DESCRIPTIONS: tuple[GivEnergySwitchEntityDescription, ...] = (
     GivEnergySwitchEntityDescription(
         key="enable_eps",
@@ -99,7 +99,7 @@ async def async_setup_entry(
         GivEnergySwitchEntity(coordinator, description) for description in SWITCH_DESCRIPTIONS
     ]
     caps = coordinator.data.capabilities
-    if caps is not None and caps.is_ac_coupled and not caps.is_three_phase:
+    if caps is not None and caps.has_ac_config_block and not caps.is_three_phase:
         entities.extend(
             GivEnergySwitchEntity(coordinator, description)
             for description in AC_COUPLED_SWITCH_DESCRIPTIONS

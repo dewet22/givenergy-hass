@@ -99,13 +99,14 @@ NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
 )
 
 
-# --- AC-coupled-only controls (only created for AC-coupled inverters) ---
+# --- AC-config-block controls (AC-coupled inverters + single-phase All-in-One) ---
 
 # The AC charge/discharge power limits (HR313/314) are distinct from the DC-side
-# limits above (HR111/112) and are only meaningful on AC-coupled inverters.
-# Gated via PlantCapabilities.is_ac_coupled (and not is_three_phase — three-phase AC
-# remaps the read-back to different registers than the command writes; see modbus#75).
-# The setter rejects values below 1, hence the 1–100 range.
+# limits above (HR111/112) and are only meaningful on models that expose the
+# AC-config register block (HR300+). Gated via PlantCapabilities.has_ac_config_block
+# (and not is_three_phase — three-phase AC remaps the read-back to different registers
+# than the command writes; see modbus#75). The setter rejects values below 1, hence the
+# 1–100 range.
 AC_COUPLED_NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
     GivEnergyNumberEntityDescription(
         key="battery_charge_limit_ac",
@@ -194,7 +195,7 @@ async def async_setup_entry(
             for description in EMS_NUMBER_DESCRIPTIONS
         )
     caps = coordinator.data.capabilities
-    if caps is not None and caps.is_ac_coupled and not caps.is_three_phase:
+    if caps is not None and caps.has_ac_config_block and not caps.is_three_phase:
         entities.extend(
             GivEnergyNumberEntity(coordinator, description)
             for description in AC_COUPLED_NUMBER_DESCRIPTIONS
