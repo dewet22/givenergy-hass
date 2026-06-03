@@ -191,11 +191,10 @@ def test_controls_view_has_maintenance_section():
 def test_maintenance_buttons_carry_the_serial(inv: str = INV):
     """Each button's data dict must carry the inverted serial so multi-plant installs
     target the right inverter."""
-    import yaml as _yaml
-
     raw = generate_dashboard(INV, BATS)
-    doc = _yaml.safe_load(raw)
-    controls_view = next(v for v in doc["views"] if v["title"] == "Controls")
+    doc = yaml.safe_load(raw)
+    controls_view = next((v for v in doc["views"] if v["title"] == "Controls"), None)
+    assert controls_view is not None, "Controls view not found in generated dashboard"
 
     # Find all perform_action calls and collect serials from their data
     def _collect_serials(obj: object) -> list[str]:
