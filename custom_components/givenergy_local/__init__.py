@@ -99,6 +99,25 @@ async def _save_capabilities(
     await _capabilities_store(hass, entry_id).async_save(capabilities.to_dict())
 
 
+# Callers may identify the target inverter by HA-assigned device_id (convenient
+# in the Settings → Services UI) OR by inverter serial (convenient in dashboards
+# and automations that only know the serial). Exactly one must be supplied.
+def _require_one_of_device_or_serial(value: dict) -> dict:
+    if "device_id" not in value and "serial" not in value:
+        raise vol.Invalid("Supply either 'device_id' or 'serial'")
+    return value
+
+
+SERVICE_DEVICE_OR_SERIAL_SCHEMA = vol.Schema(
+    vol.All(
+        {
+            vol.Exclusive("device_id", "target"): cv.string,
+            vol.Exclusive("serial", "target"): cv.string,
+        },
+        _require_one_of_device_or_serial,
+    )
+)
+
 SERVICE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): cv.string})
 
 SERVICE_GENERATE_DASHBOARD_SCHEMA = vol.Schema(
@@ -141,6 +160,53 @@ def _coordinator_for_device(
         if coordinator is not None:
             return coordinator
     return None
+
+
+def _entry_id_for_serial(hass: HomeAssistant, serial: str) -> str | None:
+    """Return the config-entry ID whose plant matches `serial`, or None.
+
+    The config flow stores the inverter serial as the entry's unique_id (normalised
+    to uppercase). The device registry also carries an identifier
+    ("givenergy_local", serial) — we try both to be robust across installs where
+    one or the other might be absent.
+    """
+    serial_upper = serial.upper()
+    # Primary: config-entry unique_id (set by the config flow to the serial).
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if entry.unique_id and entry.unique_id.upper() == serial_upper:
+            return entry.entry_id
+    # Fallback: device registry identifier.
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, serial_upper)})
+    if device is not None:
+        for entry_id in device.config_entries:
+            if entry_id in hass.data.get(DOMAIN, {}):
+                return entry_id
+    return None
+
+
+def _resolve_target(hass: HomeAssistant, call_data: dict) -> tuple[str | None, str]:
+    """Resolve a device_id-or-serial service call to a config entry_id.
+
+    Returns (entry_id, error_message). If resolution succeeds, error_message is
+    empty; if it fails, entry_id is None and error_message explains why.
+    """
+    if "serial" in call_data:
+        entry_id = _entry_id_for_serial(hass, call_data["serial"])
+        if entry_id is None:
+            return None, f"No GivEnergy inverter found for serial {call_data['serial']!r}"
+        return entry_id, ""
+    # device_id path — find the config entry via the device registry.
+    device_id = call_data["device_id"]
+    device = dr.async_get(hass).async_get(device_id)
+    if device is None:
+        return None, f"No GivEnergy device found for device_id {device_id!r}"
+    entry_id = next(
+        (eid for eid in device.config_entries if eid in hass.data.get(DOMAIN, {})),
+        None,
+    )
+    if entry_id is None:
+        return None, f"No GivEnergy config entry found for device {device_id!r}"
+    return entry_id, ""
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -406,12 +472,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await c._client.one_shot_command(commands.set_calibrate_battery_soc())
 
         async def handle_set_system_datetime(call: ServiceCall) -> None:
-            c = _coordinator_for_device(hass, call.data["device_id"])
+            entry_id, err = _resolve_target(hass, call.data)
+            if err:
+                raise HomeAssistantError(err)
+            c = hass.data.get(DOMAIN, {}).get(entry_id)
             if c is None or c._client is None or not c._client.connected:
-                raise HomeAssistantError(
-                    f"GivEnergy inverter for device {call.data['device_id']!r} "
-                    "is not currently connected"
-                )
+                raise HomeAssistantError("GivEnergy inverter is not currently connected")
             # Sync the inverter's clock to Home Assistant's current local time.
             await c._client.one_shot_command(commands.set_system_date_time(dt_util.now()))
 
@@ -525,7 +591,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             DOMAIN,
             SERVICE_SET_SYSTEM_DATETIME,
             handle_set_system_datetime,
-            SERVICE_DEVICE_SCHEMA,
+            SERVICE_DEVICE_OR_SERIAL_SCHEMA,
         )
         hass.services.async_register(
             DOMAIN,
@@ -539,19 +605,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # reload — the next setup_entry will see no prior and do a cold
             # detect(), which is exactly the "I changed the hardware, please
             # rediscover" semantic the issue calls for.
-            device = dr.async_get(hass).async_get(call.data["device_id"])
-            if device is None:
-                raise HomeAssistantError(
-                    f"No GivEnergy device found for {call.data['device_id']!r}"
-                )
-            target_entry_id = next(
-                (eid for eid in device.config_entries if eid in hass.data.get(DOMAIN, {})),
-                None,
-            )
-            if target_entry_id is None:
-                raise HomeAssistantError(
-                    f"No GivEnergy config entry found for device {call.data['device_id']!r}"
-                )
+            target_entry_id, err = _resolve_target(hass, call.data)
+            if err or target_entry_id is None:
+                raise HomeAssistantError(err or "Could not resolve target entry")
             await _capabilities_store(hass, target_entry_id).async_remove()
             hass.config_entries.async_schedule_reload(target_entry_id)
 
@@ -624,7 +680,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             DOMAIN,
             SERVICE_REDETECT_PLANT,
             handle_redetect_plant,
-            SERVICE_DEVICE_SCHEMA,
+            SERVICE_DEVICE_OR_SERIAL_SCHEMA,
         )
         hass.services.async_register(
             DOMAIN,

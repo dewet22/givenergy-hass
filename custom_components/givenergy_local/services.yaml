@@ -36,17 +36,26 @@ set_system_datetime:
   description: >
     Sets the GivEnergy inverter's internal clock to Home Assistant's current
     local time. Useful if the inverter's clock has drifted — it affects
-    charge/discharge slot scheduling.
+    charge/discharge slot scheduling. Supply either device_id (device picker)
+    or serial (inverter serial number, e.g. SA2114G047).
   fields:
     device_id:
       name: Device
       description: The GivEnergy inverter whose clock to set.
-      required: true
+      required: false
       selector:
         device:
           integration: givenergy_local
           entity:
             domain: number
+    serial:
+      name: Inverter serial
+      description: >
+        Inverter serial number (e.g. SA2114G047). Alternative to device_id —
+        useful in dashboards and automations that work from serials.
+      required: false
+      selector:
+        text:
 
 capture_frames:
   name: Capture debug frames
@@ -120,17 +129,26 @@ redetect_plant:
   description: >
     Clears the cached plant topology and reloads the integration, forcing a
     full hardware detection sweep on the next connect. Use this after adding
-    or removing a battery, or any other change to the plant layout.
+    or removing a battery, or any other change to the plant layout. Supply
+    either device_id (device picker) or serial (inverter serial number).
   fields:
     device_id:
       name: Device
       description: The GivEnergy inverter whose plant topology should be re-detected.
-      required: true
+      required: false
       selector:
         device:
           integration: givenergy_local
           entity:
             domain: number
+    serial:
+      name: Inverter serial
+      description: >
+        Inverter serial number (e.g. SA2114G047). Alternative to device_id —
+        useful in dashboards and automations that work from serials.
+      required: false
+      selector:
+        text:
 
 generate_dashboard:
   name: Generate dashboard
