@@ -168,7 +168,7 @@ views:
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_grid_import_total
             name: Grid Imported
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_pv_generation_total
-            name: Inverter Output
+            name: PV Generation Total
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_charge_from_grid_total
             name: Charged from Grid
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_discharge_this_year
