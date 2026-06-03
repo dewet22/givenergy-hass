@@ -49,7 +49,7 @@ Suffixes shown are after stripping the integration prefix and the inverter/batte
 | ✅ | `import_energy_total_kwh` | `grid_import_total` | Grid import lifetime |
 | ✅ | `invertor_energy_today_kwh` | `inverter_output_today` | Inverter AC output today |
 | ✅ | `invertor_energy_total_kwh` | `inverter_output_total` | Inverter AC output lifetime |
-| ✅ | `load_energy_today_kwh` | `load_energy_today` | House load today |
+| ✅ | `load_energy_today_kwh` | `house_consumption_today` | House consumption today (the integration's derived consumption — givenergy-modbus #174; the old `load_energy_today` was a mislabel that read ~0) |
 | ✅ | `pv_energy_today_kwh` | `pv_energy_today` | Solar generation today |
 | ✅ | `pv_energy_total_kwh` | `pv_energy_total` | Solar generation lifetime |
 | ⚠️ | `ac_charge_energy_total_kwh` | `charge_from_grid_total` | Live values disagree by ~36× (25.5 kWh vs 0.7 kWh). Likely reads a different register block, or has been reset more recently. |
@@ -413,4 +413,3 @@ Three viable paths:
 - **(c) Document the limitation** and let users decide per-entity.
 
 Option (b) is the cleanest long-term answer but depends on upstream work.
-
