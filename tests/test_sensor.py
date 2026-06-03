@@ -401,3 +401,39 @@ async def test_computed_sensors_use_explicit_precision(hass, setup_integration):
     assert _suggested_precision(hass, "SA1234G123_e_pv_day") == 1
     assert _suggested_precision(hass, "SA1234G123_battery_capacity_kwh") == 2
     assert _suggested_precision(hass, "SA1234G123_p_pv") == 0
+
+
+# --- givenergy-modbus #174: consumption sensor + e_load_day rename + migration ---
+
+
+async def test_house_consumption_today_sensor(hass, setup_integration):
+    """The new derived consumption sensor (the dashboard's real 'Consumed')."""
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_e_consumption_today"))
+    assert state.state == "21.4"
+
+
+async def test_ac_charge_today_sensor_replaces_load_energy(hass, setup_integration):
+    """e_load_day was a mislabel (it's AC charge); the renamed sensor reads it, and
+    nothing remains registered under the old unique_id."""
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_e_ac_charge_today"))
+    assert state.state == "3.8"
+    registry = er.async_get(hass)
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_load_day") is None
+
+
+async def test_unique_id_migration_repoints_e_load_day(hass, mock_client, mock_config_entry):
+    """A pre-2.1.1 entity under the old unique_id is re-pointed in place on setup —
+    same entity_id (so history/stats survive), new unique_id, old uid gone."""
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    old = registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_e_load_day", config_entry=mock_config_entry
+    )
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    migrated = registry.async_get(old.entity_id)
+    assert migrated is not None, "entity_id was not preserved across the migration"
+    assert migrated.unique_id == "SA1234G123_e_ac_charge_today"
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_load_day") is None

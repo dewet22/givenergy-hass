@@ -43,9 +43,9 @@ EXPOSE_RECOMMENDED_ENTITY_KEYS = (
     "e_grid_out_day",
     "e_grid_in_total",
     "e_grid_out_total",
-    # Load
+    # Load / Consumption
     "p_load_demand",
-    "e_load_day",
+    "e_consumption_today",
     # Inverter output
     "e_inverter_out_total",
     # Health — entity description's `key` is "status"; `inverter_status` is

@@ -490,20 +490,43 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: inv.p_load_demand,
     ),
     GivEnergyInverterSensorDescription(
-        key="e_load_day",
-        name="Load Energy Today",
+        # Derived house consumption (single-phase only) — matches the GE app's
+        # "Consumption today". Single-phase inverters expose no consumption
+        # register; givenergy-modbus computes it (PV gen + grid-in − grid-out −
+        # AC-charge). Three-phase has no such field, so skip_if_none drops it
+        # there (and the value_fn getattr keeps it None-safe).
+        key="e_consumption_today",
+        name="House Consumption Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_load_day,
+        value_fn=lambda inv: getattr(inv, "e_consumption_today", None),
+        skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
+        # Renamed from "Load Energy Today" / e_load_day (givenergy-modbus #174):
+        # IR35 was a GivTCP-era mislabel — it has always been AC charge, not house
+        # load. A unique_id migration in __init__.py carries the existing history
+        # across so it lands under the correct name.
+        key="e_ac_charge_today",
+        name="AC Charge Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda inv: inv.e_ac_charge_today,
+    ),
+    GivEnergyInverterSensorDescription(
+        # NB: givenergy-modbus #174 found IR44 is PV generation, not inverter AC
+        # output, and renamed the field e_inverter_out_day -> e_pv_generation_today.
+        # We HOLD the entity rename (key/name) until the matching *total* (IR45/46)
+        # is verified and renamed too, so today+total move together — but read the
+        # new field name directly to avoid the deprecation warning on every poll.
         key="e_inverter_out_day",
         name="Inverter Output Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_inverter_out_day,
+        value_fn=lambda inv: inv.e_pv_generation_today,
     ),
     GivEnergyInverterSensorDescription(
         key="e_inverter_out_total",

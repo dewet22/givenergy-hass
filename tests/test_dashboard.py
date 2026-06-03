@@ -32,7 +32,7 @@ def test_dashboard_is_valid_yaml_with_expected_views():
 
 
 def test_dashboard_version_is_current():
-    assert DASHBOARD_VERSION == 5
+    assert DASHBOARD_VERSION == 6
 
 
 def test_battery_health_is_full_width_sections():

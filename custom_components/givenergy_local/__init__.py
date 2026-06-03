@@ -233,6 +233,37 @@ async def _missing_dashboard_cards(hass: HomeAssistant) -> list[str]:
     return [card for card in _REQUIRED_HACS_CARDS if card not in urls]
 
 
+# unique_id suffixes renamed in givenergy-modbus #174 (2.1.1). The old data is
+# valid — IR35 was always AC charge, merely mislabelled "load" — so re-point the
+# existing registry entry to the new unique_id, carrying its history, statistics
+# and customisations across rather than orphaning it and starting fresh.
+_RENAMED_UNIQUE_ID_SUFFIXES = {
+    "e_load_day": "e_ac_charge_today",
+}
+
+
+def _migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Re-point entities registered under a renamed unique_id suffix in place."""
+    registry = er.async_get(hass)
+    for ent in er.async_entries_for_config_entry(registry, entry.entry_id):
+        for old, new in _RENAMED_UNIQUE_ID_SUFFIXES.items():
+            if not ent.unique_id.endswith(f"_{old}"):
+                continue
+            new_uid = ent.unique_id[: -len(old)] + new
+            if registry.async_get_entity_id(ent.domain, DOMAIN, new_uid):
+                # Target already exists (already migrated, or a genuine collision)
+                # — don't clobber it; leave the old entry for manual cleanup.
+                _LOGGER.debug(
+                    "Skipping unique_id migration for %s: %s already exists",
+                    ent.entity_id,
+                    new_uid,
+                )
+                break
+            _LOGGER.info("Migrating unique_id %s -> %s", ent.unique_id, new_uid)
+            registry.async_update_entity(ent.entity_id, new_unique_id=new_uid)
+            break
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Persisted topology lets the coordinator skip the cold-detect sweep on
     # most reconnects/restarts. Client.detect(prior=...) accepts the cached
@@ -286,6 +317,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await _save_capabilities(hass, entry.entry_id, coordinator.data.capabilities)
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+
+    # Re-point any entities under renamed unique_ids before the platforms create
+    # them, so the existing entity (and its history) is reused rather than orphaned.
+    _migrate_unique_ids(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

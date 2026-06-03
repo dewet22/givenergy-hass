@@ -9,7 +9,7 @@ import yaml
 # Increment whenever the generated YAML layout changes in a meaningful way.
 # __init__.py compares this against the last-generated version stored in HA's
 # persistent Store and raises a Repairs issue when they diverge.
-DASHBOARD_VERSION = 5
+DASHBOARD_VERSION = 6
 
 
 class _NoAliasDumper(yaml.SafeDumper):
@@ -194,7 +194,7 @@ def _overview_view(inv: str, max_power_kw: int) -> str:
             name: Imported
           - entity: {_i(inv, "grid_export_today")}
             name: Exported
-          - entity: {_i(inv, "load_energy_today")}
+          - entity: {_i(inv, "house_consumption_today")}
             name: Consumed
 
       - type: custom:apexcharts-card
@@ -253,7 +253,7 @@ def _energy_view(inv: str) -> str:
         graph_span: 30d
         series:
 {col_series(_i(inv, "pv_energy_today"), "PV Generated", "#FFB300")}
-{col_series(_i(inv, "load_energy_today"), "Consumed", "#EF5350")}
+{col_series(_i(inv, "house_consumption_today"), "Consumed", "#EF5350")}
 
       - type: custom:apexcharts-card
         header:

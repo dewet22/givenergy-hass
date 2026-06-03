@@ -65,7 +65,7 @@ views:
             name: Imported
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_grid_export_today
             name: Exported
-          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_load_energy_today
+          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_house_consumption_today
             name: Consumed
 
       - type: custom:apexcharts-card
@@ -106,7 +106,7 @@ views:
             statistics:
               type: max
               period: day
-          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_load_energy_today
+          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_house_consumption_today
             name: Consumed
             color: "#EF5350"
             type: column
