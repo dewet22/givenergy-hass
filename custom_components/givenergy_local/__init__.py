@@ -238,7 +238,12 @@ async def _missing_dashboard_cards(hass: HomeAssistant) -> list[str]:
 # existing registry entry to the new unique_id, carrying its history, statistics
 # and customisations across rather than orphaning it and starting fresh.
 _RENAMED_UNIQUE_ID_SUFFIXES = {
+    # givenergy-modbus #174 (2.1.1): IR35 was AC charge, not house load.
     "e_load_day": "e_ac_charge_today",
+    # givenergy-modbus #174/#176 (2.1.2): IR44/IR45-46 are PV generation, not
+    # inverter AC output. Move both sensors together so today+total stay paired.
+    "e_inverter_out_day": "e_pv_generation_today",
+    "e_inverter_out_total": "e_pv_generation_total",
 }
 
 

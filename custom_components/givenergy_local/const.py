@@ -46,8 +46,8 @@ EXPOSE_RECOMMENDED_ENTITY_KEYS = (
     # Load / Consumption
     "p_load_demand",
     "e_consumption_today",
-    # Inverter output
-    "e_inverter_out_total",
+    # PV generation total (was e_inverter_out_total / "Inverter Output Total")
+    "e_pv_generation_total",
     # Health — entity description's `key` is "status"; `inverter_status` is
     # the translation_key, which is not what's in the unique_id suffix.
     "status",

@@ -69,13 +69,12 @@ def mock_inverter() -> MagicMock:
     inv.v_ac1 = 240.1
     inv.f_ac1 = 50.02
     inv.p_load_demand = 1200
-    # givenergy-modbus #174: e_load_day was a mislabel (it's AC charge); the real
-    # house consumption is a derived computed field. e_inverter_out_day is held
-    # under its old entity but sourced from the renamed e_pv_generation_today.
+    # givenergy-modbus #174/#176: e_load_day was AC charge; e_inverter_out_day/total
+    # are PV generation. Consumption is derived. All entity keys renamed in 2.1.1/2.
     inv.e_ac_charge_today = 3.8
     inv.e_consumption_today = 21.4
     inv.e_pv_generation_today = 11.2
-    inv.e_inverter_out_total = 5100.2
+    inv.e_pv_generation_total = 5100.2
     inv.t_inverter_heatsink = 45.3
     inv.t_charger = 38.7
     inv.enable_charge = True
