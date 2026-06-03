@@ -9,7 +9,7 @@ import yaml
 # Increment whenever the generated YAML layout changes in a meaningful way.
 # __init__.py compares this against the last-generated version stored in HA's
 # persistent Store and raises a Repairs issue when they diverge.
-DASHBOARD_VERSION = 6
+DASHBOARD_VERSION = 7
 
 
 class _NoAliasDumper(yaml.SafeDumper):
@@ -598,6 +598,30 @@ def _controls_view(inv: str) -> str:
             name: Slot 2 Start
           - entity: time.givenergy_inverter_{inv}_discharge_slot_2_end
             name: Slot 2 End
+
+      - type: entities
+        title: Maintenance
+        entities:
+          - type: button
+            name: Redetect Plant
+            icon: mdi:radar
+            tap_action:
+              action: perform-action
+              perform_action: givenergy_local.redetect_plant
+              confirmation:
+                text: >-
+                  This will reload the GivEnergy integration and force a full
+                  hardware detection sweep. Continue?
+              data:
+                serial: {inv.upper()}
+          - type: button
+            name: Sync Inverter Clock
+            icon: mdi:clock-sync-outline
+            tap_action:
+              action: perform-action
+              perform_action: givenergy_local.set_system_datetime
+              data:
+                serial: {inv.upper()}
 """
 
 

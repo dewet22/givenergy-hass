@@ -416,6 +416,30 @@ views:
           - entity: time.givenergy_inverter_INVERTER_SERIAL_discharge_slot_2_end
             name: Slot 2 End
 
+      - type: entities
+        title: Maintenance
+        entities:
+          - type: button
+            name: Redetect Plant
+            icon: mdi:radar
+            tap_action:
+              action: perform-action
+              perform_action: givenergy_local.redetect_plant
+              confirmation:
+                text: >-
+                  This will reload the GivEnergy integration and force a full
+                  hardware detection sweep. Continue?
+              data:
+                serial: INVERTER_SERIAL
+          - type: button
+            name: Sync Inverter Clock
+            icon: mdi:clock-sync-outline
+            tap_action:
+              action: perform-action
+              perform_action: givenergy_local.set_system_datetime
+              data:
+                serial: INVERTER_SERIAL
+
   # ── Diagnostics ───────────────────────────────────────────────────────────
   - title: Diagnostics
     path: diagnostics

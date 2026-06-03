@@ -32,7 +32,7 @@ def test_dashboard_is_valid_yaml_with_expected_views():
 
 
 def test_dashboard_version_is_current():
-    assert DASHBOARD_VERSION == 6
+    assert DASHBOARD_VERSION == 7
 
 
 def test_battery_health_is_full_width_sections():
@@ -176,3 +176,45 @@ def test_ems_dashboard_covers_all_slot_kinds_and_indices():
     for kind in ("charge", "discharge", "export"):
         for idx in (1, 2, 3):
             assert f"ems_{kind}_slot_{idx}_target_soc" in out
+
+
+def test_controls_view_has_maintenance_section():
+    """The Controls view must include a Maintenance section with the Redetect button."""
+    views = _views()
+    controls = views["Controls"]
+    yaml_str = str(controls)
+    assert "Maintenance" in yaml_str
+    assert "redetect_plant" in yaml_str
+    assert "set_system_datetime" in yaml_str
+
+
+def test_maintenance_buttons_carry_the_serial(inv: str = INV):
+    """Each button's data dict must carry the inverted serial so multi-plant installs
+    target the right inverter."""
+    import yaml as _yaml
+
+    raw = generate_dashboard(INV, BATS)
+    doc = _yaml.safe_load(raw)
+    controls_view = next(v for v in doc["views"] if v["title"] == "Controls")
+
+    # Find all perform_action calls and collect serials from their data
+    def _collect_serials(obj: object) -> list[str]:
+        if isinstance(obj, dict):
+            results = []
+            if obj.get("perform_action", "").startswith("givenergy_local."):
+                results.append(obj.get("data", {}).get("serial", ""))
+            for v in obj.values():
+                results.extend(_collect_serials(v))
+            return results
+        if isinstance(obj, list):
+            out = []
+            for item in obj:
+                out.extend(_collect_serials(item))
+            return out
+        return []
+
+    serials = _collect_serials(controls_view)
+    assert serials, "no service calls with a serial found in Controls view"
+    assert all(s == INV.upper() for s in serials), (
+        f"expected serial {INV.upper()!r} in all buttons, got {serials}"
+    )
