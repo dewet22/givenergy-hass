@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import importlib.metadata
 import logging
+import platform
+import sys
+from datetime import datetime
 from pathlib import Path
 
 import voluptuous as vol
@@ -14,6 +18,7 @@ from homeassistant.components.persistent_notification import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
+from homeassistant.const import __version__ as HA_VERSION
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
@@ -22,6 +27,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.loader import async_get_integration
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -44,6 +50,12 @@ from .const import (
 )
 from .coordinator import GivEnergyUpdateCoordinator
 from .dashboard import DASHBOARD_VERSION
+from .http import (
+    CaptureDownloadView,
+    CaptureLandingView,
+    build_capture_notification_url,
+    capture_dir,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -258,6 +270,53 @@ async def _async_register_frontend_card(hass: HomeAssistant) -> None:
         _LOGGER.warning("Could not register the bundled cell-heatmap card: %s", exc)
 
 
+async def _build_capture_header(
+    hass: HomeAssistant, *, generated: datetime, duration: float, frame_count: int
+) -> str:
+    """Hash-prefixed environment header prepended to a wire capture (issue #64).
+
+    Pure environment introspection — deliberately no ``coordinator.data`` access
+    (works even if the coordinator is in a bad state) and no inverter
+    serial/model/firmware, which the library's redaction principle keeps out of
+    shared diagnostics (those are recoverable from the wire frames by anyone with
+    a parser anyway).
+    """
+    try:
+        library_version = importlib.metadata.version("givenergy-modbus")
+    except importlib.metadata.PackageNotFoundError:
+        library_version = "unknown"
+    integration = await async_get_integration(hass, DOMAIN)
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    lines = [
+        "# GivEnergy Local — Modbus wire capture",
+        f"# Generated:      {generated.isoformat()}",
+        f"# Duration:       {duration:g}s",
+        f"# Frames:         {frame_count}",
+        "#",
+        f"# Home Assistant: {HA_VERSION}",
+        f"# Python:         {python_version}",
+        f"# OS:             {platform.platform()}",
+        f"# Integration:    {integration.version}",
+        f"# Library:        givenergy-modbus {library_version}",
+        "#",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+async def _async_register_capture_http(hass: HomeAssistant) -> None:
+    """Register the capture landing/download views and ensure the capture dir.
+
+    Component-scope (run once from :func:`async_setup`): the views are global and
+    the directory is shared across config entries, so neither belongs per-entry.
+    """
+    await hass.async_add_executor_job(lambda: capture_dir(hass).mkdir(exist_ok=True))
+    if hass.http is None:
+        # No web server (e.g. a minimal test harness) — nothing to serve from.
+        return
+    hass.http.register_view(CaptureLandingView())
+    hass.http.register_view(CaptureDownloadView())
+
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Integration-wide setup, run once before any config entry.
 
@@ -267,6 +326,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     concurrently.
     """
     await _async_register_frontend_card(hass)
+    await _async_register_capture_http(hass)
     return True
 
 
@@ -557,25 +617,34 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
                 await coordinator._client.capture_frames(_sink, duration=float(duration))
 
-                filename = f"capture_givenergy_{inv}.txt"
-                www_dir = Path(hass.config.path("www"))
-                await hass.async_add_executor_job(lambda d=www_dir: d.mkdir(exist_ok=True))
-                content = "\n".join(frames) if frames else "(no frames captured)"
-                await hass.async_add_executor_job((www_dir / filename).write_text, content)
-                url = f"/local/{filename}"
-                _LOGGER.info("GivEnergy frame capture saved at %s (%d frames)", url, len(frames))
-                await hass.services.async_call(
-                    "persistent_notification",
-                    "create",
-                    {
-                        "title": "GivEnergy frame capture complete",
-                        "message": (
-                            f"Captured {len(frames)} frames over {duration} s — "
-                            f"[download]({url})\n\n"
-                            "Attach this file when reporting connectivity issues."
-                        ),
-                        "notification_id": f"givenergy_capture_{inv}",
-                    },
+                header = await _build_capture_header(
+                    hass,
+                    generated=dt_util.now(),
+                    duration=float(duration),
+                    frame_count=len(frames),
+                )
+                body = "\n".join(frames) if frames else "(no frames captured)"
+                content = header + "\n" + body + "\n"
+
+                epoch = int(dt_util.utcnow().timestamp())
+                filename = f"capture_givenergy_{epoch}.txt"
+                directory = capture_dir(hass)
+                await hass.async_add_executor_job(lambda d=directory: d.mkdir(exist_ok=True))
+                await hass.async_add_executor_job((directory / filename).write_text, content)
+
+                landing_url = build_capture_notification_url(hass, filename)
+                _LOGGER.info(
+                    "GivEnergy frame capture saved to %s (%d frames)", filename, len(frames)
+                )
+                async_create_notification(
+                    hass,
+                    (
+                        f"Captured {len(frames)} frames over {duration} s.\n\n"
+                        f"[Open the capture]({landing_url}) to inspect it, download "
+                        "the file, or open a pre-filled GitHub issue."
+                    ),
+                    title="GivEnergy frame capture complete",
+                    notification_id=f"givenergy_capture_{inv}",
                 )
 
         hass.services.async_register(

@@ -71,7 +71,10 @@ async def test_frontend_card_served_and_autoloaded():
     hass.data = {}
     hass.http.async_register_static_paths = AsyncMock()
 
-    with patch("custom_components.givenergy_local.add_extra_js_url") as add_js:
+    with (
+        patch("custom_components.givenergy_local.add_extra_js_url") as add_js,
+        patch("custom_components.givenergy_local._async_register_capture_http"),
+    ):
         assert await async_setup(hass, {}) is True
 
     hass.http.async_register_static_paths.assert_awaited_once()
@@ -108,7 +111,10 @@ async def test_frontend_card_skipped_when_http_unavailable():
     hass.data = {}
     hass.http = None
 
-    with patch("custom_components.givenergy_local.add_extra_js_url") as add_js:
+    with (
+        patch("custom_components.givenergy_local.add_extra_js_url") as add_js,
+        patch("custom_components.givenergy_local._async_register_capture_http"),
+    ):
         assert await async_setup(hass, {}) is True
 
     add_js.assert_not_called()
@@ -120,7 +126,10 @@ async def test_frontend_card_failure_does_not_break_setup():
     hass.data = {}
     hass.http.async_register_static_paths = AsyncMock(side_effect=RuntimeError("boom"))
 
-    with patch("custom_components.givenergy_local.add_extra_js_url") as add_js:
+    with (
+        patch("custom_components.givenergy_local.add_extra_js_url") as add_js,
+        patch("custom_components.givenergy_local._async_register_capture_http"),
+    ):
         assert await async_setup(hass, {}) is True  # must not raise
 
     add_js.assert_not_called()

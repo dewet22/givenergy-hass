@@ -202,6 +202,7 @@ def mock_client(mock_plant) -> AsyncMock:
             "detect",
             "close",
             "one_shot_command",
+            "capture_frames",
         ]
     )
     client.connected = True
