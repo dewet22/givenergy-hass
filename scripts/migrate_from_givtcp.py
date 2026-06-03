@@ -120,7 +120,7 @@ INVERTER_PAIRS: list[tuple[str, str, str, bool]] = [
     # consumption. The old givenergy_local "load_energy_today" (e_load_day/IR35)
     # was a mislabel that read ~0, so this pair was excluded. givenergy-modbus
     # #174 added the real derived figure, surfaced as house_consumption_today —
-    # the correct target. Both are PV + grid-in − grid-out − AC-charge, so they
+    # the correct target. Both are PV + grid-in - grid-out - AC-charge, so they
     # align; validate the overlap before an --apply.
     ("load_energy_today_kwh", "house_consumption_today", "House consumption today", True),
     # ⚠️  Diverged — the two integrations read different register blocks for this
@@ -472,6 +472,92 @@ async def migrate_entity(
 # ---------------------------------------------------------------------------
 
 
+def _print_cutover_suggestion(last_givtcp: date | None, first_ge: date | None) -> None:
+    """Print the detected dates and a suggested --cutover (auto-detect mode)."""
+    print("  Last GivTCP data point  :", last_givtcp or "not found")
+    print("  First givenergy_local   :", first_ge or "not found")
+    print()
+    if last_givtcp and first_ge:
+        # Suggest the later of the two dates — the tail of the overlap window. The
+        # boundary is midnight at the *start* of this date, so GivTCP history
+        # through the previous day is migrated and GE takes over from 00:00 on the
+        # suggested date regardless of when GivTCP actually stopped that day.
+        suggested = max(last_givtcp, first_ge)
+        print(f"  Suggested --cutover date: {suggested}")
+        print()
+        print(f"  GivTCP data through {suggested - timedelta(days=1)} 23:59 UTC → migrated")
+        print(f"  givenergy_local data from {suggested} 00:00 UTC    → kept")
+        print(f"  givenergy_local data before {suggested} 00:00 UTC  → discarded")
+        print()
+        print("  Rerun with --cutover YYYY-MM-DD to preview the migration,")
+        print("  then add --apply to write the changes.")
+    elif last_givtcp:
+        print("  givenergy_local has no statistics yet — install it and let it")
+        print("  run for at least one full day before migrating.")
+    else:
+        print("  GivTCP statistics not found. Nothing to migrate.")
+
+
+def _build_plan(
+    inv_serials: list[str],
+    batt_serials: list[str],
+    meta_by_id: dict[str, dict[str, Any]],
+    include_charge_from_grid: bool,
+) -> list[tuple[str, str, str, str, bool]]:
+    """Construct the per-entity migration plan from the detected serials."""
+    plan: list[tuple[str, str, str, str, bool]] = []
+    for sn in inv_serials:
+        for gt_sfx, ge_sfx, desc, default in INVERTER_PAIRS:
+            if not default and not include_charge_from_grid:
+                continue
+            givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
+            ge_id = f"sensor.givenergy_inverter_{sn}_{ge_sfx}"
+            unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or "kWh"
+            plan.append((givtcp_id, ge_id, desc, unit, not default))
+    for sn in batt_serials:
+        for gt_sfx, ge_sfx, desc, fallback_unit in BATTERY_PAIRS:
+            givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
+            ge_id = f"sensor.givenergy_battery_{sn}_{ge_sfx}"
+            unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or fallback_unit
+            plan.append((givtcp_id, ge_id, desc, unit, False))
+    return plan
+
+
+def _print_summary(results: list[MigrationResult], applying: bool) -> int:
+    """Print the results table + counts; return the process exit code."""
+    width = 46
+    print()
+    print("─" * 88)
+    print(f"  {'Sensor':<{width}} {'GivTCP':>8} {'GE pre':>7} {'GE post':>8}  Result")
+    print("─" * 88)
+    for r in results:
+        warn_tag = (
+            "  ⚠️  verify values" if r.warn_diverged and r.status in ("migrated", "dry_run") else ""
+        )
+        print(
+            f"  {r.description:<{width}} {r.givtcp_rows:>8} {r.ge_pre_rows:>7}"
+            f" {r.ge_post_rows:>8}  {r.status}{warn_tag}"
+        )
+    print("─" * 88)
+
+    migrated = sum(1 for r in results if r.status == "migrated")
+    planned = sum(1 for r in results if r.status == "dry_run")
+    skipped = sum(1 for r in results if r.status == "no_givtcp_data")
+    errored = sum(1 for r in results if r.status == "error")
+
+    if not applying:
+        print(f"\n  Planned: {planned}  |  No GivTCP data: {skipped}  |  Errors: {errored}")
+        print("  Add --apply to write changes (back up your DB first).")
+    else:
+        print(f"\n  Migrated: {migrated}  |  No GivTCP data: {skipped}  |  Errors: {errored}")
+
+    for r in results:
+        if r.status == "error":
+            print(f"\n  ERROR — {r.description}: {r.error}", file=sys.stderr)
+
+    return 0 if errored == 0 else 2
+
+
 async def run(args: argparse.Namespace) -> int:
     applying = args.apply
 
@@ -515,29 +601,7 @@ async def run(args: argparse.Namespace) -> int:
         last_givtcp, first_ge = await detect_cutover(ws, inv_serials[0])
         print("done")
         print()
-        print("  Last GivTCP data point  :", last_givtcp or "not found")
-        print("  First givenergy_local   :", first_ge or "not found")
-        print()
-        if last_givtcp and first_ge:
-            # Suggest the later of the two dates — the tail of the overlap
-            # window. The boundary is midnight at the *start* of this date,
-            # so GivTCP history through the previous day is migrated and GE
-            # takes over from 00:00 on the suggested date regardless of when
-            # GivTCP actually stopped that day.
-            suggested = max(last_givtcp, first_ge)
-            print(f"  Suggested --cutover date: {suggested}")
-            print()
-            print(f"  GivTCP data through {suggested - timedelta(days=1)} 23:59 UTC → migrated")
-            print(f"  givenergy_local data from {suggested} 00:00 UTC    → kept")
-            print(f"  givenergy_local data before {suggested} 00:00 UTC  → discarded")
-            print()
-            print("  Rerun with --cutover YYYY-MM-DD to preview the migration,")
-            print("  then add --apply to write the changes.")
-        elif last_givtcp:
-            print("  givenergy_local has no statistics yet — install it and let it")
-            print("  run for at least one full day before migrating.")
-        else:
-            print("  GivTCP statistics not found. Nothing to migrate.")
+        _print_cutover_suggestion(last_givtcp, first_ge)
         await ws.close()
         return 0
 
@@ -567,24 +631,7 @@ async def run(args: argparse.Namespace) -> int:
 
     print()
 
-    # Build migration plan
-    plan: list[tuple[str, str, str, str, bool]] = []
-
-    for sn in inv_serials:
-        for gt_sfx, ge_sfx, desc, default in INVERTER_PAIRS:
-            if not default and not args.include_charge_from_grid:
-                continue
-            givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
-            ge_id = f"sensor.givenergy_inverter_{sn}_{ge_sfx}"
-            unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or "kWh"
-            plan.append((givtcp_id, ge_id, desc, unit, not default))
-
-    for sn in batt_serials:
-        for gt_sfx, ge_sfx, desc, fallback_unit in BATTERY_PAIRS:
-            givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
-            ge_id = f"sensor.givenergy_battery_{sn}_{ge_sfx}"
-            unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or fallback_unit
-            plan.append((givtcp_id, ge_id, desc, unit, False))
+    plan = _build_plan(inv_serials, batt_serials, meta_by_id, args.include_charge_from_grid)
 
     # Execute
     results: list[MigrationResult] = []
@@ -600,38 +647,7 @@ async def run(args: argparse.Namespace) -> int:
 
     await ws.close()
 
-    # Summary table
-    W = 46
-    print()
-    print("─" * 88)
-    print(f"  {'Sensor':<{W}} {'GivTCP':>8} {'GE pre':>7} {'GE post':>8}  Result")
-    print("─" * 88)
-    for r in results:
-        warn_tag = (
-            "  ⚠️  verify values" if r.warn_diverged and r.status in ("migrated", "dry_run") else ""
-        )
-        print(
-            f"  {r.description:<{W}} {r.givtcp_rows:>8} {r.ge_pre_rows:>7}"
-            f" {r.ge_post_rows:>8}  {r.status}{warn_tag}"
-        )
-    print("─" * 88)
-
-    migrated = sum(1 for r in results if r.status == "migrated")
-    planned = sum(1 for r in results if r.status == "dry_run")
-    skipped = sum(1 for r in results if r.status == "no_givtcp_data")
-    errored = sum(1 for r in results if r.status == "error")
-
-    if not applying:
-        print(f"\n  Planned: {planned}  |  No GivTCP data: {skipped}  |  Errors: {errored}")
-        print("  Add --apply to write changes (back up your DB first).")
-    else:
-        print(f"\n  Migrated: {migrated}  |  No GivTCP data: {skipped}  |  Errors: {errored}")
-
-    for r in results:
-        if r.status == "error":
-            print(f"\n  ERROR — {r.description}: {r.error}", file=sys.stderr)
-
-    return 0 if errored == 0 else 2
+    return _print_summary(results, applying)
 
 
 def main() -> None:

@@ -492,7 +492,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     GivEnergyInverterSensorDescription(
         # Derived house consumption (single-phase only) — matches the GE app's
         # "Consumption today". Single-phase inverters expose no consumption
-        # register; givenergy-modbus computes it (PV gen + grid-in − grid-out −
+        # register; givenergy-modbus computes it (PV gen + grid-in - grid-out -
         # AC-charge). Three-phase has no such field, so skip_if_none drops it
         # there (and the value_fn getattr keeps it None-safe).
         key="e_consumption_today",
