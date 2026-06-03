@@ -47,6 +47,10 @@ class GivEnergyInverterSensorDescription(SensorEntityDescription):
     value_fn: Callable[[InverterModel], Any] = field(default=lambda _: None)
     # If True, the entity is not created when value_fn returns None at first refresh.
     skip_if_none: bool = False
+    # If True, the entity is not created on three-phase inverters, where the
+    # underlying field is single-phase-only (e.g. a p_pv1+p_pv2 sum) and so would
+    # be meaningless or surface as a permanently-unavailable orphan entity.
+    single_phase_only: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -203,6 +207,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         # Computed (p_pv1 + p_pv2) so not register-backed; watts -> 0 decimals.
         suggested_display_precision=0,
         value_fn=lambda inv: inv.p_pv(),
+        single_phase_only=True,
     ),
     GivEnergyInverterSensorDescription(
         key="p_pv1",
@@ -265,6 +270,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         # Computed (e_pv1_day + e_pv2_day, each deci-scaled kWh) -> 1 decimal.
         suggested_display_precision=1,
         value_fn=lambda inv: inv.e_pv_day(),
+        single_phase_only=True,
     ),
     GivEnergyInverterSensorDescription(
         key="e_pv1_day",
@@ -734,6 +740,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         suggested_display_precision=2,
         value_fn=lambda inv: inv.battery_capacity_kwh,
         entity_category=EntityCategory.DIAGNOSTIC,
+        single_phase_only=True,
     ),
 )
 
@@ -986,9 +993,16 @@ COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
 
 
 def _include_inverter_sensor(
-    description: GivEnergyInverterSensorDescription, inverter: InverterModel
+    description: GivEnergyInverterSensorDescription,
+    inverter: InverterModel,
+    is_three_phase: bool,
 ) -> bool:
     """Whether to create an inverter sensor at setup.
+
+    `single_phase_only` descriptions are dropped on three-phase inverters, where
+    the underlying field is single-phase-only — gating on plant topology rather
+    than a runtime None avoids suppressing a genuine single-phase sensor during a
+    transient partial first read.
 
     `skip_if_none` descriptions have their `value_fn` evaluated eagerly here, so a
     single bad descriptor — e.g. a library field renamed out from under us — must
@@ -996,6 +1010,8 @@ def _include_inverter_sensor(
     field rename in givenergy-modbus once dropped every sensor). Guard the call:
     skip the offending sensor with a warning, but keep the rest.
     """
+    if description.single_phase_only and is_three_phase:
+        return False
     if not description.skip_if_none:
         return True
     try:
@@ -1016,11 +1032,13 @@ async def async_setup_entry(
 ) -> None:
     coordinator: GivEnergyUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     inverter = coordinator.data.inverter
+    capabilities = coordinator.data.capabilities
+    is_three_phase = bool(capabilities and capabilities.is_three_phase)
 
     entities: list[SensorEntity] = [
         GivEnergyInverterSensor(coordinator, description)
         for description in INVERTER_SENSORS
-        if _include_inverter_sensor(description, inverter)
+        if _include_inverter_sensor(description, inverter, is_three_phase)
     ]
 
     for battery_index, battery in enumerate(coordinator.data.batteries):
