@@ -437,3 +437,52 @@ async def test_unique_id_migration_repoints_e_load_day(hass, mock_client, mock_c
     assert migrated is not None, "entity_id was not preserved across the migration"
     assert migrated.unique_id == "SA1234G123_e_ac_charge_today"
     assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_load_day") is None
+
+
+# --- givenergy-modbus #174/#176: inverter-output pair renamed to PV generation ---
+
+
+async def test_pv_generation_today_sensor(hass, setup_integration):
+    """IR44 is PV generation (not inverter AC output); entity renamed accordingly."""
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_e_pv_generation_today"))
+    assert state.state == "11.2"
+
+
+async def test_pv_generation_total_sensor(hass, setup_integration):
+    """IR45/46 is PV generation total; entity renamed from 'Inverter Output Total'."""
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_e_pv_generation_total"))
+    assert state.state == "5100.2"
+
+
+async def test_inverter_output_old_uids_gone(hass, setup_integration):
+    """Old unique_ids must be absent — they've been migrated to the PV generation names."""
+    registry = er.async_get(hass)
+    for old_uid in ("SA1234G123_e_inverter_out_day", "SA1234G123_e_inverter_out_total"):
+        assert registry.async_get_entity_id("sensor", DOMAIN, old_uid) is None, (
+            f"Old unique_id {old_uid!r} still registered — unique_id migration didn't run"
+        )
+
+
+async def test_unique_id_migration_repoints_inverter_output_pair(
+    hass, mock_client, mock_config_entry
+):
+    """Pre-2.1.2 entities under the old inverter-output unique_ids are re-pointed in place."""
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    old_today = registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_e_inverter_out_day", config_entry=mock_config_entry
+    )
+    old_total = registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_e_inverter_out_total", config_entry=mock_config_entry
+    )
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    for old_entry, expected_new_uid in (
+        (old_today, "SA1234G123_e_pv_generation_today"),
+        (old_total, "SA1234G123_e_pv_generation_total"),
+    ):
+        migrated = registry.async_get(old_entry.entity_id)
+        assert migrated is not None, f"entity_id {old_entry.entity_id!r} lost after migration"
+        assert migrated.unique_id == expected_new_uid
