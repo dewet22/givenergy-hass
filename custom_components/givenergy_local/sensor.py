@@ -516,25 +516,25 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: inv.e_ac_charge_today,
     ),
     GivEnergyInverterSensorDescription(
-        # NB: givenergy-modbus #174 found IR44 is PV generation, not inverter AC
-        # output, and renamed the field e_inverter_out_day -> e_pv_generation_today.
-        # We HOLD the entity rename (key/name) until the matching *total* (IR45/46)
-        # is verified and renamed too, so today+total move together — but read the
-        # new field name directly to avoid the deprecation warning on every poll.
-        key="e_inverter_out_day",
-        name="Inverter Output Today",
+        # IR44 is PV generation, not inverter AC output. givenergy-modbus #174
+        # renamed e_inverter_out_day -> e_pv_generation_today (single-phase). The
+        # total (IR45/46) was confirmed as PV-generation-total in #176 and renamed
+        # e_inverter_out_total -> e_pv_generation_total. Both entity keys and names
+        # move together; unique_id migrations in __init__.py carry existing history.
+        key="e_pv_generation_today",
+        name="PV Generation Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_pv_generation_today,
     ),
     GivEnergyInverterSensorDescription(
-        key="e_inverter_out_total",
-        name="Inverter Output Total",
+        key="e_pv_generation_total",
+        name="PV Generation Total",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_inverter_out_total,
+        value_fn=lambda inv: inv.e_pv_generation_total,
     ),
     GivEnergyInverterSensorDescription(
         key="e_inverter_export_total",

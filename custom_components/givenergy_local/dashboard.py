@@ -284,7 +284,7 @@ def _energy_view(inv: str) -> str:
             name: Grid Exported
           - entity: {_i(inv, "grid_import_total")}
             name: Grid Imported
-          - entity: {_i(inv, "inverter_output_total")}
+          - entity: {_i(inv, "pv_generation_total")}
             name: Inverter Output
           - entity: {_i(inv, "charge_from_grid_total")}
             name: Charged from Grid

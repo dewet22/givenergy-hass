@@ -51,7 +51,7 @@ What is migrated by default (all verified ✅ pairs):
   Grid import today / lifetime
   Grid export today / lifetime
   Battery charge today / discharge today
-  Inverter output today / lifetime
+  PV generation today / lifetime
   Battery throughput lifetime
   Battery charge cycles (per battery pack)
   House consumption today  (GivTCP's load_energy_today_kwh → givenergy_local's
@@ -109,8 +109,10 @@ INVERTER_PAIRS: list[tuple[str, str, str, bool]] = [
         "Battery discharge today",
         True,
     ),
-    ("invertor_energy_today_kwh", "inverter_output_today", "Inverter output today", True),
-    ("invertor_energy_total_kwh", "inverter_output_total", "Inverter output lifetime", True),
+    # givenergy-modbus #174/#176: IR44/45-46 are PV generation, so these
+    # sensors were renamed from "inverter output" to "PV generation".
+    ("invertor_energy_today_kwh", "pv_generation_today", "PV generation today", True),
+    ("invertor_energy_total_kwh", "pv_generation_total", "PV generation lifetime", True),
     (
         "battery_throughput_total_kwh",
         "battery_throughput_total",
