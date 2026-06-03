@@ -54,17 +54,17 @@ What is migrated by default (all verified ✅ pairs):
   Inverter output today / lifetime
   Battery throughput lifetime
   Battery charge cycles (per battery pack)
+  House consumption today  (GivTCP's load_energy_today_kwh → givenergy_local's
+    derived house_consumption_today; givenergy-modbus #174. The old
+    load_energy_today read ~0 and was excluded; the derived figure is correct.)
 
 Opt-in (--include-charge-from-grid):
   Charge from grid lifetime  ⚠️  values differ on some systems — verify manually
 
-Not migrated:
-  House load today  ❌  givenergy_local's e_load_day (IR35) reads ~0 on some
-    inverters while the GE app's "Consumption today" is correct — splicing it
-    produces a cliff at the seam. Excluded pending a library register fix.
+Not migrated (no GivTCP equivalent or register-level gap):
   battery_discharge_this_year, work_time_total, total_refresh_failures,
   battery_charge_energy_total_kwh, battery_discharge_energy_total_kwh,
-  load_energy_total_kwh  (no GivTCP equivalent or register-level gap)
+  load_energy_total_kwh
 
 See docs/migration-from-givtcp.md for the full sensor catalogue and design notes.
 """
@@ -76,6 +76,7 @@ import asyncio
 import json
 import re
 import sys
+from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -540,16 +541,15 @@ def _print_summary(results: list[MigrationResult], applying: bool) -> int:
         )
     print("─" * 88)
 
-    migrated = sum(1 for r in results if r.status == "migrated")
-    planned = sum(1 for r in results if r.status == "dry_run")
-    skipped = sum(1 for r in results if r.status == "no_givtcp_data")
-    errored = sum(1 for r in results if r.status == "error")
+    counts = Counter(r.status for r in results)
+    errored = counts["error"]
+    tail = f"No GivTCP data: {counts['no_givtcp_data']}  |  Errors: {errored}"
 
     if not applying:
-        print(f"\n  Planned: {planned}  |  No GivTCP data: {skipped}  |  Errors: {errored}")
+        print(f"\n  Planned: {counts['dry_run']}  |  {tail}")
         print("  Add --apply to write changes (back up your DB first).")
     else:
-        print(f"\n  Migrated: {migrated}  |  No GivTCP data: {skipped}  |  Errors: {errored}")
+        print(f"\n  Migrated: {counts['migrated']}  |  {tail}")
 
     for r in results:
         if r.status == "error":
