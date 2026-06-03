@@ -102,11 +102,20 @@ async def _save_capabilities(
 # Callers may identify the target inverter by HA-assigned device_id (convenient
 # in the Settings → Services UI) OR by inverter serial (convenient in dashboards
 # and automations that only know the serial). Exactly one must be supplied.
+def _require_one_of_device_or_serial(value: dict) -> dict:
+    if "device_id" not in value and "serial" not in value:
+        raise vol.Invalid("Supply either 'device_id' or 'serial'")
+    return value
+
+
 SERVICE_DEVICE_OR_SERIAL_SCHEMA = vol.Schema(
-    {
-        vol.Exclusive("device_id", "target"): cv.string,
-        vol.Exclusive("serial", "target"): cv.string,
-    }
+    vol.All(
+        {
+            vol.Exclusive("device_id", "target"): cv.string,
+            vol.Exclusive("serial", "target"): cv.string,
+        },
+        _require_one_of_device_or_serial,
+    )
 )
 
 SERVICE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): cv.string})
