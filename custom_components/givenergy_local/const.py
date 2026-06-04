@@ -12,7 +12,7 @@ CONF_RETRIES = "retries"
 
 DEFAULT_PASSIVE = False
 
-PLATFORMS = ["sensor", "switch", "number", "select", "time"]
+PLATFORMS = ["binary_sensor", "sensor", "switch", "number", "select", "time"]
 
 SERVICE_REBOOT_INVERTER = "reboot_inverter"
 SERVICE_CALIBRATE_BATTERY_SOC = "calibrate_battery_soc"
