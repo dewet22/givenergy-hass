@@ -179,6 +179,9 @@ views:
             name: Charged from Grid
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_discharge_this_year
             name: Discharged This Year
+          # Sites with a solar-diverter hardware add-on get this; remove on others.
+          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_solar_diverter_energy_total
+            name: Solar Diverter Energy
 
   # ── Battery ───────────────────────────────────────────────────────────────
   # sections view: one column per battery, cards stack vertically within each.
@@ -558,6 +561,14 @@ views:
             name: Grid Apparent Power
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_inverter_power_factor
             name: Inverter Power Factor
+          # Three-phase only; absent on single-phase.
+          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_grid_power_phase_1
+            name: Grid Power Phase 1
+          # EPS / hybrid AC-coupled diagnostics; will read unavailable on others.
+          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_backup_power
+            name: Backup Power
+          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_combined_generation_power
+            name: Combined Generation Power
 
       - type: entities
         title: PV Strings
@@ -574,6 +585,11 @@ views:
             name: String 2 Current
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_pv_string_2_power
             name: String 2 Power
+          - type: divider
+          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_pv_string_1_energy_today
+            name: String 1 Energy Today
+          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_pv_string_2_energy_today
+            name: String 2 Energy Today
 
       - type: entities
         title: Hardware & Firmware
