@@ -99,7 +99,7 @@ def generate_dashboard(
                                inverter-centric views would render blank — instead emit a
                                tailored view set (EMS scheduling controls + integration health).
         has_ac_config_block:   True for AC-coupled / All-in-One plants that expose the
-                               HR(300–359) AC-output config block (export priority, EPS,
+                               HR(300-359) AC-output config block (export priority, EPS,
                                AC charge/discharge limits). Surfaces the AC-Coupled
                                controls card; hidden on hybrids that don't carry the block.
         has_smart_load:        True when Smart Load slot scheduling is available. Defaults
@@ -661,7 +661,7 @@ def _controls_view(
 
 def _ac_coupled_card(inv: str) -> str:
     """AC-coupled / All-in-One controls. Only emitted when the plant carries
-    `capabilities.has_ac_config_block` — hybrids without HR(300–359) skip this."""
+    `capabilities.has_ac_config_block` - hybrids without HR(300-359) skip this."""
     return f"""
       - type: entities
         title: AC-Coupled
@@ -678,7 +678,7 @@ def _ac_coupled_card(inv: str) -> str:
 
 
 def _smart_load_card(inv: str) -> str:
-    """Smart Load slot scheduling (HR 554–573). Currently always emitted on
+    """Smart Load slot scheduling (HR 554-573). Currently always emitted on
     inverter installs; rows render as 'unavailable' on plants without Smart
     Load hardware until givenergy-modbus exposes a capability we can gate on
     (modbus #181, targeted at 2.1.3)."""

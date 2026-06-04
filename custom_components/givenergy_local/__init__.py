@@ -566,7 +566,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 bats = [b.serial_number.lower() for b in coordinator.data.batteries]
                 is_ems = coordinator.data.ems is not None
                 caps = coordinator.data.capabilities
-                has_ac_config_block = bool(caps and caps.has_ac_config_block)
+                has_ac_config_block = bool(
+                    caps and caps.has_ac_config_block and not caps.is_three_phase
+                )
                 # TODO: source from `caps.has_smart_load` once givenergy-modbus
                 # exposes the capability (#181, targeted at 2.1.3). Until then
                 # always emit; rows render as unavailable on non-Smart-Load installs.
