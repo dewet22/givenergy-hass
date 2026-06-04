@@ -114,9 +114,20 @@ class GivEnergyBatteryOutOfSpecBinarySensor(
 
     def __init__(self, coordinator: GivEnergyUpdateCoordinator) -> None:
         super().__init__(coordinator)
+        from .sensor import _device_kind  # local import to avoid module cycle
+
         serial = coordinator.data.inverter_serial_number
         self._attr_unique_id = f"{serial}_battery_out_of_spec"
-        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, serial)})
+        # Mirror sensor.py's DeviceInfo so HA derives the entity_id slug with the
+        # device-name prefix ("GivEnergy Inverter <serial>" → entity_id
+        # binary_sensor.givenergy_inverter_<serial>_battery_out_of_spec) rather
+        # than the bare slug it'd default to when binary_sensor sets up first
+        # and finds no named device record yet.
+        model = coordinator.data.inverter.model
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, serial)},
+            name=f"GivEnergy {_device_kind(model)} {serial}",
+        )
         self._offenders: dict[str, _Offender] = {}
         self._last_processed_refresh: datetime | None = None
         self._evaluate()

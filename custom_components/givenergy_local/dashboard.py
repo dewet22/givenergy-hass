@@ -9,7 +9,7 @@ import yaml
 # Increment whenever the generated YAML layout changes in a meaningful way.
 # __init__.py compares this against the last-generated version stored in HA's
 # persistent Store and raises a Repairs issue when they diverge.
-DASHBOARD_VERSION = 8
+DASHBOARD_VERSION = 9
 
 
 class _NoAliasDumper(yaml.SafeDumper):
@@ -198,6 +198,8 @@ def _overview_view(inv: str, max_power_kw: int) -> str:
             name: Pause Mode
           - entity: {_i(inv, "battery_temperature")}
             name: Battery Temp
+          - entity: binary_sensor.givenergy_inverter_{inv}_battery_out_of_spec
+            name: Battery OOS
 
       - type: glance
         title: Today
@@ -735,6 +737,8 @@ def _diagnostics_view(inv: str, max_power_kw: int) -> str:
         entities:
           - entity: {_i(inv, "status")}
             name: Inverter Status
+          - entity: binary_sensor.givenergy_inverter_{inv}_battery_out_of_spec
+            name: Battery Out Of Spec
           - entity: {_i(inv, "fault_code")}
             name: Fault Code
           - entity: {_i(inv, "fault_messages")}
@@ -762,9 +766,15 @@ def _diagnostics_view(inv: str, max_power_kw: int) -> str:
         title: Electrical
         entities:
           - entity: {_i(inv, "ac_voltage")}
-            name: AC Voltage
+            name: AC Voltage (input)
           - entity: {_i(inv, "ac_frequency")}
-            name: AC Frequency
+            name: AC Frequency (input)
+          - entity: {_i(inv, "ac_output_voltage")}
+            name: AC Voltage (output)
+          - entity: {_i(inv, "ac_output_frequency")}
+            name: AC Frequency (output)
+          - entity: {_i(inv, "ac_output_current")}
+            name: AC Current (output)
           - entity: {_i(inv, "battery_voltage")}
             name: Battery Voltage
           - entity: {_i(inv, "battery_current")}
@@ -799,6 +809,8 @@ def _diagnostics_view(inv: str, max_power_kw: int) -> str:
       - type: entities
         title: Hardware & Firmware
         entities:
+          - entity: {_i(inv, "battery_maintenance_mode")}
+            name: Battery Maintenance Mode
           - entity: {_i(inv, "arm_firmware_version")}
             name: ARM Firmware
           - entity: {_i(inv, "dsp_firmware_version")}
