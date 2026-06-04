@@ -475,6 +475,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
+        skip_if_none=True,
         value_fn=lambda inv: inv.p_grid_out_ph1,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
@@ -598,6 +599,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
+        skip_if_none=True,
         value_fn=lambda inv: inv.e_solar_diverter,
     ),
     # --- DC bus voltages ---
@@ -626,6 +628,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
+        skip_if_none=True,
         value_fn=lambda inv: inv.p_backup,
     ),
     GivEnergyInverterSensorDescription(
@@ -634,6 +637,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
+        skip_if_none=True,
         value_fn=lambda inv: inv.p_combined_generation,
     ),
     # --- Temperatures ---
