@@ -79,7 +79,7 @@
     },
     "capture_frames": {
       "name": "Capture debug frames",
-      "description": "Records raw Modbus wire frames from the inverter for a set duration and saves them as a redacted text file in /local/.",
+      "description": "Records raw Modbus wire frames from the inverter for a set duration and saves them as a redacted text file with an environment header. A persistent notification links to a page to inspect, download, or report the capture.",
       "fields": {
         "device_id": {
           "name": "Device",
