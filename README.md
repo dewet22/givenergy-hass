@@ -184,7 +184,7 @@ When enabled, the integration connects to the inverter but sends no Modbus read 
 
 ### Battery device(s)
 
-Each battery appears as a separate device linked to the inverter.
+Each connected battery pack appears as a separate device linked to the inverter. On All-in-One (AIO) hardware, devices are surfaced at pack level only — the individual module sub-devices that some other tools expose are not yet represented ([#95](https://github.com/dewet22/givenergy-hass/issues/95)).
 
 | Entity | Unit | Notes |
 |---|---|---|
