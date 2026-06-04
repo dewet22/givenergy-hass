@@ -190,7 +190,7 @@ async def test_battery_soc_sensor(hass, setup_integration):
 
 async def test_grid_power_sensor_negative_is_import(hass, setup_integration):
     # p_grid_out is negative when importing from grid
-    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_p_grid_out"))
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_grid_power"))
     assert float(state.state) == -800
 
 
@@ -535,3 +535,30 @@ async def test_unique_id_migration_repoints_inverter_output_pair(
         migrated = registry.async_get(old_entry.entity_id)
         assert migrated is not None, f"entity_id {old_entry.entity_id!r} lost after migration"
         assert migrated.unique_id == expected_new_uid
+
+
+# --- #52: p_grid_out renamed to grid_power (signed net, not export-only) ---
+
+
+async def test_grid_power_old_uid_gone(hass, setup_integration):
+    """Old p_grid_out unique_id must be absent after migration."""
+    registry = er.async_get(hass)
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_p_grid_out") is None, (
+        "Old unique_id 'SA1234G123_p_grid_out' still registered — migration didn't run"
+    )
+
+
+async def test_unique_id_migration_repoints_grid_power(hass, mock_client, mock_config_entry):
+    """Pre-rename entities under the old p_grid_out unique_id are re-pointed in place."""
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    old = registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_p_grid_out", config_entry=mock_config_entry
+    )
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    migrated = registry.async_get(old.entity_id)
+    assert migrated is not None, f"entity_id {old.entity_id!r} lost after migration"
+    assert migrated.unique_id == "SA1234G123_grid_power"

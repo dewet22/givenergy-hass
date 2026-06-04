@@ -367,8 +367,8 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     ),
     # --- Grid ---
     GivEnergyInverterSensorDescription(
-        key="p_grid_out",
-        name="Grid Export Power",
+        key="grid_power",
+        name="Grid Power",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,

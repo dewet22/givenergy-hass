@@ -67,7 +67,7 @@ Suffixes shown are after stripping the integration prefix and the inverter/batte
 |---|---|---|---|
 | 🔁 | `battery_power` | `battery_power` | Signed in both |
 | 🔁 | `combined_generation_power` | `combined_generation_power` |  |
-| 🔁 | `export_power` | `grid_export_power` |  |
+| 🔁 | `export_power` | `grid_power` | Renamed in v1.1.x — signed net at meter, positive = export |
 | 🔁 | `grid_power` | `grid_power_phase_1` | Single-phase inverter; three-phase users get three of these |
 | 🔁 | `load_power` | `load_power` | House load power (same name, same concept) |
 | 🔁 | `pv_power` | `pv_power` | PV total |

@@ -163,7 +163,7 @@ def _overview_view(inv: str, max_power_kw: int) -> str:
             entity: {_i(inv, "battery_power")}
             state_of_charge: {_i(inv, "battery_soc")}
           grid:
-            entity: {_i(inv, "grid_export_power")}
+            entity: {_i(inv, "grid_power")}
           home:
             entity: {_i(inv, "load_power")}
 
@@ -215,7 +215,7 @@ def _overview_view(inv: str, max_power_kw: int) -> str:
           - entity: {_i(inv, "battery_power")}
             name: Battery
             color: "#42A5F5"
-          - entity: {_i(inv, "grid_export_power")}
+          - entity: {_i(inv, "grid_power")}
             name: Grid
             color: "#66BB6A"
           - entity: {_i(inv, "load_power")}

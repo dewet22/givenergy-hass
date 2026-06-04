@@ -38,7 +38,7 @@ EXPOSE_RECOMMENDED_ENTITY_KEYS = (
     "e_battery_discharge_day",
     "e_battery_throughput",
     # Grid
-    "p_grid_out",
+    "grid_power",
     "e_grid_in_day",
     "e_grid_out_day",
     "e_grid_in_total",

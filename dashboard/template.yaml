@@ -34,7 +34,7 @@ views:
             entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_power
             state_of_charge: sensor.givenergy_inverter_INVERTER_SERIAL_battery_soc
           grid:
-            entity: sensor.givenergy_inverter_INVERTER_SERIAL_grid_export_power
+            entity: sensor.givenergy_inverter_INVERTER_SERIAL_grid_power
           home:
             entity: sensor.givenergy_inverter_INVERTER_SERIAL_load_power
 
@@ -80,7 +80,7 @@ views:
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_power
             name: Battery
             color: "#42A5F5"
-          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_grid_export_power
+          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_grid_power
             name: Grid
             color: "#66BB6A"
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_load_power
