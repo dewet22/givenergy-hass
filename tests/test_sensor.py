@@ -562,3 +562,31 @@ async def test_unique_id_migration_repoints_grid_power(hass, mock_client, mock_c
     migrated = registry.async_get(old.entity_id)
     assert migrated is not None, f"entity_id {old.entity_id!r} lost after migration"
     assert migrated.unique_id == "SA1234G123_grid_power"
+
+
+async def test_unique_id_migration_also_renames_grid_export_power_entity_id(
+    hass, mock_client, mock_config_entry
+):
+    """Migration of p_grid_out → grid_power also renames the entity_id when it
+    still carries the old '_grid_export_power' slug, so dashboard references to
+    '…_grid_power' resolve to the existing entity rather than a missing one."""
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    old = registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_p_grid_out", config_entry=mock_config_entry
+    )
+    # Simulate the entity_id that HA would have assigned when the sensor was
+    # first registered under the old "Grid Export Power" name.
+    old_entity_id = "sensor.givenergy_inverter_sa1234g123_grid_export_power"
+    registry.async_update_entity(old.entity_id, new_entity_id=old_entity_id)
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Old entity_id must be gone and re-issued under the new slug.
+    assert registry.async_get(old_entity_id) is None
+    new_entity_id = "sensor.givenergy_inverter_sa1234g123_grid_power"
+    migrated = registry.async_get(new_entity_id)
+    assert migrated is not None, f"entity_id {new_entity_id!r} not found after migration"
+    assert migrated.unique_id == "SA1234G123_grid_power"
+    assert migrated.entity_id == new_entity_id
