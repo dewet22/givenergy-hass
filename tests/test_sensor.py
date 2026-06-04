@@ -85,10 +85,30 @@ def test_setup_filter_skips_bad_descriptor_instead_of_crashing():
     )
 
     inv = MagicMock()
-    assert _include_inverter_sensor(bad, inv) is False  # skipped, no raise
-    assert _include_inverter_sensor(good, inv) is True
+    assert _include_inverter_sensor(bad, inv, False) is False  # skipped, no raise
+    assert _include_inverter_sensor(good, inv, False) is True
     # non-skip descriptors aren't evaluated at setup, so they're always included
-    assert _include_inverter_sensor(plain, inv) is True
+    assert _include_inverter_sensor(plain, inv, False) is True
+
+
+def test_single_phase_only_sensors_gated_on_three_phase():
+    """single_phase_only descriptions are dropped on three-phase plants but kept on
+    single-phase — otherwise the single-phase-only PV/capacity fields surface as
+    permanently-unavailable orphan entities on three-phase inverters (#94)."""
+    inv = MagicMock()
+    gated_keys = {"p_pv", "e_pv_day", "battery_capacity_kwh"}
+
+    # Every gated key must actually carry the flag (guards against silent drift if
+    # one is renamed/removed) ...
+    flagged = {d.key for d in INVERTER_SENSORS if d.single_phase_only}
+    assert flagged == gated_keys
+
+    # ... is excluded on three-phase ...
+    for key in gated_keys:
+        assert _include_inverter_sensor(_inverter_desc(key), inv, True) is False
+    # ... and retained on single-phase.
+    for key in gated_keys:
+        assert _include_inverter_sensor(_inverter_desc(key), inv, False) is True
 
 
 def test_device_kind_buckets_to_inverter_ems_gateway():
@@ -125,6 +145,35 @@ async def test_expected_sensor_count(hass, setup_integration):
     # 1 battery → inverter sensors + battery sensors + coordinator diagnostics
     expected = len(INVERTER_SENSORS) + len(BATTERY_SENSORS) + len(COORDINATOR_SENSORS)
     assert len(sensors) == expected
+
+
+async def test_single_phase_only_sensors_absent_on_three_phase(
+    hass, mock_client, mock_config_entry
+):
+    """On a three-phase plant the single-phase-only PV/capacity sensors must not be
+    created — otherwise they render as permanently-unavailable orphans (#94). The
+    default (single-phase) fixture keeps them, asserted by test_expected_sensor_count.
+    """
+    from givenergy_modbus.model.inverter import Model
+    from givenergy_modbus.model.plant import PlantCapabilities
+
+    mock_client.plant.capabilities = PlantCapabilities(
+        device_type=Model.HYBRID_3PH,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    for key in ("p_pv", "e_pv_day", "battery_capacity_kwh"):
+        assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is None, (
+            f"{key} should be suppressed on three-phase"
+        )
 
 
 async def test_pv_power_sensor(hass, setup_integration):
