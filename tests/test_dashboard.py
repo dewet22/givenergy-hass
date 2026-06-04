@@ -32,7 +32,7 @@ def test_dashboard_is_valid_yaml_with_expected_views():
 
 
 def test_dashboard_version_is_current():
-    assert DASHBOARD_VERSION == 9
+    assert DASHBOARD_VERSION == 10
 
 
 def test_battery_out_of_spec_on_status_glance_and_faults_card():
@@ -57,6 +57,27 @@ def test_diagnostics_electrical_has_ac_output_metrics():
 def test_diagnostics_hardware_card_includes_battery_maintenance_mode():
     out = generate_dashboard(INV, BATS)
     assert f"sensor.givenergy_inverter_{INV}_battery_maintenance_mode" in out
+
+
+def test_pv_strings_card_includes_per_string_energy_today():
+    out = generate_dashboard(INV, BATS)
+    assert f"sensor.givenergy_inverter_{INV}_pv_string_1_energy_today" in out
+    assert f"sensor.givenergy_inverter_{INV}_pv_string_2_energy_today" in out
+
+
+def test_electrical_card_includes_three_phase_and_backup_diagnostics():
+    out = generate_dashboard(INV, BATS)
+    for must in (
+        f"sensor.givenergy_inverter_{INV}_grid_power_phase_1",
+        f"sensor.givenergy_inverter_{INV}_backup_power",
+        f"sensor.givenergy_inverter_{INV}_combined_generation_power",
+    ):
+        assert must in out, f"Electrical card missing {must}"
+
+
+def test_all_time_totals_includes_solar_diverter_energy():
+    out = generate_dashboard(INV, BATS)
+    assert f"sensor.givenergy_inverter_{INV}_solar_diverter_energy_total" in out
 
 
 def test_battery_health_is_full_width_sections():

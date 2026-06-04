@@ -9,7 +9,7 @@ import yaml
 # Increment whenever the generated YAML layout changes in a meaningful way.
 # __init__.py compares this against the last-generated version stored in HA's
 # persistent Store and raises a Repairs issue when they diverge.
-DASHBOARD_VERSION = 9
+DASHBOARD_VERSION = 10
 
 
 class _NoAliasDumper(yaml.SafeDumper):
@@ -315,6 +315,8 @@ def _energy_view(inv: str) -> str:
             name: Charged from Grid
           - entity: {_i(inv, "battery_discharge_this_year")}
             name: Discharged This Year
+          - entity: {_i(inv, "solar_diverter_energy_total")}
+            name: Solar Diverter Energy
 """
 
 
@@ -789,6 +791,12 @@ def _diagnostics_view(inv: str, max_power_kw: int) -> str:
             name: Grid Apparent Power
           - entity: {_i(inv, "inverter_power_factor")}
             name: Inverter Power Factor
+          - entity: {_i(inv, "grid_power_phase_1")}
+            name: Grid Power Phase 1
+          - entity: {_i(inv, "backup_power")}
+            name: Backup Power
+          - entity: {_i(inv, "combined_generation_power")}
+            name: Combined Generation Power
 
       - type: entities
         title: PV Strings
@@ -805,6 +813,11 @@ def _diagnostics_view(inv: str, max_power_kw: int) -> str:
             name: String 2 Current
           - entity: {_i(inv, "pv_string_2_power")}
             name: String 2 Power
+          - type: divider
+          - entity: {_i(inv, "pv_string_1_energy_today")}
+            name: String 1 Energy Today
+          - entity: {_i(inv, "pv_string_2_energy_today")}
+            name: String 2 Energy Today
 
       - type: entities
         title: Hardware & Firmware
