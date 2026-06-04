@@ -363,17 +363,23 @@ async def _missing_dashboard_cards(hass: HomeAssistant) -> list[str]:
 # valid — IR35 was always AC charge, merely mislabelled "load" — so re-point the
 # existing registry entry to the new unique_id, carrying its history, statistics
 # and customisations across rather than orphaning it and starting fresh.
-_RENAMED_UNIQUE_ID_SUFFIXES = {
+
+# Values: (new_uid_suffix, old_entity_id_slug | None).
+# old_entity_id_slug is the name-slug the entity carried before renaming; None
+# means no entity_id rename is needed (unique_id suffix change only).
+_RENAMED_UNIQUE_ID_SUFFIXES: dict[str, tuple[str, str | None]] = {
     # givenergy-modbus #174 (2.1.1): IR35 was AC charge, not house load.
-    "e_load_day": "e_ac_charge_today",
+    "e_load_day": ("e_ac_charge_today", None),
     # givenergy-modbus #174/#176 (2.1.2): IR44/IR45-46 are PV generation, not
     # inverter AC output. Move both sensors together so today+total stay paired.
-    "e_inverter_out_day": "e_pv_generation_today",
-    "e_inverter_out_total": "e_pv_generation_total",
+    "e_inverter_out_day": ("e_pv_generation_today", None),
+    "e_inverter_out_total": ("e_pv_generation_total", None),
     # #52: p_grid_out (IR30) is a signed net flow, not export-only — rename the
     # surfaced entity to "Grid Power" to match. Existing history is valid (the
     # underlying register hasn't changed), so re-point in place.
-    "p_grid_out": "grid_power",
+    # entity_id was "…_grid_export_power"; must also be renamed so dashboard
+    # references to "…_grid_power" resolve correctly.
+    "p_grid_out": ("grid_power", "grid_export_power"),
 }
 
 
@@ -381,7 +387,7 @@ def _migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Re-point entities registered under a renamed unique_id suffix in place."""
     registry = er.async_get(hass)
     for ent in er.async_entries_for_config_entry(registry, entry.entry_id):
-        for old, new in _RENAMED_UNIQUE_ID_SUFFIXES.items():
+        for old, (new, old_slug) in _RENAMED_UNIQUE_ID_SUFFIXES.items():
             if not ent.unique_id.endswith(f"_{old}"):
                 continue
             new_uid = ent.unique_id[: -len(old)] + new
@@ -394,8 +400,22 @@ def _migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
                     new_uid,
                 )
                 break
-            _LOGGER.info("Migrating unique_id %s -> %s", ent.unique_id, new_uid)
-            registry.async_update_entity(ent.entity_id, new_unique_id=new_uid)
+            new_entity_id = (
+                ent.entity_id[: -len(old_slug)] + new
+                if old_slug and ent.entity_id.endswith(f"_{old_slug}")
+                else None
+            )
+            _LOGGER.info(
+                "Migrating unique_id %s -> %s%s",
+                ent.unique_id,
+                new_uid,
+                f" (entity_id: {ent.entity_id} -> {new_entity_id})" if new_entity_id else "",
+            )
+            registry.async_update_entity(
+                ent.entity_id,
+                new_unique_id=new_uid,
+                **({"new_entity_id": new_entity_id} if new_entity_id else {}),
+            )
             break
 
 
