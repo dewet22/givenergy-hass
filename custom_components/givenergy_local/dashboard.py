@@ -9,7 +9,7 @@ import yaml
 # Increment whenever the generated YAML layout changes in a meaningful way.
 # __init__.py compares this against the last-generated version stored in HA's
 # persistent Store and raises a Repairs issue when they diverge.
-DASHBOARD_VERSION = 7
+DASHBOARD_VERSION = 8
 
 
 class _NoAliasDumper(yaml.SafeDumper):
@@ -78,20 +78,35 @@ def _health_annotations() -> list[dict]:
 
 
 def generate_dashboard(
-    inv: str, bats: list[str], max_power_kw: int = 10, *, is_ems: bool = False
+    inv: str,
+    bats: list[str],
+    max_power_kw: int = 10,
+    *,
+    is_ems: bool = False,
+    has_ac_config_block: bool = False,
+    has_smart_load: bool = True,
 ) -> str:
     """Return a complete Lovelace dashboard YAML string.
 
     Args:
-        inv:           Inverter (or EMS controller) serial number (lowercase).
-        bats:          Battery serial number(s) (lowercase).
-        max_power_kw:  Vertical envelope (±kW) applied to the Overview power chart's
-                       y-axis. Defaults to 10 kW — suitable for single-phase hybrid
-                       and AC-coupled inverters. Raise for larger 3-phase systems.
-        is_ems:        True when generating for an EMS plant controller. An EMS has no
-                       PV/battery/grid/load sensors or inverter controls, so the
-                       inverter-centric views would render blank — instead emit a
-                       tailored view set (EMS scheduling controls + integration health).
+        inv:                   Inverter (or EMS controller) serial number (lowercase).
+        bats:                  Battery serial number(s) (lowercase).
+        max_power_kw:          Vertical envelope (±kW) applied to the Overview power chart's
+                               y-axis. Defaults to 10 kW — suitable for single-phase hybrid
+                               and AC-coupled inverters. Raise for larger 3-phase systems.
+        is_ems:                True when generating for an EMS plant controller. An EMS has no
+                               PV/battery/grid/load sensors or inverter controls, so the
+                               inverter-centric views would render blank — instead emit a
+                               tailored view set (EMS scheduling controls + integration health).
+        has_ac_config_block:   True for AC-coupled / All-in-One plants that expose the
+                               HR(300-359) AC-output config block (export priority, EPS,
+                               AC charge/discharge limits). Surfaces the AC-Coupled
+                               controls card; hidden on hybrids that don't carry the block.
+        has_smart_load:        True when Smart Load slot scheduling is available. Defaults
+                               to True so the section appears on inverter installs by
+                               default; once givenergy-modbus exposes a `has_smart_load`
+                               capability (#181, targeted at 2.1.3) the caller in
+                               __init__.py should source the value from there.
     """
     if is_ems:
         views = "\n".join([_ems_controls_view(inv), _ems_diagnostics_view(inv)])
@@ -104,7 +119,11 @@ def generate_dashboard(
                 # Skip the cross-pack health view on inverter-only installs — the
                 # heatmap card rejects an empty battery list.
                 *([_battery_health_view(inv, bats)] if bats else []),
-                _controls_view(inv),
+                _controls_view(
+                    inv,
+                    has_ac_config_block=has_ac_config_block,
+                    has_smart_load=has_smart_load,
+                ),
                 _diagnostics_view(inv, max_power_kw),
             ]
         )
@@ -280,6 +299,10 @@ def _energy_view(inv: str) -> str:
             name: PV Generated
           - entity: {_i(inv, "battery_throughput_total")}
             name: Battery Throughput
+          - entity: {_i(inv, "battery_charge_total")}
+            name: Battery Charged
+          - entity: {_i(inv, "battery_discharge_total")}
+            name: Battery Discharged
           - entity: {_i(inv, "grid_export_total")}
             name: Grid Exported
           - entity: {_i(inv, "grid_import_total")}
@@ -541,7 +564,14 @@ def _battery_health_view(inv: str, bats: list[str]) -> str:
     return header + textwrap.indent(body, "  ").rstrip("\n")
 
 
-def _controls_view(inv: str) -> str:
+def _controls_view(
+    inv: str,
+    *,
+    has_ac_config_block: bool = False,
+    has_smart_load: bool = True,
+) -> str:
+    ac_coupled_card = _ac_coupled_card(inv) if has_ac_config_block else ""
+    smart_load_card = _smart_load_card(inv) if has_smart_load else ""
     return f"""\
   # ── Controls ──────────────────────────────────────────────────────────────
   - title: Controls
@@ -556,6 +586,10 @@ def _controls_view(inv: str) -> str:
             name: Battery Power Mode
           - entity: select.givenergy_inverter_{inv}_battery_pause_mode
             name: Pause Mode
+          - entity: switch.givenergy_inverter_{inv}_real_time_control
+            name: Real Time Control
+          - entity: number.givenergy_inverter_{inv}_inverter_max_output_active_power
+            name: Inverter Max Output Power
           - entity: {_i(inv, "battery_calibration_stage")}
             name: Calibration Stage
 
@@ -598,7 +632,7 @@ def _controls_view(inv: str) -> str:
             name: Slot 2 Start
           - entity: time.givenergy_inverter_{inv}_discharge_slot_2_end
             name: Slot 2 End
-
+{ac_coupled_card}{smart_load_card}
       - type: entities
         title: Maintenance
         entities:
@@ -623,6 +657,46 @@ def _controls_view(inv: str) -> str:
               data:
                 serial: {inv.upper()}
 """
+
+
+def _ac_coupled_card(inv: str) -> str:
+    """AC-coupled / All-in-One controls. Only emitted when the plant carries
+    `capabilities.has_ac_config_block` - hybrids without HR(300-359) skip this."""
+    return f"""
+      - type: entities
+        title: AC-Coupled
+        entities:
+          - entity: select.givenergy_inverter_{inv}_export_priority
+            name: Export Priority
+          - entity: switch.givenergy_inverter_{inv}_emergency_power_supply_eps
+            name: EPS Enable
+          - entity: number.givenergy_inverter_{inv}_battery_ac_charge_limit
+            name: AC Charge Limit
+          - entity: number.givenergy_inverter_{inv}_battery_ac_discharge_limit
+            name: AC Discharge Limit
+"""
+
+
+def _smart_load_card(inv: str) -> str:
+    """Smart Load slot scheduling (HR 554-573). Currently always emitted on
+    inverter installs; rows render as 'unavailable' on plants without Smart
+    Load hardware until givenergy-modbus exposes a capability we can gate on
+    (modbus #181, targeted at 2.1.3)."""
+    lines: list[str] = [
+        "      - type: entities",
+        "        title: Smart Load",
+        "        entities:",
+    ]
+    for idx in range(1, 11):
+        if idx > 1:
+            lines.append("          - type: divider")
+        lines.append(
+            f"          - entity: time.givenergy_inverter_{inv}_smart_load_slot_{idx}_start"
+        )
+        lines.append(f"            name: Slot {idx} Start")
+        lines.append(f"          - entity: time.givenergy_inverter_{inv}_smart_load_slot_{idx}_end")
+        lines.append(f"            name: Slot {idx} End")
+    return "\n" + "\n".join(lines) + "\n"
 
 
 def _integration_health_card(inv: str, kind: str = "inverter") -> str:
