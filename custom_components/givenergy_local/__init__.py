@@ -370,6 +370,10 @@ _RENAMED_UNIQUE_ID_SUFFIXES = {
     # inverter AC output. Move both sensors together so today+total stay paired.
     "e_inverter_out_day": "e_pv_generation_today",
     "e_inverter_out_total": "e_pv_generation_total",
+    # #52: p_grid_out (IR30) is a signed net flow, not export-only — rename the
+    # surfaced entity to "Grid Power" to match. Existing history is valid (the
+    # underlying register hasn't changed), so re-point in place.
+    "p_grid_out": "grid_power",
 }
 
 

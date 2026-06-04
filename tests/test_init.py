@@ -453,7 +453,7 @@ async def test_expose_recommended_entities_service(hass, mock_client, setup_inte
     # translation_key instead of its description key.
     entity_reg = er.async_get(hass)
     inverter_serial = "SA1234G123"  # from mock_config_entry fixture
-    for key in ("p_pv", "battery_soc", "p_grid_out", "p_load_demand", "status"):
+    for key in ("p_pv", "battery_soc", "grid_power", "p_load_demand", "status"):
         entry = entity_reg.async_get_entity_id("sensor", DOMAIN, f"{inverter_serial}_{key}")
         assert entry is not None, (
             f"No entity registered with unique_id {inverter_serial}_{key!r} — "

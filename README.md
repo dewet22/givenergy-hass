@@ -126,7 +126,7 @@ When enabled, the integration connects to the inverter but sends no Modbus read 
 | Battery Charge Today | kWh | |
 | Battery Discharge Today | kWh | |
 | Battery Throughput Total | kWh | |
-| Grid Export Power | W | Positive = exporting, negative = importing |
+| Grid Power | W | Positive = exporting, negative = importing |
 | Grid Export / Import Today | kWh | |
 | Grid Export / Import Total | kWh | |
 | AC Voltage / Frequency | V / Hz | |
@@ -310,7 +310,7 @@ The dashboard's live view shows current power flow between solar, grid, battery 
 | Dashboard slot | Entity | Sign convention |
 |---|---|---|
 | Solar power | `PV Power` | Positive when producing |
-| Grid power | `Grid Export Power` | Positive = exporting, negative = importing |
+| Grid power | `Grid Power` | Positive = exporting, negative = importing |
 | Battery power | `Battery Power` | Positive = discharging, negative = charging |
 | Household demand | `Load Power` | This would be universally positive, unless you have another generation source |
 
