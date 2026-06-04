@@ -18,6 +18,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator
+from .sensor import _device_kind
 
 # LFP soft operating band. A cell that has genuinely drifted outside this for a
 # sustained period warrants attention; the band is deliberately wider than the
@@ -114,8 +115,6 @@ class GivEnergyBatteryOutOfSpecBinarySensor(
 
     def __init__(self, coordinator: GivEnergyUpdateCoordinator) -> None:
         super().__init__(coordinator)
-        from .sensor import _device_kind  # local import to avoid module cycle
-
         serial = coordinator.data.inverter_serial_number
         self._attr_unique_id = f"{serial}_battery_out_of_spec"
         # Mirror sensor.py's DeviceInfo so HA derives the entity_id slug with the
