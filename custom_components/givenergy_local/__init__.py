@@ -313,8 +313,8 @@ async def _async_register_capture_http(hass: HomeAssistant) -> None:
     if hass.http is None:
         # No web server (e.g. a minimal test harness) — nothing to serve from.
         return
-    hass.http.register_view(CaptureLandingView())
-    hass.http.register_view(CaptureDownloadView())
+    hass.http.register_view(CaptureLandingView(hass))
+    hass.http.register_view(CaptureDownloadView(hass))
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:

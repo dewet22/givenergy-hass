@@ -103,10 +103,13 @@ class CaptureLandingView(HomeAssistantView):
     name = f"api:{DOMAIN}:capture"
     requires_auth = True  # accepts a valid bearer header or a signed authSig query
 
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
     async def get(self, request: web.Request, filename: str) -> web.StreamResponse:
         if not CAPTURE_FILENAME_RE.match(filename):
             return web.Response(status=404)
-        hass: HomeAssistant = request.app["hass"]
+        hass = self.hass
         path = capture_dir(hass) / filename
         content = await hass.async_add_executor_job(_read_if_present, path)
         if content is None:
@@ -149,10 +152,13 @@ class CaptureDownloadView(HomeAssistantView):
     name = f"api:{DOMAIN}:capture:download"
     requires_auth = True  # signed authSig query works here too, so curl can fetch
 
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
     async def get(self, request: web.Request, filename: str) -> web.StreamResponse:
         if not CAPTURE_FILENAME_RE.match(filename):
             return web.Response(status=404)
-        hass: HomeAssistant = request.app["hass"]
+        hass = self.hass
         path = capture_dir(hass) / filename
         content = await hass.async_add_executor_job(_read_if_present, path)
         if content is None:

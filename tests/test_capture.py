@@ -126,7 +126,8 @@ async def test_capture_frames_posts_landing_notification(hass, mock_client, capt
     mock_client.capture_frames.side_effect = _make_capture_sink([])
     await hass.services.async_call(DOMAIN, SERVICE_CAPTURE_FRAMES, {"duration": 10}, blocking=True)
     notifications = hass.data.get("persistent_notification", {})
-    note = next(n for nid, n in notifications.items() if "givenergy_capture_" in nid)
+    note = next((n for nid, n in notifications.items() if "givenergy_capture_" in nid), None)
+    assert note is not None, "expected a givenergy_capture_* notification"
     message = note["message"]
     assert f"/api/{DOMAIN}/capture/" in message
     assert "authSig=" in message  # signed landing link
