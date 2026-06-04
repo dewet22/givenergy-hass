@@ -7,7 +7,7 @@ from givenergy_modbus.client import commands
 from givenergy_modbus.model.ems import Ems
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE
+from homeassistant.const import PERCENTAGE, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -176,7 +176,22 @@ def _ems_number_descriptions() -> tuple[GivEnergyEmsNumberEntityDescription, ...
 
 
 EMS_NUMBER_DESCRIPTIONS: tuple[GivEnergyEmsNumberEntityDescription, ...] = (
-    _ems_number_descriptions()
+    *_ems_number_descriptions(),
+    GivEnergyEmsNumberEntityDescription(
+        key="ems_export_power_limit",
+        name="EMS Export Power Limit",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        native_min_value=0,
+        # Provisional ceiling — the raw register is uint16 (0-65535 W), which is no
+        # sensible slider. 6000 W covers a single inverter's rating; confirm a realistic
+        # plant-level figure with a real EMS plant (#52) and raise if needed.
+        native_max_value=6000,
+        native_step=100,
+        mode=NumberMode.BOX,
+        value_fn=lambda ems: ems.export_power_limit,
+        set_value_cmd=lambda v: commands.set_ems_export_power_limit(int(v)),
+        entity_category=EntityCategory.CONFIG,
+    ),
 )
 
 

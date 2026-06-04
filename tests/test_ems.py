@@ -38,6 +38,7 @@ def mock_ems() -> MagicMock:
     ems.export_target_1 = 100
     ems.export_target_2 = 4
     ems.export_target_3 = 4
+    ems.export_power_limit = 3600
     ems.plant_enabled = True
     return ems
 
@@ -63,14 +64,14 @@ def _entity_id(hass, platform: str, unique_id: str) -> str | None:
 
 
 async def test_ems_entities_created_for_ems_plant(hass, ems_setup):
-    """EMS plant exposes 18 slot-time + 9 SoC-target + 1 switch entities."""
+    """EMS plant exposes 18 slot-time + 10 number + 1 switch entities."""
     registry = er.async_get(hass)
     entries = er.async_entries_for_config_entry(registry, ems_setup.entry_id)
     ems_times = [e for e in entries if e.domain == "time" and "_ems_" in e.unique_id]
     ems_numbers = [e for e in entries if e.domain == "number" and "_ems_" in e.unique_id]
     ems_switches = [e for e in entries if e.domain == "switch" and "_ems_" in e.unique_id]
     assert len(ems_times) == 18  # charge+discharge+export x slots 1-3 x start/end
-    assert len(ems_numbers) == 9  # charge+discharge+export x slots 1-3 target SoC
+    assert len(ems_numbers) == 10  # 9 slot SoC targets + export power limit
     assert len(ems_switches) == 1  # Flexi EMS Control
 
 
@@ -78,6 +79,7 @@ async def test_no_ems_entities_for_non_ems_plant(hass, setup_integration):
     """A plant without an EMS (the default) must not get EMS entities."""
     assert _entity_id(hass, "time", "SA1234G123_ems_charge_slot_1_start") is None
     assert _entity_id(hass, "number", "SA1234G123_ems_charge_target_soc_1") is None
+    assert _entity_id(hass, "number", "SA1234G123_ems_export_power_limit") is None
 
 
 async def test_no_smart_load_entities_for_ems_plant(hass, ems_setup):
@@ -128,6 +130,24 @@ async def test_set_ems_export_target_soc_writes_to_ems_controller(hass, mock_cli
     (request,) = mock_client.one_shot_command.call_args[0][0]
     # EMS export target SoC writes go to the EMS controller (0x11) with the value.
     assert request.value == 50
+    assert request.device_address == 0x11
+
+
+async def test_ems_export_power_limit_initial_value(hass, ems_setup):
+    state = hass.states.get(_entity_id(hass, "number", "SA1234G123_ems_export_power_limit"))
+    assert float(state.state) == 3600
+    assert state.attributes["min"] == 0
+    assert state.attributes["max"] == 6000
+
+
+async def test_set_ems_export_power_limit_writes_command(hass, mock_client, ems_setup):
+    entity_id = _entity_id(hass, "number", "SA1234G123_ems_export_power_limit")
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": entity_id, "value": 2500}, blocking=True
+    )
+    mock_client.one_shot_command.assert_called_once()
+    (request,) = mock_client.one_shot_command.call_args[0][0]
+    assert request.value == 2500
     assert request.device_address == 0x11
 
 
