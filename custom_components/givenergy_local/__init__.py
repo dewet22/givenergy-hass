@@ -565,7 +565,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 inv = coordinator.data.inverter.serial_number.lower()
                 bats = [b.serial_number.lower() for b in coordinator.data.batteries]
                 is_ems = coordinator.data.ems is not None
-                yaml = generate_dashboard(inv, bats, max_power_kw=max_power_kw, is_ems=is_ems)
+                caps = coordinator.data.capabilities
+                has_ac_config_block = bool(caps and caps.has_ac_config_block)
+                # TODO: source from `caps.has_smart_load` once givenergy-modbus
+                # exposes the capability (#181, targeted at 2.1.3). Until then
+                # always emit; rows render as unavailable on non-Smart-Load installs.
+                has_smart_load = not is_ems
+                yaml = generate_dashboard(
+                    inv,
+                    bats,
+                    max_power_kw=max_power_kw,
+                    is_ems=is_ems,
+                    has_ac_config_block=has_ac_config_block,
+                    has_smart_load=has_smart_load,
+                )
                 filename = f"dashboard_givenergy_{inv}.yaml"
                 www_dir = Path(hass.config.path("www"))
                 await hass.async_add_executor_job(lambda d=www_dir: d.mkdir(exist_ok=True))

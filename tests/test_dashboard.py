@@ -32,7 +32,7 @@ def test_dashboard_is_valid_yaml_with_expected_views():
 
 
 def test_dashboard_version_is_current():
-    assert DASHBOARD_VERSION == 7
+    assert DASHBOARD_VERSION == 8
 
 
 def test_battery_health_is_full_width_sections():
@@ -176,6 +176,69 @@ def test_ems_dashboard_covers_all_slot_kinds_and_indices():
     for kind in ("charge", "discharge", "export"):
         for idx in (1, 2, 3):
             assert f"ems_{kind}_slot_{idx}_target_soc" in out
+
+
+# --- PR A additions: Mode card extras, AC-Coupled gating, Smart Load, Energy totals ---
+
+
+def test_mode_card_surfaces_active_power_rate_and_rtc():
+    out = generate_dashboard(INV, BATS)
+    for must in (
+        f"switch.givenergy_inverter_{INV}_real_time_control",
+        f"number.givenergy_inverter_{INV}_inverter_max_output_active_power",
+    ):
+        assert must in out, f"Mode card missing {must}"
+
+
+def test_ac_coupled_card_hidden_when_capability_absent():
+    out = generate_dashboard(INV, BATS, has_ac_config_block=False)
+    assert "AC-Coupled" not in out
+    for absent in (
+        f"select.givenergy_inverter_{INV}_export_priority",
+        f"switch.givenergy_inverter_{INV}_emergency_power_supply_eps",
+        f"number.givenergy_inverter_{INV}_battery_ac_charge_limit",
+        f"number.givenergy_inverter_{INV}_battery_ac_discharge_limit",
+    ):
+        assert absent not in out
+
+
+def test_ac_coupled_card_emitted_when_capability_present():
+    out = generate_dashboard(INV, BATS, has_ac_config_block=True)
+    assert "AC-Coupled" in out
+    for must in (
+        f"select.givenergy_inverter_{INV}_export_priority",
+        f"switch.givenergy_inverter_{INV}_emergency_power_supply_eps",
+        f"number.givenergy_inverter_{INV}_battery_ac_charge_limit",
+        f"number.givenergy_inverter_{INV}_battery_ac_discharge_limit",
+    ):
+        assert must in out
+
+
+def test_smart_load_card_emits_ten_slots_by_default():
+    out = generate_dashboard(INV, BATS)
+    assert "Smart Load" in out
+    for idx in range(1, 11):
+        assert f"time.givenergy_inverter_{INV}_smart_load_slot_{idx}_start" in out
+        assert f"time.givenergy_inverter_{INV}_smart_load_slot_{idx}_end" in out
+
+
+def test_smart_load_card_suppressible():
+    out = generate_dashboard(INV, BATS, has_smart_load=False)
+    assert "Smart Load" not in out
+    assert "smart_load_slot_1_start" not in out
+
+
+def test_ems_dashboard_omits_smart_load_and_ac_coupled_cards():
+    out = generate_dashboard(EMS, [], is_ems=True, has_ac_config_block=True, has_smart_load=True)
+    assert "Smart Load" not in out
+    assert "AC-Coupled" not in out
+
+
+def test_energy_view_lists_battery_charge_discharge_totals():
+    views = _views()
+    energy_str = yaml.safe_dump(views["Energy"])
+    assert "battery_charge_total" in energy_str
+    assert "battery_discharge_total" in energy_str
 
 
 def test_controls_view_has_maintenance_section():

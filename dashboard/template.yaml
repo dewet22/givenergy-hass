@@ -163,6 +163,10 @@ views:
             name: PV Generated
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_throughput_total
             name: Battery Throughput
+          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_charge_total
+            name: Battery Charged
+          - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_discharge_total
+            name: Battery Discharged
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_grid_export_total
             name: Grid Exported
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_grid_import_total
@@ -373,6 +377,10 @@ views:
             name: Battery Power Mode
           - entity: select.givenergy_inverter_INVERTER_SERIAL_battery_pause_mode
             name: Pause Mode
+          - entity: switch.givenergy_inverter_INVERTER_SERIAL_real_time_control
+            name: Real Time Control
+          - entity: number.givenergy_inverter_INVERTER_SERIAL_inverter_max_output_active_power
+            name: Inverter Max Output Power
           - entity: sensor.givenergy_inverter_INVERTER_SERIAL_battery_calibration_stage
             name: Calibration Stage
 
@@ -415,6 +423,41 @@ views:
             name: Slot 2 Start
           - entity: time.givenergy_inverter_INVERTER_SERIAL_discharge_slot_2_end
             name: Slot 2 End
+
+      # AC-Coupled / All-in-One only — remove this card on hybrids without the
+      # HR(300–359) AC-output config block.
+      - type: entities
+        title: AC-Coupled
+        entities:
+          - entity: select.givenergy_inverter_INVERTER_SERIAL_export_priority
+            name: Export Priority
+          - entity: switch.givenergy_inverter_INVERTER_SERIAL_emergency_power_supply_eps
+            name: EPS Enable
+          - entity: number.givenergy_inverter_INVERTER_SERIAL_battery_ac_charge_limit
+            name: AC Charge Limit
+          - entity: number.givenergy_inverter_INVERTER_SERIAL_battery_ac_discharge_limit
+            name: AC Discharge Limit
+
+      # Smart Load slot scheduling (HR 554–573). Rows render as 'unavailable' on
+      # plants without Smart Load hardware — remove this card if not relevant.
+      - type: entities
+        title: Smart Load
+        entities:
+          - entity: time.givenergy_inverter_INVERTER_SERIAL_smart_load_slot_1_start
+            name: Slot 1 Start
+          - entity: time.givenergy_inverter_INVERTER_SERIAL_smart_load_slot_1_end
+            name: Slot 1 End
+          - type: divider
+          - entity: time.givenergy_inverter_INVERTER_SERIAL_smart_load_slot_2_start
+            name: Slot 2 Start
+          - entity: time.givenergy_inverter_INVERTER_SERIAL_smart_load_slot_2_end
+            name: Slot 2 End
+          - type: divider
+          - entity: time.givenergy_inverter_INVERTER_SERIAL_smart_load_slot_3_start
+            name: Slot 3 Start
+          - entity: time.givenergy_inverter_INVERTER_SERIAL_smart_load_slot_3_end
+            name: Slot 3 End
+          # Slots 4–10 follow the same pattern; duplicate as needed.
 
       - type: entities
         title: Maintenance
