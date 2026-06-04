@@ -179,6 +179,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         options=[s.name.lower() for s in BatteryMaintenance],
         translation_key="battery_maintenance_mode",
         # Only present on three-phase inverters (HR 1124); None on single-phase.
+        skip_if_none=True,
         value_fn=lambda inv: (
             m.name.lower()
             if (m := getattr(inv, "battery_maintenance_mode", None)) is not None

@@ -32,7 +32,31 @@ def test_dashboard_is_valid_yaml_with_expected_views():
 
 
 def test_dashboard_version_is_current():
-    assert DASHBOARD_VERSION == 8
+    assert DASHBOARD_VERSION == 9
+
+
+def test_battery_out_of_spec_on_status_glance_and_faults_card():
+    out = generate_dashboard(INV, BATS)
+    occurrences = out.count(f"binary_sensor.givenergy_inverter_{INV}_battery_out_of_spec")
+    # Once in the Overview Status glance; once in Diagnostics → Faults & Warnings.
+    assert occurrences >= 2, (
+        "battery_out_of_spec should appear in both Status glance and Faults card"
+    )
+
+
+def test_diagnostics_electrical_has_ac_output_metrics():
+    out = generate_dashboard(INV, BATS)
+    for must in (
+        f"sensor.givenergy_inverter_{INV}_ac_output_voltage",
+        f"sensor.givenergy_inverter_{INV}_ac_output_frequency",
+        f"sensor.givenergy_inverter_{INV}_ac_output_current",
+    ):
+        assert must in out, f"Electrical card missing {must}"
+
+
+def test_diagnostics_hardware_card_includes_battery_maintenance_mode():
+    out = generate_dashboard(INV, BATS)
+    assert f"sensor.givenergy_inverter_{INV}_battery_maintenance_mode" in out
 
 
 def test_battery_health_is_full_width_sections():
