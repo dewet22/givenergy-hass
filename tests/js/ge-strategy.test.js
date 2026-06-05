@@ -211,3 +211,49 @@ describe("no GivEnergy plant", () => {
     expect(dash.views[0].cards[0].content).toContain("No GivEnergy plant");
   });
 });
+
+describe("multi-plant safety", () => {
+  it("does not borrow another plant's batteries when the target has none", async () => {
+    // INV123 has no batteries; INV999 owns BAT9 via via_device. With no serial
+    // pin the target is INV123 (sorted first) - its battery match is genuinely
+    // empty and must stay empty rather than showing INV999's pack.
+    const hass = makeHass({
+      inverterSerial: "INV123",
+      batterySerials: [],
+      extraInverterSerial: "INV999",
+      extraBatterySerials: ["BAT9"],
+    });
+    const dash = await GE.generateDashboard({}, hass);
+    expect(titles(dash)).not.toContain("Battery Health");
+    expect(collectRefs(dash).some((r) => r.includes("bat9"))).toBe(false);
+  });
+
+  it("shows the no-plant notice (naming the serial) for an unmatched pin", async () => {
+    // A typo'd / stale serial pin must NOT silently fall back to another plant,
+    // or the Maintenance buttons would target the wrong inverter.
+    const hass = makeHass({ inverterSerial: "INV123", extraInverterSerial: "INV999" });
+    const dash = await GE.generateDashboard({ serial: "NOPE404" }, hass);
+    expect(dash.views[0].cards[0].type).toBe("markdown");
+    expect(dash.views[0].cards[0].content).toContain("NOPE404");
+    expect(collectRefs(dash).some((r) => r.includes("inv123") || r.includes("inv999"))).toBe(false);
+  });
+
+  it("still classifies an inverter when its marker entity is disabled", async () => {
+    // Disabling p_pv (the inverter marker) must not make the whole device
+    // vanish - classification uses the full key set, not just enabled entities.
+    const hass = makeHass({ batterySerials: ["BAT1"], disabledKeys: ["p_pv"] });
+    const dash = await GE.generateDashboard({}, hass);
+    expect(titles(dash)).toContain("Overview"); // inverter did not disappear
+    // ...but the disabled entity itself is never rendered.
+    expect(collectRefs(dash).some((r) => r.endsWith("_p_pv"))).toBe(false);
+  });
+});
+
+describe("registry read failure", () => {
+  it("returns a friendly notice instead of crashing the render", async () => {
+    const failing = { callWS: () => Promise.reject(new Error("disconnected")) };
+    const dash = await GE.generateDashboard({}, failing);
+    expect(dash.views[0].cards[0].type).toBe("markdown");
+    expect(dash.views[0].cards[0].content).toContain("Could not read the entity registry");
+  });
+});

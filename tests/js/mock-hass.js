@@ -81,7 +81,7 @@ function entityId(prefix, serial, key) {
   return "sensor." + prefix + "ge_" + String(serial).toLowerCase() + "_" + key;
 }
 
-function entitiesFor(deviceId, serial, keys, prefix, omit) {
+function entitiesFor(deviceId, serial, keys, prefix, omit, disabled) {
   return keys
     .filter(function (key) {
       return !(omit && omit.indexOf(key) !== -1);
@@ -93,6 +93,7 @@ function entitiesFor(deviceId, serial, keys, prefix, omit) {
       device_id: deviceId,
       unique_id: serial + "_" + key,
       area_id: prefix ? "loft" : null,
+      disabled_by: disabled && disabled.indexOf(key) !== -1 ? "user" : null,
     };
   });
 }
@@ -127,7 +128,10 @@ function makeHass(opts) {
     let invKeys = INVERTER_KEYS.slice();
     if (opts.smartLoad !== false) invKeys = invKeys.concat(SMART_LOAD_KEYS);
     if (opts.acCoupled) invKeys = invKeys.concat(AC_COUPLED_KEYS);
-    entities.push.apply(entities, entitiesFor("dev_inv", invSerial, invKeys, prefix, opts.omitKeys));
+    entities.push.apply(
+      entities,
+      entitiesFor("dev_inv", invSerial, invKeys, prefix, opts.omitKeys, opts.disabledKeys)
+    );
 
     bats.forEach(function (serial, i) {
       const id = "dev_bat" + (i + 1);
@@ -137,7 +141,10 @@ function makeHass(opts) {
         name: "GivEnergy Battery " + serial,
         via_device_id: "dev_inv",
       });
-      entities.push.apply(entities, entitiesFor(id, serial, BATTERY_KEYS, prefix, opts.omitKeys));
+      entities.push.apply(
+        entities,
+        entitiesFor(id, serial, BATTERY_KEYS, prefix, opts.omitKeys, opts.disabledKeys)
+      );
     });
   }
 
@@ -151,8 +158,24 @@ function makeHass(opts) {
     });
     entities.push.apply(
       entities,
-      entitiesFor("dev_inv2", opts.extraInverterSerial, INVERTER_KEYS, prefix, opts.omitKeys)
+      entitiesFor("dev_inv2", opts.extraInverterSerial, INVERTER_KEYS, prefix, opts.omitKeys, opts.disabledKeys)
     );
+
+    // batteries belonging to the SECOND plant (via_device -> dev_inv2), to prove
+    // the first plant never borrows them.
+    (opts.extraBatterySerials || []).forEach(function (serial, i) {
+      const id = "dev_inv2_bat" + (i + 1);
+      devices.push({
+        id: id,
+        identifiers: [["givenergy_local", serial]],
+        name: "GivEnergy Battery " + serial,
+        via_device_id: "dev_inv2",
+      });
+      entities.push.apply(
+        entities,
+        entitiesFor(id, serial, BATTERY_KEYS, prefix, opts.omitKeys, opts.disabledKeys)
+      );
+    });
   }
 
   // a foreign-integration entity that must be ignored

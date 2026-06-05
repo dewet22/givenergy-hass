@@ -77,10 +77,18 @@
   // Resolve the plant topology and a key->entity_id map per device from the
   // registry. Returns { plants: [...], byDevice: Map<deviceId, Map<key, eid>> }.
   async function buildPlant(hass, opts) {
-    var res = await Promise.all([
-      hass.callWS({ type: "config/entity_registry/list" }),
-      hass.callWS({ type: "config/device_registry/list" }),
-    ]);
+    var res;
+    try {
+      res = await Promise.all([
+        hass.callWS({ type: "config/entity_registry/list" }),
+        hass.callWS({ type: "config/device_registry/list" }),
+      ]);
+    } catch (err) {
+      // These list commands aren't admin-gated, but the connection can still
+      // fail (transient drop, reconnect in progress). Surface a friendly
+      // notice rather than letting the whole strategy render throw.
+      return { target: null, batteries: [], registryError: true };
+    }
     var entities = res[0] || [];
     var devices = res[1] || [];
 
@@ -95,18 +103,29 @@
       geDevices.set(d.id, { serial: ident[1], viaDeviceId: d.via_device_id || null });
     }
 
-    // key -> entity_id per device, by stripping the device's `{serial}_` prefix
-    // off each entity's unique_id.
+    // Two per-device maps, both keyed by stripping the `{serial}_` prefix off
+    // each entity's unique_id. `allKeys` records every registered key incl.
+    // disabled ones, used only for classification so disabling a single marker
+    // entity (p_pv, ems_plant_enable, ...) can't make a whole device vanish.
+    // `byDevice` holds only enabled entities' key->entity_id; disabled entities
+    // have no state and would dangle if rendered.
     var byDevice = new Map();
+    var allKeys = new Map();
     for (var j = 0; j < entities.length; j++) {
       var e = entities[j];
       if (e.platform !== DOMAIN) continue;
-      if (e.disabled_by) continue; // skip disabled entities; they have no state
       var dev = geDevices.get(e.device_id);
       if (!dev || !e.unique_id) continue;
       var prefix = dev.serial + "_";
       if (e.unique_id.lastIndexOf(prefix, 0) !== 0) continue; // startsWith
       var key = e.unique_id.slice(prefix.length);
+      var ks = allKeys.get(e.device_id);
+      if (!ks) {
+        ks = new Set();
+        allKeys.set(e.device_id, ks);
+      }
+      ks.add(key);
+      if (e.disabled_by) continue; // keep disabled entities out of the renderable map
       var m = byDevice.get(e.device_id);
       if (!m) {
         m = new Map();
@@ -115,13 +134,17 @@
       if (!m.has(key)) m.set(key, e.entity_id);
     }
 
-    // classify each device and collect inverters/ems + batteries
+    // classify each device against its FULL key set; collect inverters/ems + batteries
     var inverters = [];
     var batteries = [];
     geDevices.forEach(function (dev, deviceId) {
-      var keys = byDevice.get(deviceId) || new Map();
-      var kind = classify(keys);
-      var rec = { deviceId: deviceId, serial: dev.serial, viaDeviceId: dev.viaDeviceId, keys: keys };
+      var kind = classify(allKeys.get(deviceId) || new Set());
+      var rec = {
+        deviceId: deviceId,
+        serial: dev.serial,
+        viaDeviceId: dev.viaDeviceId,
+        keys: byDevice.get(deviceId) || new Map(),
+      };
       if (kind === "battery") batteries.push(rec);
       else if (kind === "inverter" || kind === "ems") {
         rec.isEms = kind === "ems";
@@ -136,23 +159,36 @@
       return a.serial < b.serial ? -1 : a.serial > b.serial ? 1 : 0;
     });
 
-    // pick the target plant: serial pin > sole inverter > first
+    // pick the target plant. An explicit serial pin that doesn't match must NOT
+    // silently fall back to another plant - that would mis-target the
+    // Maintenance buttons - so leave target null and let the no-plant notice
+    // fire (naming the missing serial). The first-inverter default only applies
+    // when no serial was supplied.
     var target = null;
+    var unmatchedSerial = null;
     if (opts.serial) {
-      target = inverters.find(function (p) {
-        return String(p.serial).toUpperCase() === String(opts.serial).toUpperCase();
-      });
+      target =
+        inverters.find(function (p) {
+          return String(p.serial).toUpperCase() === String(opts.serial).toUpperCase();
+        }) || null;
+      if (!target) unmatchedSerial = opts.serial;
+    } else {
+      target = inverters[0] || null;
     }
-    if (!target) target = inverters[0] || null;
 
-    // batteries belonging to the target inverter (by via_device); fall back to
-    // all batteries when via_device isn't populated.
-    var ownBatteries = batteries.filter(function (b) {
-      return b.viaDeviceId === (target && target.deviceId);
+    // batteries belonging to the target inverter (by via_device). Only fall
+    // back to all batteries when the registry exposes no via_device links at
+    // all; when links exist, an empty match is genuine (this inverter has no
+    // batteries) and must stay empty so we don't show another plant's packs.
+    var anyViaLinks = batteries.some(function (b) {
+      return b.viaDeviceId;
     });
-    if (!ownBatteries.length) ownBatteries = batteries;
+    var ownBatteries = batteries.filter(function (b) {
+      return target && b.viaDeviceId === target.deviceId;
+    });
+    if (!ownBatteries.length && !anyViaLinks) ownBatteries = batteries;
 
-    return { target: target, batteries: ownBatteries };
+    return { target: target, batteries: ownBatteries, unmatchedSerial: unmatchedSerial };
   }
 
   // ----- small helpers -------------------------------------------------------
@@ -898,19 +934,27 @@
     };
     var plant = await buildPlant(hass, opts);
     if (!plant.target) {
+      var notice;
+      if (plant.registryError) {
+        notice =
+          "Could not read the entity registry from Home Assistant - usually a " +
+          "transient connection issue. Try reloading the dashboard.";
+      } else if (plant.unmatchedSerial) {
+        notice =
+          "No GivEnergy inverter matches the pinned serial **" +
+          String(plant.unmatchedSerial).toUpperCase() +
+          "**. Check the `serial:` in this dashboard's strategy config.";
+      } else {
+        notice =
+          "No GivEnergy plant found in the registry. Is the **givenergy_local** " +
+          "integration set up and connected?";
+      }
       return {
         title: "GivEnergy",
         views: [
           {
             title: "GivEnergy",
-            cards: [
-              {
-                type: "markdown",
-                content:
-                  "No GivEnergy plant found in the registry. Is the **givenergy_local** " +
-                  "integration set up and connected?",
-              },
-            ],
+            cards: [{ type: "markdown", content: notice }],
           },
         ],
       };
@@ -948,20 +992,32 @@
 
         _render() {
           const cfg = this._cfg, hass = this._hass;
-          if (!hass) return;
+          if (!hass || !hass.states) return;
           const nCells = cfg.cells || 16;
           // HA 2026.6+ prefixes entity_ids with the device's area slug
-          // (e.g. "sensor.loft_givenergy_battery_..."). Build a one-time
-          // fallback map from the canonical unprefixed form to the actual
-          // state so the heatmap resolves on area-assigned installs.
-          const fallback = {};
-          for (const [eid, st] of Object.entries(hass.states)) {
-            const i = eid.indexOf("givenergy_battery_");
-            if (i > 0) fallback[`sensor.${eid.slice(i)}`] = st;
-          }
+          // (e.g. "sensor.loft_givenergy_battery_..."). Resolve each canonical
+          // id to the actual (possibly area-prefixed) id once and cache it on
+          // the instance: `set hass` fires on every global state change, so a
+          // full Object.entries(hass.states) scan per render would be costly on
+          // large installs. A stale cache entry (entity_id changed) self-heals
+          // - its state lookup misses, so we fall through and re-scan.
+          this._cellIdCache = this._cellIdCache || {};
           const cellState = (s, n) => {
-            const id = `sensor.givenergy_battery_${s.toLowerCase()}_cell_${n}_voltage`;
-            return hass.states[id] || fallback[id];
+            const canonical = `sensor.givenergy_battery_${s.toLowerCase()}_cell_${n}_voltage`;
+            const cached = this._cellIdCache[canonical];
+            if (cached && hass.states[cached]) return hass.states[cached];
+            if (hass.states[canonical]) {
+              this._cellIdCache[canonical] = canonical;
+              return hass.states[canonical];
+            }
+            for (const eid of Object.keys(hass.states)) {
+              const i = eid.indexOf("givenergy_battery_");
+              if (i > 0 && `sensor.${eid.slice(i)}` === canonical) {
+                this._cellIdCache[canonical] = eid;
+                return hass.states[eid];
+              }
+            }
+            return null;
           };
           // `set hass` fires on every HA state change; skip the DOM rebuild
           // unless one of our cells (or the config) actually changed.
