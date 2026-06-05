@@ -8,8 +8,9 @@ from givenergy_modbus.model.battery import BatteryPauseMode, ExportPriority
 from givenergy_modbus.model.inverter import BatteryPowerMode
 from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo, EntityCategory
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -140,7 +141,7 @@ class GivEnergySelectEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], Selec
         self.entity_description = description
         serial = coordinator.data.inverter_serial_number
         self._attr_unique_id = f"{serial}_{description.key}"
-        self._attr_options = list(description.options)
+        self._attr_options = list(description.options or [])
         # Carry the device name (mirroring sensor.py/binary_sensor.py) so HA derives
         # the device-name-prefixed entity_id slug even when the select platform sets
         # up before the sensor platform has registered the named device record.

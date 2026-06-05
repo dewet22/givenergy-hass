@@ -6,7 +6,9 @@ import platform
 import sys
 from collections.abc import Callable
 from datetime import datetime
+from functools import partial
 from pathlib import Path
+from typing import Any, TypedDict
 
 import voluptuous as vol
 from givenergy_modbus.client import commands
@@ -385,6 +387,13 @@ _RENAMED_UNIQUE_ID_SUFFIXES: dict[str, tuple[str, str | None]] = {
 }
 
 
+class _EntityUpdates(TypedDict, total=False):
+    """The kwargs subset _migrate_unique_ids passes to async_update_entity."""
+
+    new_unique_id: str
+    new_entity_id: str
+
+
 def _migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Re-point entities registered under a renamed unique_id suffix in place.
 
@@ -404,7 +413,7 @@ def _migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
             if not uid_stale and not (uid_already_new and entity_id_stale):
                 continue
 
-            updates: dict[str, str] = {}
+            updates: _EntityUpdates = {}
             if uid_stale:
                 new_uid = ent.unique_id[: -len(old)] + new
                 if registry.async_get_entity_id(ent.domain, DOMAIN, new_uid):
@@ -418,6 +427,7 @@ def _migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 else:
                     updates["new_unique_id"] = new_uid
             if entity_id_stale:
+                assert old_slug is not None  # entity_id_stale ⇒ old_slug truthy
                 new_entity_id = ent.entity_id[: -len(old_slug)] + new
                 if registry.async_get(new_entity_id) is not None:
                     _LOGGER.debug(
@@ -515,7 +525,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    store = Store(hass, _DASHBOARD_STORAGE_VERSION, _DASHBOARD_STORAGE_KEY)
+    store: Store[dict[str, Any]] = Store(hass, _DASHBOARD_STORAGE_VERSION, _DASHBOARD_STORAGE_KEY)
     stored = await store.async_load() or {}
     stored_version = stored.get("schema_version", 0)
 
@@ -641,7 +651,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
                 filename = f"dashboard_givenergy_{inv}.yaml"
                 www_dir = Path(hass.config.path("www"))
-                await hass.async_add_executor_job(lambda d=www_dir: d.mkdir(exist_ok=True))
+                await hass.async_add_executor_job(partial(www_dir.mkdir, exist_ok=True))
                 await hass.async_add_executor_job((www_dir / filename).write_text, yaml)
                 url = f"/local/{filename}"
                 _LOGGER.info("GivEnergy dashboard available at %s", url)
@@ -706,7 +716,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 epoch = int(dt_util.utcnow().timestamp())
                 filename = f"capture_givenergy_{epoch}.txt"
                 directory = capture_dir(hass)
-                await hass.async_add_executor_job(lambda d=directory: d.mkdir(exist_ok=True))
+                await hass.async_add_executor_job(partial(directory.mkdir, exist_ok=True))
                 await hass.async_add_executor_job((directory / filename).write_text, content)
 
                 landing_url = build_capture_notification_url(hass, filename)
