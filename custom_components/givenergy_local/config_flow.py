@@ -30,7 +30,7 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 )
 
 
-class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
+class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 2
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

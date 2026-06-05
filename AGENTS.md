@@ -45,8 +45,9 @@ if caps is not None and caps.is_ac_coupled and not caps.is_three_phase:
 ## Working conventions
 
 ### Imports
-- `EntityCategory` must be imported from `homeassistant.const`, **not**
-  `homeassistant.helpers.entity` — the latter triggers a mypy `attr-defined` error.
+- `EntityCategory` must be imported from `homeassistant.const`, and `DeviceInfo` from
+  `homeassistant.helpers.device_registry` — **not** `homeassistant.helpers.entity`,
+  whose re-exports trigger a mypy `attr-defined` error.
 
 ### Dependency pin
 The givenergy-modbus version constraint lives in **two files that must stay in sync**:
@@ -57,9 +58,10 @@ After editing either, run `uv sync --refresh-package givenergy-modbus` to regene
 `uv.lock`. The `--refresh` flag avoids stale-cache "only <=X available" errors.
 
 ### mypy baseline
-There are **15 pre-existing mypy errors** (all in upstream HA or pydantic stubs). The
-rule is: changes must not increase this count. Run `uv run mypy custom_components` and
-compare; do not add `# type: ignore` to paper over new regressions.
+The integration is **mypy-clean (0 errors)** under strict mode, enforced by the `mypy`
+job in `validate.yml` and a prek `uv run mypy` local hook. Keep it clean — fix type
+errors at the source rather than adding `# type: ignore`. The one justified ignore is
+`http.py`'s `HomeAssistantView` import, which HA doesn't re-export from any public path.
 
 ### Repo boundaries
 This repo has its own dedicated agent. The sister repos **givenergy-modbus** and
@@ -92,5 +94,5 @@ explicit user confirmation — do not do either without it.
 
 ## Testing
 - `uv run pytest` — uses pytest-homeassistant-custom-component
-- `uv run mypy custom_components` — strict mode; must not exceed 15 pre-existing errors
+- `uv run mypy custom_components` — strict mode; must stay clean (0 errors), gated in CI and prek
 - Run `uv run ruff check --fix && uv run ruff format` before committing

@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from aiohttp import web
-from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http import HomeAssistantView  # type: ignore[attr-defined]
 from homeassistant.components.http.auth import async_sign_path
 from homeassistant.core import HomeAssistant
 
