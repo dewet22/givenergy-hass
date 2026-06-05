@@ -4,8 +4,11 @@ import importlib.metadata
 import logging
 import platform
 import sys
+from collections.abc import Callable
 from datetime import datetime
+from functools import partial
 from pathlib import Path
+from typing import Any, TypedDict
 
 import voluptuous as vol
 from givenergy_modbus.client import commands
@@ -29,6 +32,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
 from homeassistant.util import dt as dt_util
+from homeassistant.util import slugify
 
 from .const import (
     CONF_PASSIVE,
@@ -383,40 +387,82 @@ _RENAMED_UNIQUE_ID_SUFFIXES: dict[str, tuple[str, str | None]] = {
 }
 
 
+class _EntityUpdates(TypedDict, total=False):
+    """The kwargs subset _migrate_unique_ids passes to async_update_entity."""
+
+    new_unique_id: str
+    new_entity_id: str
+
+
 def _migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Re-point entities registered under a renamed unique_id suffix in place."""
+    """Re-point entities registered under a renamed unique_id suffix in place.
+
+    Both halves are independent and idempotent: the unique_id rename fires only
+    while the old suffix is still present, and the entity_id rename fires whenever
+    the old name-slug is still present — including on installs where an earlier
+    release already migrated the unique_id but not the entity_id (the entity_id
+    rename was added later). Keying the entity_id rename on the unique_id would
+    miss exactly those installs.
+    """
     registry = er.async_get(hass)
     for ent in er.async_entries_for_config_entry(registry, entry.entry_id):
         for old, (new, old_slug) in _RENAMED_UNIQUE_ID_SUFFIXES.items():
-            if not ent.unique_id.endswith(f"_{old}"):
+            uid_stale = ent.unique_id.endswith(f"_{old}")
+            uid_already_new = ent.unique_id.endswith(f"_{new}")
+            entity_id_stale = bool(old_slug) and ent.entity_id.endswith(f"_{old_slug}")
+            if not uid_stale and not (uid_already_new and entity_id_stale):
                 continue
-            new_uid = ent.unique_id[: -len(old)] + new
-            if registry.async_get_entity_id(ent.domain, DOMAIN, new_uid):
-                # Target already exists (already migrated, or a genuine collision)
-                # — don't clobber it; leave the old entry for manual cleanup.
-                _LOGGER.debug(
-                    "Skipping unique_id migration for %s: %s already exists",
-                    ent.entity_id,
-                    new_uid,
-                )
-                break
-            new_entity_id = (
-                ent.entity_id[: -len(old_slug)] + new
-                if old_slug and ent.entity_id.endswith(f"_{old_slug}")
-                else None
-            )
-            _LOGGER.info(
-                "Migrating unique_id %s -> %s%s",
-                ent.unique_id,
-                new_uid,
-                f" (entity_id: {ent.entity_id} -> {new_entity_id})" if new_entity_id else "",
-            )
-            registry.async_update_entity(
-                ent.entity_id,
-                new_unique_id=new_uid,
-                **({"new_entity_id": new_entity_id} if new_entity_id else {}),
-            )
+
+            updates: _EntityUpdates = {}
+            if uid_stale:
+                new_uid = ent.unique_id[: -len(old)] + new
+                if registry.async_get_entity_id(ent.domain, DOMAIN, new_uid):
+                    # Target unique_id already exists (genuine collision) — don't
+                    # clobber it; leave the old entry for manual cleanup.
+                    _LOGGER.debug(
+                        "Skipping unique_id migration for %s: %s already exists",
+                        ent.entity_id,
+                        new_uid,
+                    )
+                else:
+                    updates["new_unique_id"] = new_uid
+            if entity_id_stale:
+                assert old_slug is not None  # entity_id_stale ⇒ old_slug truthy
+                new_entity_id = ent.entity_id[: -len(old_slug)] + new
+                if registry.async_get(new_entity_id) is not None:
+                    _LOGGER.debug(
+                        "Skipping entity_id rename for %s: %s already exists",
+                        ent.entity_id,
+                        new_entity_id,
+                    )
+                else:
+                    updates["new_entity_id"] = new_entity_id
+            if updates:
+                _LOGGER.info("Migrating %s in place: %s", ent.entity_id, updates)
+                registry.async_update_entity(ent.entity_id, **updates)
             break
+
+
+def _build_entity_id_resolver(hass: HomeAssistant, entry_id: str) -> Callable[[str], str]:
+    """Map the dashboard generator's canonical entity ids to the real ones.
+
+    The generator builds ids as `{domain}.givenergy_{kind}_{serial}_{slug}`, but
+    HA 2026.6 prefixes generated entity_ids with the device's area
+    (`sensor.loft_givenergy_inverter_…`) and users may rename entities. Reconstruct
+    each entity's canonical id from its device's (integration) name and original
+    name — the stable identity the generator also slugs from — and map it to the
+    entity's actual id. Returns a resolver that leaves unknown ids untouched.
+    """
+    reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+    canonical_to_actual: dict[str, str] = {}
+    for ent in er.async_entries_for_config_entry(reg, entry_id):
+        device = dev_reg.async_get(ent.device_id) if ent.device_id else None
+        if device is None or device.name is None or ent.original_name is None:
+            continue
+        canonical = f"{ent.domain}.{slugify(device.name)}_{slugify(ent.original_name)}"
+        canonical_to_actual[canonical] = ent.entity_id
+    return lambda entity_id: canonical_to_actual.get(entity_id, entity_id)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -479,7 +525,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    store = Store(hass, _DASHBOARD_STORAGE_VERSION, _DASHBOARD_STORAGE_KEY)
+    store: Store[dict[str, Any]] = Store(hass, _DASHBOARD_STORAGE_VERSION, _DASHBOARD_STORAGE_KEY)
     stored = await store.async_load() or {}
     stored_version = stored.get("schema_version", 0)
 
@@ -579,7 +625,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     + "\n".join(f"- `{card}`" for card in missing)
                     + "\n\n(If you register Lovelace resources via YAML, ignore this.)"
                 )
-            for coordinator in hass.data.get(DOMAIN, {}).values():
+            for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
                 if coordinator.data is None:
                     continue
                 inv = coordinator.data.inverter.serial_number.lower()
@@ -593,6 +639,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 # exposes the capability (#181, targeted at 2.1.3). Until then
                 # always emit; rows render as unavailable on non-Smart-Load installs.
                 has_smart_load = not is_ems
+                resolve_entity_id = _build_entity_id_resolver(hass, entry_id)
                 yaml = generate_dashboard(
                     inv,
                     bats,
@@ -600,10 +647,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     is_ems=is_ems,
                     has_ac_config_block=has_ac_config_block,
                     has_smart_load=has_smart_load,
+                    resolve_entity_id=resolve_entity_id,
                 )
                 filename = f"dashboard_givenergy_{inv}.yaml"
                 www_dir = Path(hass.config.path("www"))
-                await hass.async_add_executor_job(lambda d=www_dir: d.mkdir(exist_ok=True))
+                await hass.async_add_executor_job(partial(www_dir.mkdir, exist_ok=True))
                 await hass.async_add_executor_job((www_dir / filename).write_text, yaml)
                 url = f"/local/{filename}"
                 _LOGGER.info("GivEnergy dashboard available at %s", url)
@@ -668,7 +716,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 epoch = int(dt_util.utcnow().timestamp())
                 filename = f"capture_givenergy_{epoch}.txt"
                 directory = capture_dir(hass)
-                await hass.async_add_executor_job(lambda d=directory: d.mkdir(exist_ok=True))
+                await hass.async_add_executor_job(partial(directory.mkdir, exist_ok=True))
                 await hass.async_add_executor_job((directory / filename).write_text, content)
 
                 landing_url = build_capture_notification_url(hass, filename)

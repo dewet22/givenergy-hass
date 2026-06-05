@@ -10,12 +10,13 @@ from homeassistant.components.switch import SwitchEntity, SwitchEntityDescriptio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
+from .sensor import _device_kind
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -125,8 +126,13 @@ class GivEnergySwitchEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], Switc
         self.entity_description = description
         serial = coordinator.data.inverter_serial_number
         self._attr_unique_id = f"{serial}_{description.key}"
+        # Carry the device name (mirroring sensor.py/binary_sensor.py) so HA derives
+        # the device-name-prefixed entity_id slug even when the switch platform sets
+        # up before the sensor platform has registered the named device record.
+        model = coordinator.data.inverter.model
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, serial)},
+            name=f"GivEnergy {_device_kind(model)} {serial}",
         )
 
     @property
@@ -162,8 +168,10 @@ class GivEnergyEmsSwitchEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], Sw
         self.entity_description = description
         serial = coordinator.data.inverter_serial_number
         self._attr_unique_id = f"{serial}_{description.key}"
+        model = coordinator.data.inverter.model
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, serial)},
+            name=f"GivEnergy {_device_kind(model)} {serial}",
         )
 
     @property

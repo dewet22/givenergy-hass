@@ -9,13 +9,15 @@ from givenergy_modbus.model import TimeSlot
 from givenergy_modbus.model.ems import Ems
 from homeassistant.components.time import TimeEntity, TimeEntityDescription
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo, EntityCategory
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
+from .sensor import _device_kind
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -238,8 +240,10 @@ class GivEnergyTimeEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], TimeEnt
         self.entity_description = description
         serial = coordinator.data.inverter_serial_number
         self._attr_unique_id = f"{serial}_{description.key}"
+        model = coordinator.data.inverter.model
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, serial)},
+            name=f"GivEnergy {_device_kind(model)} {serial}",
         )
 
     @property
@@ -275,8 +279,10 @@ class GivEnergyEmsTimeEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], Time
         self.entity_description = description
         serial = coordinator.data.inverter_serial_number
         self._attr_unique_id = f"{serial}_{description.key}"
+        model = coordinator.data.inverter.model
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, serial)},
+            name=f"GivEnergy {_device_kind(model)} {serial}",
         )
 
     @property

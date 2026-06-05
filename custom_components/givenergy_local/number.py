@@ -7,14 +7,15 @@ from givenergy_modbus.client import commands
 from givenergy_modbus.model.ems import Ems
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfPower
+from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfPower
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo, EntityCategory
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
+from .sensor import _device_kind
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -231,8 +232,10 @@ class GivEnergyNumberEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], Numbe
         self.entity_description = description
         serial = coordinator.data.inverter_serial_number
         self._attr_unique_id = f"{serial}_{description.key}"
+        model = coordinator.data.inverter.model
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, serial)},
+            name=f"GivEnergy {_device_kind(model)} {serial}",
         )
 
     @property
@@ -262,8 +265,10 @@ class GivEnergyEmsNumberEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], Nu
         self.entity_description = description
         serial = coordinator.data.inverter_serial_number
         self._attr_unique_id = f"{serial}_{description.key}"
+        model = coordinator.data.inverter.model
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, serial)},
+            name=f"GivEnergy {_device_kind(model)} {serial}",
         )
 
     @property

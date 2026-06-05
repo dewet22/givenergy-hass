@@ -225,6 +225,8 @@ If the dashboard schema is updated in a future release, the integration raises a
 
 ![Dashboard outdated repair issue](docs/repairs-fix.png)
 
+The generated YAML is a snapshot of your entity IDs at the moment it runs. Home Assistant 2026.6 onwards builds entity IDs from the device's area (so a device in "Loft" gets `sensor.loft_givenergy_inverter_…`), and Home Assistant doesn't rewrite existing dashboards when entities are renamed. So if you move a device between areas, rename entities, or use **Recreate entity IDs**, just run `generate_dashboard` again afterwards to re-point the cards.
+
 ### Voice assistants & LLM access
 
 Home Assistant's voice assistants (Assist) and LLM tools (Claude / OpenAI via MCP) can only see entities that are explicitly **exposed**. HA auto-exposes a curated allowlist of sensor device classes — `temperature`, `humidity`, and a few others — but `power`, `energy`, and `battery` are **not** on that list, so none of this integration's headline sensors are visible to voice or LLM queries by default. Asking "what's my battery at?" silently returns nothing until you fix it.
@@ -332,6 +334,21 @@ Apache License 2.0 — see [LICENSE](LICENSE).
 ## Development
 
 This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
+
+After cloning, run the setup script once:
+
+```bash
+./scripts/setup.sh     # managed Python + dependencies + pre-commit hook
+```
+
+This provisions the uv-managed Python pinned in `.python-version`, installs the
+dev dependencies, and wires the [prek](https://prek.j178.dev) pre-commit hook.
+The hook step is per-clone — git never clones `.git/hooks` — and prek must be
+installed separately (e.g. `brew install prek`); if it's missing the script
+prints how to install it and stops short of wiring the hook. The hooks are
+local-only; CI runs HACS + hassfest, not these checks.
+
+Day-to-day commands:
 
 ```bash
 uv sync --dev          # install dependencies

@@ -1,5 +1,7 @@
 """Tests for the generated dashboard YAML, focused on the Battery Health view."""
 
+import re
+
 import yaml
 
 from custom_components.givenergy_local.dashboard import (
@@ -9,6 +11,12 @@ from custom_components.givenergy_local.dashboard import (
 
 INV = "sa2114g047"
 BATS = ["bg2134g007", "dz2228g532"]
+
+# Matches any HA entity id (incl. area-prefixed ones the resolver produces),
+# unlike dashboard._ENTITY_REF which only spots the canonical givenergy_ form.
+_ANY_REF = re.compile(
+    r"\b(?:sensor|binary_sensor|number|select|switch|time|button|update)\.[a-z0-9_]+"
+)
 
 
 def _views(inv: str = INV, bats: list[str] | None = None) -> dict[str, dict]:
@@ -32,7 +40,7 @@ def test_dashboard_is_valid_yaml_with_expected_views():
 
 
 def test_dashboard_version_is_current():
-    assert DASHBOARD_VERSION == 10
+    assert DASHBOARD_VERSION == 11
 
 
 def test_battery_out_of_spec_on_status_glance_and_faults_card():
@@ -325,3 +333,35 @@ def test_maintenance_buttons_carry_the_serial(inv: str = INV):
     assert all(s == INV.upper() for s in serials), (
         f"expected serial {INV.upper()!r} in all buttons, got {serials}"
     )
+
+
+# --- entity_id resolution (HA 2026.6 area prefix / user renames) -------------
+
+
+def test_no_resolver_emits_canonical_entity_ids():
+    """Without a resolver the generator emits its canonical area-less ids."""
+    out = generate_dashboard(INV, BATS)
+    assert f"sensor.givenergy_inverter_{INV}_grid_power" in out
+
+
+def test_resolver_rewrites_refs_to_actual_registry_ids():
+    """A resolver remaps each canonical id to the real one HA registered — e.g.
+    area-prefixed (HA 2026.6) or user-renamed — leaving unknown refs untouched."""
+    canonical = f"sensor.givenergy_inverter_{INV}_grid_power"
+    actual = f"sensor.loft_givenergy_inverter_{INV}_grid_power"
+    renames = {canonical: actual}
+    out = generate_dashboard(INV, BATS, resolve_entity_id=lambda eid: renames.get(eid, eid))
+    refs = set(_ANY_REF.findall(out))
+    assert actual in refs
+    assert canonical not in refs  # the area-less form is fully remapped
+    # a ref the resolver doesn't know is passed through unchanged
+    assert f"sensor.givenergy_inverter_{INV}_battery_soc" in refs
+
+
+def test_resolver_does_not_truncate_longer_sibling_ids():
+    """Greedy matching: rewriting `…_grid_power` must not touch `…_grid_power_phase_1`."""
+    canonical = f"sensor.givenergy_inverter_{INV}_grid_power"
+    out = generate_dashboard(
+        INV, BATS, resolve_entity_id=lambda eid: "sensor.renamed" if eid == canonical else eid
+    )
+    assert f"sensor.givenergy_inverter_{INV}_grid_power_phase_1" in out
