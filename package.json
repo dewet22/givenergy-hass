@@ -1,0 +1,11 @@
+{
+  "name": "givenergy-hass-frontend",
+  "private": true,
+  "description": "Frontend assets (cards + dashboard strategy) for the GivEnergy Local integration",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.9"
+  }
+}

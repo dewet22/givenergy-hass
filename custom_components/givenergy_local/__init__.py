@@ -66,13 +66,14 @@ _LOGGER = logging.getLogger(__name__)
 _DASHBOARD_STORAGE_KEY = f"{DOMAIN}.dashboard"
 _DASHBOARD_STORAGE_VERSION = 1
 
-# Bundled cell-balance heatmap card, served from this integration's package and
-# auto-loaded on the frontend so the generated dashboard's custom:ge-cell-heatmap
-# resolves without a manual HACS/resource install. Bump _CARD_VERSION whenever
-# the JS changes, to bust the browser cache.
-_CARD_FILENAME = "ge-cell-heatmap.js"
-_CARD_URL = f"/{DOMAIN}/{_CARD_FILENAME}"
-_CARD_VERSION = "2"
+# Bundled frontend module: the dashboard strategy (custom:givenergy) and the
+# cell-balance heatmap card (custom:ge-cell-heatmap) are shipped together in a
+# single JS file, served from this integration's package and auto-loaded so both
+# resolve on any install without a manual HACS/resource registration. Bump
+# _STRATEGY_VERSION whenever the JS changes, to bust the browser cache.
+_STRATEGY_FILENAME = "ge-strategy.js"
+_STRATEGY_URL = f"/{DOMAIN}/{_STRATEGY_FILENAME}"
+_STRATEGY_VERSION = "3"
 
 # Per-config-entry topology cache. PlantCapabilities is persisted as
 # `to_dict()` directly (no envelope) following HA Core's Store convention —
@@ -245,12 +246,12 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_register_frontend_card(hass: HomeAssistant) -> None:
-    """Serve and auto-load the bundled cell-heatmap card.
+    """Serve and auto-load the bundled frontend module (strategy + heatmap card).
 
-    The card module ships inside this integration's ``www/`` dir; we expose it
-    at a stable URL and register it as an extra frontend module so the generated
-    dashboard's ``custom:ge-cell-heatmap`` resolves on any dashboard without a
-    manual HACS/resource install.
+    The single JS file ships inside this integration's ``www/`` dir; we expose
+    it at a stable URL and register it as an extra frontend module so both
+    ``custom:givenergy`` (the dashboard strategy) and ``custom:ge-cell-heatmap``
+    resolve on any install without a manual HACS/resource registration.
 
     Called once from :func:`async_setup` (component scope), so the static-path
     registration happens a single time for the integration regardless of how
@@ -262,16 +263,16 @@ async def _async_register_frontend_card(hass: HomeAssistant) -> None:
         # skips where there is nothing to serve from anyway.
         return
     try:
-        card_path = Path(__file__).parent / "www" / _CARD_FILENAME
+        module_path = Path(__file__).parent / "www" / _STRATEGY_FILENAME
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(_CARD_URL, str(card_path), False)]
+            [StaticPathConfig(_STRATEGY_URL, str(module_path), False)]
         )
-        add_extra_js_url(hass, f"{_CARD_URL}?v={_CARD_VERSION}")
+        add_extra_js_url(hass, f"{_STRATEGY_URL}?v={_STRATEGY_VERSION}")
     except Exception as exc:  # noqa: BLE001
-        # The bundled card is cosmetic (a dashboard heatmap). Registering it once
-        # at component scope means a failure here is genuinely unexpected, but it
-        # must still never take down the integration — log and carry on.
-        _LOGGER.warning("Could not register the bundled cell-heatmap card: %s", exc)
+        # The bundled module is cosmetic (dashboard frontend). Registering it
+        # once at component scope means a failure here is genuinely unexpected,
+        # but it must still never take down the integration — log and carry on.
+        _LOGGER.warning("Could not register the bundled frontend module: %s", exc)
 
 
 async def _build_capture_header(
@@ -663,7 +664,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         "message": (
                             f"Dashboard ready — [download YAML]({url})\n\n"
                             "Go to **Settings → Dashboards → Add Dashboard** "
-                            "and paste the contents into the raw config editor." + warning
+                            "and paste the contents into the raw config editor.\n\n"
+                            "**Tip:** for a dashboard that resolves entities live "
+                            "(and so survives renames and area moves), use the "
+                            "`custom:givenergy` strategy instead — set the raw "
+                            "config to `strategy: { type: custom:givenergy, "
+                            "mode: classic }`. This static YAML stays available as "
+                            "an editable starting point." + warning
                         ),
                         "notification_id": f"givenergy_dashboard_{inv}",
                     },

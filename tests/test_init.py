@@ -12,8 +12,8 @@ from homeassistant.helpers import issue_registry as ir
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.givenergy_local import (
-    _CARD_URL,
-    _CARD_VERSION,
+    _STRATEGY_URL,
+    _STRATEGY_VERSION,
     _missing_dashboard_cards,
     async_setup,
 )
@@ -65,8 +65,9 @@ async def test_missing_dashboard_cards_swallows_registry_errors():
     assert await _missing_dashboard_cards(hass) == []
 
 
-async def test_frontend_card_served_and_autoloaded():
-    """The bundled heatmap card is served + auto-loaded at component setup."""
+async def test_frontend_modules_served_and_autoloaded():
+    """The bundled frontend module (strategy + heatmap card) is served +
+    auto-loaded at component setup."""
     hass = MagicMock()
     hass.data = {}
     hass.http.async_register_static_paths = AsyncMock()
@@ -78,9 +79,9 @@ async def test_frontend_card_served_and_autoloaded():
         assert await async_setup(hass, {}) is True
 
     hass.http.async_register_static_paths.assert_awaited_once()
-    (paths,) = hass.http.async_register_static_paths.call_args[0]
-    assert paths[0].url_path == _CARD_URL
-    add_js.assert_called_once_with(hass, f"{_CARD_URL}?v={_CARD_VERSION}")
+    served_url = hass.http.async_register_static_paths.call_args.args[0][0].url_path
+    assert served_url == _STRATEGY_URL
+    add_js.assert_called_once_with(hass, f"{_STRATEGY_URL}?v={_STRATEGY_VERSION}")
 
 
 async def test_frontend_card_registered_once_across_multiple_entries(hass, mock_client):

@@ -227,6 +227,24 @@ If the dashboard schema is updated in a future release, the integration raises a
 
 The generated YAML is a snapshot of your entity IDs at the moment it runs. Home Assistant 2026.6 onwards builds entity IDs from the device's area (so a device in "Loft" gets `sensor.loft_givenergy_inverter_…`), and Home Assistant doesn't rewrite existing dashboards when entities are renamed. So if you move a device between areas, rename entities, or use **Recreate entity IDs**, just run `generate_dashboard` again afterwards to re-point the cards.
 
+### Dashboard strategy (live, self-maintaining)
+
+To avoid that snapshot problem entirely, there's also a dashboard *strategy* that builds the same six-tab layout but resolves every entity from the registry each time the dashboard loads — so it doesn't go stale when a device moves area or an entity is renamed. I added it because the static YAML kept silently rotting on my own install after area reassignments. To use it, create a new dashboard, open the **raw configuration editor**, and set the whole config to:
+
+```yaml
+strategy:
+  type: custom:givenergy
+  mode: classic        # the only mode in this release
+  max_power_kw: 10     # optional; Overview 24h chart y-axis envelope (kW)
+  serial: SA2114G047   # optional; pin one inverter on a multi-plant install
+```
+
+The strategy and the bundled cell-heatmap card are served by the integration itself, so there's nothing extra to install for them. `power-flow-card-plus` and `apexcharts-card` are still needed for the Overview/Energy charts (install them via **HACS → Frontend**); where they're missing the strategy shows a short placeholder rather than a broken card. `generate_dashboard` remains available as an editable static starting point if you'd rather hand-tweak a copy.
+
+One caveat worth knowing: on a **hard refresh** (Ctrl/Cmd+Shift+R, which bypasses the browser cache) the dashboard may occasionally show "Error loading the dashboard strategy: Timeout waiting for strategy element …". This is a Home Assistant limitation common to all network-loaded dashboard strategies — HA gives the strategy module a fixed 5-second window to register, and a cold re-fetch can lose that race when it's queued behind other custom-card resources. A normal reload serves the module from cache and isn't affected, so it doesn't bite in day-to-day use; if you do hit it, reload again.
+
+This is new in this release and currently reproduces the `classic` layout only; the broader set of modes explored in [the redesign brief](docs/design/dashboard-redesign-brief.md) is still to come.
+
 ### Voice assistants & LLM access
 
 Home Assistant's voice assistants (Assist) and LLM tools (Claude / OpenAI via MCP) can only see entities that are explicitly **exposed**. HA auto-exposes a curated allowlist of sensor device classes — `temperature`, `humidity`, and a few others — but `power`, `energy`, and `battery` are **not** on that list, so none of this integration's headline sensors are visible to voice or LLM queries by default. Asking "what's my battery at?" silently returns nothing until you fix it.
