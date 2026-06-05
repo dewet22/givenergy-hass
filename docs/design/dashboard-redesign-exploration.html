@@ -1,0 +1,840 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Energy Dashboard — UX Exploration</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..900,0..100&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&family=DM+Sans:opsz,wght@9..40,300..700&display=swap" rel="stylesheet">
+<style>
+/* ─────────────────────────────────────────────────────────────
+   SHELL — wraps the five distinct design directions
+   ──────────────────────────────────────────────────────────── */
+:root{
+  --shell-bg:#0b0b0c;
+  --shell-fg:#e8e6e1;
+  --shell-dim:#6b6a66;
+  --shell-rule:#1c1b1a;
+  --shell-accent:#d4a85a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--shell-bg);color:var(--shell-fg);font-family:'Geist',ui-sans-serif,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+body{min-height:100vh;display:flex;flex-direction:column}
+
+header.shell{
+  padding:18px 28px;border-bottom:1px solid var(--shell-rule);
+  display:flex;align-items:baseline;gap:18px;justify-content:space-between;flex-wrap:wrap;
+}
+header.shell .brand{font-family:'Fraunces',serif;font-weight:300;font-size:22px;letter-spacing:-.01em}
+header.shell .brand em{font-style:italic;color:var(--shell-accent);font-weight:400}
+header.shell .meta{font-size:11px;color:var(--shell-dim);letter-spacing:.14em;text-transform:uppercase;font-family:'Geist Mono',monospace}
+
+nav.tabs{
+  display:flex;gap:0;padding:0 28px;border-bottom:1px solid var(--shell-rule);
+  overflow-x:auto;scrollbar-width:none;
+}
+nav.tabs::-webkit-scrollbar{display:none}
+nav.tabs button{
+  background:none;border:none;color:var(--shell-dim);
+  font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  padding:18px 22px 16px;cursor:pointer;position:relative;white-space:nowrap;
+  transition:color .2s;
+}
+nav.tabs button:hover{color:var(--shell-fg)}
+nav.tabs button.active{color:var(--shell-fg)}
+nav.tabs button.active::after{
+  content:'';position:absolute;left:18px;right:18px;bottom:-1px;height:1px;background:var(--shell-accent);
+}
+nav.tabs button .num{color:var(--shell-accent);margin-right:8px;font-weight:500}
+
+main{flex:1;position:relative;overflow:hidden}
+.panel{display:none;animation:fadein .4s ease}
+.panel.active{display:block}
+@keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+footer.shell{
+  padding:14px 28px;border-top:1px solid var(--shell-rule);
+  display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;
+  font-size:11px;color:var(--shell-dim);font-family:'Geist Mono',monospace;letter-spacing:.1em;text-transform:uppercase;
+}
+footer.shell .data{color:var(--shell-fg)}
+
+/* ─────────────────────────────────────────────────────────────
+   TAB 1 — FLOW
+   Manufacturer-app style: animated power flow centerpiece,
+   dark, glossy, big SOC ring, today totals strip
+   ──────────────────────────────────────────────────────────── */
+#flow{background:radial-gradient(ellipse at 50% 0%,#15171b 0%,#0b0b0c 60%);min-height:80vh;padding:32px 28px}
+#flow .row{display:grid;grid-template-columns:1fr 1.4fr 1fr;gap:24px;align-items:start}
+#flow .stat{padding:18px 20px;background:rgba(255,255,255,.02);border:1px solid #1c1b1a;border-radius:14px}
+#flow .stat .label{font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--shell-dim);margin-bottom:8px}
+#flow .stat .value{font-family:'Fraunces',serif;font-size:34px;font-weight:300;letter-spacing:-.02em;line-height:1}
+#flow .stat .value .unit{font-size:14px;color:var(--shell-dim);margin-left:4px;font-family:'Geist',sans-serif}
+#flow .stat .sub{margin-top:6px;font-size:11px;color:var(--shell-dim);font-family:'Geist Mono',monospace}
+
+#flow .flowwrap{display:flex;justify-content:center;align-items:center;padding:20px 0}
+#flow svg.flow{max-width:560px;width:100%;height:auto}
+#flow .node-label{font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;fill:#7a7975}
+#flow .node-value{font-family:'Fraunces',serif;font-size:22px;font-weight:400;fill:#e8e6e1}
+#flow .node-unit{font-family:'Geist',sans-serif;font-size:11px;fill:#7a7975}
+
+.flowpath{stroke-dasharray:4 6;animation:flow 1.2s linear infinite}
+.flowpath.in{stroke:#d4a85a}
+.flowpath.out{stroke:#7fb069}
+.flowpath.idle{stroke:#2a2926;animation:none}
+@keyframes flow{to{stroke-dashoffset:-100}}
+
+#flow .totals{
+  margin-top:28px;padding:20px 24px;border:1px solid #1c1b1a;border-radius:14px;
+  display:grid;grid-template-columns:repeat(6,1fr);gap:24px;
+}
+#flow .tot{display:flex;flex-direction:column;gap:6px}
+#flow .tot .l{font-family:'Geist Mono',monospace;font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--shell-dim)}
+#flow .tot .v{font-family:'Fraunces',serif;font-size:24px;font-weight:300;letter-spacing:-.02em}
+#flow .tot .v .u{font-size:11px;color:var(--shell-dim);margin-left:3px;font-family:'Geist',sans-serif}
+#flow .tot.in .dot{background:#d4a85a}
+#flow .tot.out .dot{background:#7fb069}
+#flow .tot .dot{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle}
+
+#flow .ranges{display:flex;gap:0;margin-top:24px;border:1px solid #1c1b1a;border-radius:12px;overflow:hidden;width:fit-content}
+#flow .ranges button{
+  background:none;border:none;color:var(--shell-dim);padding:10px 18px;cursor:pointer;
+  font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  border-right:1px solid #1c1b1a;
+}
+#flow .ranges button:last-child{border-right:none}
+#flow .ranges button.on{color:var(--shell-bg);background:var(--shell-accent)}
+
+/* ─────────────────────────────────────────────────────────────
+   TAB 2 — STORY
+   Editorial / NYT graphics. Light background, serif headings,
+   annotated PV curve as the day's story
+   ──────────────────────────────────────────────────────────── */
+#story{background:#f4f0e8;color:#15140f;min-height:80vh;padding:48px 56px;font-family:'Newsreader',serif}
+#story .kicker{font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:#8a7f6a;margin-bottom:14px}
+#story h1{font-family:'Fraunces',serif;font-weight:300;font-size:62px;line-height:1.02;letter-spacing:-.025em;margin:0 0 14px;max-width:880px}
+#story h1 em{font-style:italic;font-weight:400;color:#a37a2e}
+#story .standfirst{font-family:'Newsreader',serif;font-size:19px;line-height:1.45;color:#3a352a;max-width:680px;margin-bottom:36px}
+#story .byline{font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#8a7f6a;border-top:1px solid #d8d1bf;border-bottom:1px solid #d8d1bf;padding:10px 0;margin:0 0 32px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;max-width:880px}
+
+#story .timeline-wrap{max-width:880px;margin:0 0 36px;position:relative}
+#story svg.timeline{width:100%;height:auto;display:block}
+#story .annot{font-family:'Geist Mono',monospace;font-size:10.5px;fill:#3a352a;letter-spacing:.04em}
+#story .annot.time{font-size:9px;letter-spacing:.18em;text-transform:uppercase;fill:#8a7f6a}
+#story .pv-curve{fill:url(#sungrad);opacity:.85}
+#story .pv-line{fill:none;stroke:#a37a2e;stroke-width:1.5}
+#story .load-line{fill:none;stroke:#3a352a;stroke-width:1;stroke-dasharray:2 3;opacity:.55}
+#story .axis{stroke:#c5bda9;stroke-width:.5}
+#story .axislbl{font-family:'Geist Mono',monospace;font-size:9px;fill:#8a7f6a}
+#story .marker{fill:#a37a2e}
+#story .markerline{stroke:#a37a2e;stroke-width:.75;stroke-dasharray:1 2}
+
+#story .pull{display:grid;grid-template-columns:1fr 1fr;gap:48px;max-width:880px;margin-top:32px;padding-top:28px;border-top:1px solid #d8d1bf}
+#story .pull h2{font-family:'Fraunces',serif;font-weight:300;font-size:32px;letter-spacing:-.015em;margin:0 0 12px;line-height:1.05}
+#story .pull p{font-family:'Newsreader',serif;font-size:16px;line-height:1.5;color:#3a352a;margin:0}
+#story .pull h2 em{font-style:italic;color:#a37a2e;font-weight:400}
+
+#story .dist{max-width:880px;margin-top:48px}
+#story .dist h3{font-family:'Fraunces',serif;font-weight:400;font-size:22px;margin:0 0 16px}
+#story .distbar{margin-bottom:20px}
+#story .distbar .head{display:flex;justify-content:space-between;font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#8a7f6a;margin-bottom:6px}
+#story .distbar .head .v{color:#15140f}
+#story .distbar .bar{height:18px;display:flex;border-radius:2px;overflow:hidden}
+#story .distbar .seg{position:relative;display:flex;align-items:center;padding:0 8px}
+#story .distbar .seg span{font-family:'Geist Mono',monospace;font-size:9.5px;color:#15140f;letter-spacing:.04em;white-space:nowrap}
+#story .distbar.sources .s1{background:#d4a85a}
+#story .distbar.sources .s2{background:#bc8e3d}
+#story .distbar.sources .s3{background:#8c682c}
+#story .distbar.sinks .s1{background:#7a8f6b}
+#story .distbar.sinks .s2{background:#5d7553}
+#story .distbar.sinks .s3{background:#3f5a3c;color:#f4f0e8}
+#story .distbar.sinks .s3 span{color:#f4f0e8}
+
+/* ─────────────────────────────────────────────────────────────
+   TAB 3 — GLANCE
+   Calm tech / e-ink. Massive type, generous whitespace, no chrome
+   ──────────────────────────────────────────────────────────── */
+#glance{background:#f8f7f3;color:#1a1916;min-height:80vh;padding:80px 64px;font-family:'DM Sans',sans-serif}
+#glance .status{font-family:'DM Sans',sans-serif;font-weight:300;font-size:64px;line-height:1.05;letter-spacing:-.03em;margin:0 0 80px;max-width:780px}
+#glance .status em{font-style:normal;color:#5a8c5a;font-weight:400}
+#glance .status .dot{display:inline-block;width:14px;height:14px;border-radius:50%;background:#5a8c5a;margin-right:18px;vertical-align:middle;animation:pulse 2.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+#glance .big3{display:grid;grid-template-columns:repeat(3,1fr);gap:48px;margin-bottom:80px}
+#glance .big{border-top:1px solid #1a1916;padding-top:16px}
+#glance .big .lbl{font-family:'DM Sans',sans-serif;font-size:13px;letter-spacing:.04em;color:#6b6a66;font-weight:500;margin-bottom:8px}
+#glance .big .n{font-family:'DM Sans',sans-serif;font-weight:200;font-size:96px;line-height:1;letter-spacing:-.04em}
+#glance .big .n .u{font-size:24px;color:#6b6a66;font-weight:300;margin-left:6px}
+#glance .big .sub{margin-top:8px;font-size:13px;color:#6b6a66}
+#glance .big .sub .up{color:#5a8c5a}
+#glance .big .sub .dn{color:#a36b3a}
+
+#glance .pills{display:flex;flex-wrap:wrap;gap:10px}
+#glance .pill{
+  padding:8px 14px;border:1px solid #d4d0c4;border-radius:999px;
+  font-size:12px;color:#3a352a;background:#fff;
+  display:inline-flex;align-items:center;gap:8px;
+}
+#glance .pill::before{content:'';width:6px;height:6px;border-radius:50%;background:#5a8c5a;display:inline-block}
+#glance .pill.warn::before{background:#d4a85a}
+#glance .pill.cool::before{background:#5a7a9c}
+
+/* ─────────────────────────────────────────────────────────────
+   TAB 4 — ANALYST
+   Dense, terminal-inspired, monospace numbers everywhere
+   ──────────────────────────────────────────────────────────── */
+#analyst{background:#0a0a0a;color:#cfcfca;font-family:'Geist Mono',monospace;min-height:80vh;padding:24px 28px;font-size:11.5px}
+#analyst .head{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid #1f1f1d;padding-bottom:10px;margin-bottom:16px}
+#analyst .head .title{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#d4a85a}
+#analyst .head .ts{font-size:10px;color:#5a5a55;letter-spacing:.15em}
+#analyst .head .ts .live{color:#7fb069;animation:blink 1.4s ease-in-out infinite;margin-right:6px}
+@keyframes blink{50%{opacity:.3}}
+
+#analyst .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;grid-auto-rows:minmax(80px,auto)}
+#analyst .cell{border:1px solid #1f1f1d;padding:12px;background:#0d0d0c;position:relative;display:flex;flex-direction:column}
+#analyst .cell .lbl{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:#5a5a55;margin-bottom:6px}
+#analyst .cell .v{font-size:22px;color:#e8e6e1;font-weight:400;line-height:1}
+#analyst .cell .v .u{font-size:11px;color:#5a5a55;margin-left:3px}
+#analyst .cell .delta{font-size:10px;color:#7fb069;margin-top:4px}
+#analyst .cell .delta.dn{color:#d4a85a}
+#analyst .cell.sp4{grid-column:span 4}
+#analyst .cell.sp3{grid-column:span 3}
+#analyst .cell.sp6{grid-column:span 6}
+#analyst .cell.sp12{grid-column:span 12}
+#analyst .cell svg{width:100%;height:auto;margin-top:auto}
+
+#analyst .chart .grid-line{stroke:#1f1f1d;stroke-width:.5}
+#analyst .chart .axislbl{font-size:8px;fill:#5a5a55}
+#analyst .pv{stroke:#d4a85a;fill:none;stroke-width:1}
+#analyst .pv-fill{fill:url(#anpv);opacity:.25}
+#analyst .load{stroke:#cfcfca;fill:none;stroke-width:.75;stroke-dasharray:2 2}
+#analyst .batt{stroke:#7fb069;fill:none;stroke-width:1}
+#analyst .grid-l{stroke:#5a7a9c;fill:none;stroke-width:1}
+#analyst .legend{display:flex;gap:14px;font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:#5a5a55}
+#analyst .legend span::before{content:'';display:inline-block;width:10px;height:1px;background:currentColor;margin-right:4px;vertical-align:middle}
+#analyst .legend .lpv{color:#d4a85a}
+#analyst .legend .lld{color:#cfcfca}
+#analyst .legend .lbt{color:#7fb069}
+#analyst .legend .lgr{color:#5a7a9c}
+
+#analyst table{width:100%;border-collapse:collapse;font-size:11px}
+#analyst table th{text-align:left;font-weight:400;color:#5a5a55;font-size:9px;letter-spacing:.18em;text-transform:uppercase;border-bottom:1px solid #1f1f1d;padding:6px 0}
+#analyst table td{padding:5px 0;border-bottom:1px solid #161615;color:#cfcfca}
+#analyst table td.r{text-align:right;color:#e8e6e1}
+#analyst table tr:last-child td{border-bottom:none}
+
+#analyst .cells{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;margin-top:8px}
+#analyst .cellbar{height:24px;background:#1f1f1d;position:relative;border-radius:1px;overflow:hidden}
+#analyst .cellbar .fill{position:absolute;bottom:0;left:0;right:0;background:#7fb069;height:60%}
+#analyst .cellbar.warn .fill{background:#d4a85a}
+#analyst .cellbar .n{position:absolute;top:2px;left:2px;font-size:7px;color:#3a3a35}
+
+/* ─────────────────────────────────────────────────────────────
+   TAB 5 — COACH
+   Actionable, recommendation-driven, conversational
+   ──────────────────────────────────────────────────────────── */
+#coach{background:#0f1413;color:#e8e6e1;min-height:80vh;padding:36px 32px;font-family:'Geist',sans-serif}
+#coach .now{
+  background:linear-gradient(135deg,#16201d 0%,#0f1413 100%);
+  border:1px solid #1c2826;border-radius:18px;padding:32px;margin-bottom:24px;
+  position:relative;overflow:hidden;
+}
+#coach .now::before{
+  content:'';position:absolute;top:0;right:0;width:380px;height:380px;
+  background:radial-gradient(circle,rgba(212,168,90,.15) 0%,transparent 60%);
+  pointer-events:none;
+}
+#coach .now .kicker{font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#7fb069;margin-bottom:14px}
+#coach .now h2{font-family:'Fraunces',serif;font-weight:300;font-size:42px;letter-spacing:-.02em;line-height:1.1;margin:0 0 14px;max-width:680px}
+#coach .now h2 em{font-style:italic;color:#d4a85a;font-weight:400}
+#coach .now p{font-size:15px;color:#a8a59e;max-width:560px;margin:0;line-height:1.5}
+
+#coach .recs{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-bottom:24px}
+#coach .rec{background:#0d1110;border:1px solid #1c2826;border-radius:14px;padding:22px;display:flex;flex-direction:column;gap:12px}
+#coach .rec .icon{width:36px;height:36px;border-radius:10px;background:rgba(212,168,90,.12);display:flex;align-items:center;justify-content:center;color:#d4a85a;font-size:18px}
+#coach .rec .icon.g{background:rgba(127,176,105,.12);color:#7fb069}
+#coach .rec .icon.b{background:rgba(90,122,156,.12);color:#5a7a9c}
+#coach .rec h3{font-family:'Fraunces',serif;font-weight:400;font-size:19px;margin:0;letter-spacing:-.01em}
+#coach .rec p{font-size:13.5px;color:#a8a59e;margin:0;line-height:1.5}
+#coach .rec .cta{margin-top:auto;display:flex;gap:8px;padding-top:8px}
+#coach .rec .cta button{
+  background:transparent;border:1px solid #2a3835;color:#e8e6e1;padding:8px 14px;border-radius:8px;
+  font-family:'Geist',sans-serif;font-size:12px;cursor:pointer;transition:all .2s;
+}
+#coach .rec .cta button:hover{background:#1c2826;border-color:#3a4a47}
+#coach .rec .cta button.primary{background:#d4a85a;border-color:#d4a85a;color:#0f1413;font-weight:500}
+#coach .rec .cta button.primary:hover{background:#c39645}
+
+#coach .tariff{background:#0d1110;border:1px solid #1c2826;border-radius:14px;padding:22px;margin-bottom:24px}
+#coach .tariff h3{font-family:'Fraunces',serif;font-weight:400;font-size:19px;margin:0 0 14px;letter-spacing:-.01em}
+#coach .tariff .strip{height:32px;display:flex;border-radius:6px;overflow:hidden;margin-bottom:8px;border:1px solid #1c2826}
+#coach .tariff .h{flex:1;position:relative;border-right:1px solid rgba(0,0,0,.2)}
+#coach .tariff .h:last-child{border-right:none}
+#coach .tariff .h.cheap{background:#2a3a3a}
+#coach .tariff .h.mid{background:#3a3025}
+#coach .tariff .h.peak{background:#5a2820}
+#coach .tariff .h.now{box-shadow:inset 0 0 0 2px #d4a85a}
+#coach .tariff .h.now::after{content:'NOW';position:absolute;bottom:-22px;left:50%;transform:translateX(-50%);font-family:'Geist Mono',monospace;font-size:9px;color:#d4a85a;letter-spacing:.18em}
+#coach .tariff .axis{display:flex;justify-content:space-between;font-family:'Geist Mono',monospace;font-size:9px;color:#5a5a55;letter-spacing:.12em;margin-top:14px}
+#coach .tariff .legend{display:flex;gap:18px;font-size:11px;color:#a8a59e;margin-top:14px}
+#coach .tariff .legend span::before{content:'';display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:middle}
+#coach .tariff .legend .lc::before{background:#2a3a3a}
+#coach .tariff .legend .lm::before{background:#3a3025}
+#coach .tariff .legend .lp::before{background:#5a2820}
+
+#coach .goals{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
+#coach .goal{background:#0d1110;border:1px solid #1c2826;border-radius:14px;padding:20px}
+#coach .goal .lbl{font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:#7a7975;margin-bottom:10px}
+#coach .goal .v{font-family:'Fraunces',serif;font-size:32px;font-weight:300;letter-spacing:-.02em;line-height:1}
+#coach .goal .v .t{color:#5a5a55;font-size:18px}
+#coach .goal .v .u{color:#5a5a55;font-size:14px;font-family:'Geist',sans-serif}
+#coach .goal .progress{height:4px;background:#1c2826;border-radius:2px;margin-top:14px;overflow:hidden}
+#coach .goal .progress .fill{height:100%;background:#7fb069;border-radius:2px}
+
+/* responsive nudges */
+@media (max-width:900px){
+  #flow .row{grid-template-columns:1fr}
+  #flow .totals{grid-template-columns:repeat(3,1fr)}
+  #story{padding:32px 24px}
+  #story h1{font-size:42px}
+  #story .pull{grid-template-columns:1fr}
+  #glance{padding:48px 28px}
+  #glance .status{font-size:42px;margin-bottom:48px}
+  #glance .big3{grid-template-columns:1fr;gap:32px;margin-bottom:48px}
+  #glance .big .n{font-size:64px}
+  #analyst .cell.sp4,#analyst .cell.sp3,#analyst .cell.sp6{grid-column:span 12}
+  #coach .now h2{font-size:30px}
+}
+</style>
+</head>
+<body>
+
+<header class="shell">
+  <div class="brand">givenergy<em>·</em>hass — dashboard <em>redesign</em> exploration</div>
+  <div class="meta">The Loft · SA2114G047 · 5 directions to compare</div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="active" data-tab="flow"><span class="num">01</span>Flow</button>
+  <button data-tab="story"><span class="num">02</span>Story</button>
+  <button data-tab="glance"><span class="num">03</span>Glance</button>
+  <button data-tab="analyst"><span class="num">04</span>Analyst</button>
+  <button data-tab="coach"><span class="num">05</span>Coach</button>
+</nav>
+
+<main>
+
+<!-- ═════════════════ TAB 1 — FLOW ═════════════════ -->
+<section class="panel active" id="flow">
+
+  <div class="row">
+    <div class="stat">
+      <div class="label">Solar · now</div>
+      <div class="value">1.39<span class="unit">kW</span></div>
+      <div class="sub">String 1 · 0.74 kW &nbsp; String 2 · 0.65 kW</div>
+    </div>
+    <div class="stat">
+      <div class="label">Battery · combined SOC</div>
+      <div class="value">97<span class="unit">%</span></div>
+      <div class="sub">BG2134G007 · 94% &nbsp; DZ2228G532 · 100%</div>
+    </div>
+    <div class="stat">
+      <div class="label">Home · now</div>
+      <div class="value">0.69<span class="unit">kW</span></div>
+      <div class="sub">Exporting 0.7 kW to grid</div>
+    </div>
+  </div>
+
+  <div class="flowwrap">
+    <svg class="flow" viewBox="0 0 560 380" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="sunring" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#d4a85a" stop-opacity=".15"/>
+          <stop offset="100%" stop-color="#d4a85a" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+
+      <!-- flow lines -->
+      <!-- solar -> home (top-left to bottom-center) -->
+      <path class="flowpath in" d="M 130 90 Q 200 220 280 280" fill="none" stroke-width="2"/>
+      <!-- solar -> grid (top-left to top-right) -->
+      <path class="flowpath out" d="M 165 80 Q 280 50 395 80" fill="none" stroke-width="2"/>
+      <!-- battery <-> home (right to bottom-center) - idle -->
+      <path class="flowpath idle" d="M 430 200 Q 380 250 320 290" fill="none" stroke-width="2"/>
+
+      <!-- solar node -->
+      <circle cx="130" cy="80" r="58" fill="url(#sunring)"/>
+      <circle cx="130" cy="80" r="42" fill="#15171b" stroke="#d4a85a" stroke-width="1"/>
+      <text x="130" y="74" text-anchor="middle" class="node-label">Solar</text>
+      <text x="130" y="92" text-anchor="middle" class="node-value">1.39<tspan class="node-unit"> kW</tspan></text>
+
+      <!-- grid node -->
+      <circle cx="430" cy="80" r="42" fill="#15171b" stroke="#7fb069" stroke-width="1"/>
+      <text x="430" y="74" text-anchor="middle" class="node-label">Grid</text>
+      <text x="430" y="92" text-anchor="middle" class="node-value">+0.70<tspan class="node-unit"> kW</tspan></text>
+
+      <!-- battery node with SOC ring -->
+      <circle cx="430" cy="220" r="50" fill="#15171b" stroke="#1c1b1a" stroke-width="3"/>
+      <circle cx="430" cy="220" r="50" fill="none" stroke="#d4a85a" stroke-width="3"
+              stroke-dasharray="305 314" stroke-dashoffset="0" transform="rotate(-90 430 220)"/>
+      <text x="430" y="214" text-anchor="middle" class="node-label">Battery</text>
+      <text x="430" y="232" text-anchor="middle" class="node-value">97<tspan class="node-unit">%</tspan></text>
+
+      <!-- home node -->
+      <rect x="240" y="270" width="100" height="80" rx="10" fill="#15171b" stroke="#1c1b1a" stroke-width="1"/>
+      <text x="290" y="298" text-anchor="middle" class="node-label">Home</text>
+      <text x="290" y="320" text-anchor="middle" class="node-value">0.69<tspan class="node-unit"> kW</tspan></text>
+    </svg>
+  </div>
+
+  <div class="ranges">
+    <button class="on">Now</button>
+    <button>Day</button>
+    <button>Week</button>
+    <button>Month</button>
+    <button>Year</button>
+  </div>
+
+  <div class="totals">
+    <div class="tot in"><span class="l"><span class="dot"></span>PV today</span><span class="v">27.3<span class="u">kWh</span></span></div>
+    <div class="tot in"><span class="l"><span class="dot"></span>Discharge</span><span class="v">6.5<span class="u">kWh</span></span></div>
+    <div class="tot in"><span class="l"><span class="dot"></span>Imported</span><span class="v">1.1<span class="u">kWh</span></span></div>
+    <div class="tot out"><span class="l"><span class="dot"></span>House</span><span class="v">12.8<span class="u">kWh</span></span></div>
+    <div class="tot out"><span class="l"><span class="dot"></span>Charged</span><span class="v">10.9<span class="u">kWh</span></span></div>
+    <div class="tot out"><span class="l"><span class="dot"></span>Exported</span><span class="v">9.7<span class="u">kWh</span></span></div>
+  </div>
+
+</section>
+
+<!-- ═════════════════ TAB 2 — STORY ═════════════════ -->
+<section class="panel" id="story">
+
+  <div class="kicker">The day · Friday, 5 June 2026</div>
+  <h1>Your house ran on sunlight for <em>eleven hours</em> today.</h1>
+  <p class="standfirst">From first light at 06:14 until the battery picked up the load at 17:32, the loft inverter pulled 27.3 kWh from the sky. One short cloud bank at 13:08. Otherwise: clear.</p>
+
+  <div class="byline">
+    <span>SA2114G047 · The Loft · 11.2 kWp DC, 5.0 kW AC</span>
+    <span>Two-battery stack · 9.5 kWh nominal · 97% SOC</span>
+  </div>
+
+  <div class="timeline-wrap">
+    <svg class="timeline" viewBox="0 0 880 260" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="sungrad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#d4a85a" stop-opacity=".55"/>
+          <stop offset="100%" stop-color="#d4a85a" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+
+      <!-- axes -->
+      <line class="axis" x1="40" y1="220" x2="860" y2="220"/>
+      <line class="axis" x1="40" y1="40" x2="40" y2="220"/>
+
+      <!-- hour ticks -->
+      <g class="axislbl" text-anchor="middle">
+        <text x="40" y="240">00</text>
+        <text x="177" y="240">04</text>
+        <text x="314" y="240">08</text>
+        <text x="450" y="240">12</text>
+        <text x="587" y="240">16</text>
+        <text x="724" y="240">20</text>
+        <text x="860" y="240">24</text>
+      </g>
+
+      <!-- PV curve area (bell-shaped, peak ~13:00 at 4 kW, with cloud dip at 13:08) -->
+      <path class="pv-curve" d="
+        M 40 220
+        L 230 220
+        Q 280 218 320 195
+        Q 360 165 400 105
+        Q 430 70 450 65
+        L 460 100 L 470 80
+        Q 500 55 540 80
+        Q 580 130 620 175
+        Q 660 205 700 218
+        L 860 220 Z"/>
+      <path class="pv-line" d="
+        M 230 220
+        Q 280 218 320 195
+        Q 360 165 400 105
+        Q 430 70 450 65
+        L 460 100 L 470 80
+        Q 500 55 540 80
+        Q 580 130 620 175
+        Q 660 205 700 218"/>
+
+      <!-- load curve (steady ~0.7 with morning + evening bumps) -->
+      <path class="load-line" d="
+        M 40 200 Q 100 198 160 195
+        Q 220 188 280 180
+        L 320 195 L 360 198
+        Q 420 200 480 200
+        Q 540 200 600 197
+        L 640 175 L 680 165
+        Q 720 175 760 188
+        Q 800 198 860 202"/>
+
+      <!-- event markers -->
+      <line class="markerline" x1="230" y1="40" x2="230" y2="220"/>
+      <circle class="marker" cx="230" cy="220" r="3"/>
+      <text class="annot time" x="234" y="55">06:14</text>
+      <text class="annot" x="234" y="70">First photon</text>
+
+      <line class="markerline" x1="340" y1="40" x2="340" y2="180"/>
+      <circle class="marker" cx="340" cy="180" r="3"/>
+      <text class="annot time" x="344" y="55">09:32</text>
+      <text class="annot" x="344" y="70">Battery hit 100%</text>
+      <text class="annot" x="344" y="84" style="fill:#8a7f6a">Surplus → export begins</text>
+
+      <line class="markerline" x1="465" y1="65" x2="465" y2="40"/>
+      <circle class="marker" cx="465" cy="85" r="3"/>
+      <text class="annot time" x="380" y="32" text-anchor="end">13:08 · cloud bank</text>
+
+      <line class="markerline" x1="620" y1="40" x2="620" y2="220"/>
+      <circle class="marker" cx="620" cy="220" r="3"/>
+      <text class="annot time" x="624" y="120">17:32</text>
+      <text class="annot" x="624" y="135">Battery picks up load</text>
+
+      <line class="markerline" x1="720" y1="40" x2="720" y2="220"/>
+      <circle class="marker" cx="720" cy="220" r="3"/>
+      <text class="annot time" x="724" y="120">19:48</text>
+      <text class="annot" x="724" y="135">Evening peak · 1.4 kW</text>
+    </svg>
+  </div>
+
+  <div class="pull">
+    <div>
+      <h2>You bought <em>1.1 kWh</em> from the grid.</h2>
+      <p>Almost all of it during a short window before sunrise. Battery covered the rest of the night on yesterday's surplus. Self-consumption: <strong>96%</strong>.</p>
+    </div>
+    <div>
+      <h2>You sent <em>9.7 kWh</em> back.</h2>
+      <p>At an export rate of 15p, that's <strong>£1.46</strong> credited today. Combined with avoided import, today saved you an estimated <strong>£4.32</strong>.</p>
+    </div>
+  </div>
+
+  <div class="dist">
+    <h3>Where today's energy came from</h3>
+    <div class="distbar sources">
+      <div class="head"><span>Sources · 34.9 kWh</span><span class="v">100%</span></div>
+      <div class="bar">
+        <div class="seg s1" style="flex:78"><span>Solar · 27.3 kWh</span></div>
+        <div class="seg s2" style="flex:19"><span>Battery · 6.5</span></div>
+        <div class="seg s3" style="flex:3"><span>Grid</span></div>
+      </div>
+    </div>
+    <h3 style="margin-top:32px">Where it went</h3>
+    <div class="distbar sinks">
+      <div class="head"><span>Sinks · 33.4 kWh</span><span class="v">100%</span></div>
+      <div class="bar">
+        <div class="seg s1" style="flex:38"><span>Home · 12.8 kWh</span></div>
+        <div class="seg s2" style="flex:33"><span>Battery · 10.9</span></div>
+        <div class="seg s3" style="flex:29"><span>Export · 9.7</span></div>
+      </div>
+    </div>
+  </div>
+
+</section>
+
+<!-- ═════════════════ TAB 3 — GLANCE ═════════════════ -->
+<section class="panel" id="glance">
+
+  <h1 class="status"><span class="dot"></span>All <em>well</em>. Battery nearly full, solar covering the house, exporting the surplus.</h1>
+
+  <div class="big3">
+    <div class="big">
+      <div class="lbl">Solar today</div>
+      <div class="n">27.3<span class="u">kWh</span></div>
+      <div class="sub"><span class="up">↑ 18%</span> vs. weekly average</div>
+    </div>
+    <div class="big">
+      <div class="lbl">Battery</div>
+      <div class="n">97<span class="u">%</span></div>
+      <div class="sub">Full by 09:32</div>
+    </div>
+    <div class="big">
+      <div class="lbl">Saved today</div>
+      <div class="n">£4.32</div>
+      <div class="sub"><span class="up">£127</span> month to date</div>
+    </div>
+  </div>
+
+  <div class="pills">
+    <span class="pill">Inverter healthy</span>
+    <span class="pill">Both batteries online</span>
+    <span class="pill cool">Cell balance ± 12 mV</span>
+    <span class="pill">PV string 1 OK</span>
+    <span class="pill">PV string 2 OK</span>
+    <span class="pill warn">Grid import: 1.1 kWh today</span>
+    <span class="pill">Last refresh: 4 s ago</span>
+  </div>
+
+</section>
+
+<!-- ═════════════════ TAB 4 — ANALYST ═════════════════ -->
+<section class="panel" id="analyst">
+
+  <div class="head">
+    <div class="title">SA2114G047 · LIVE TELEMETRY · v2.1.4</div>
+    <div class="ts"><span class="live">●</span> 14:32:17 BST · refresh 1.2s · 87.4% coverage 24h</div>
+  </div>
+
+  <div class="grid">
+    <div class="cell sp3">
+      <div class="lbl">PV power</div>
+      <div class="v">1389<span class="u">W</span></div>
+      <div class="delta">+ 64 W / 60s</div>
+    </div>
+    <div class="cell sp3">
+      <div class="lbl">Load</div>
+      <div class="v">694<span class="u">W</span></div>
+      <div class="delta dn">− 12 W / 60s</div>
+    </div>
+    <div class="cell sp3">
+      <div class="lbl">Battery flow</div>
+      <div class="v">0<span class="u">W</span></div>
+      <div class="delta">idle · 97.0% SOC</div>
+    </div>
+    <div class="cell sp3">
+      <div class="lbl">Grid (signed)</div>
+      <div class="v">−695<span class="u">W</span></div>
+      <div class="delta">exporting</div>
+    </div>
+
+    <div class="cell sp12 chart">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <div class="lbl">24h power overlay</div>
+        <div class="legend"><span class="lpv">PV</span><span class="lld">Load</span><span class="lbt">Battery</span><span class="lgr">Grid</span></div>
+      </div>
+      <svg viewBox="0 0 1100 200" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="anpv" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#d4a85a"/>
+            <stop offset="100%" stop-color="#d4a85a" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <g>
+          <line class="grid-line" x1="0" y1="50" x2="1100" y2="50"/>
+          <line class="grid-line" x1="0" y1="100" x2="1100" y2="100"/>
+          <line class="grid-line" x1="0" y1="150" x2="1100" y2="150"/>
+        </g>
+        <g class="axislbl">
+          <text x="0" y="195">00</text><text x="180" y="195">04</text><text x="370" y="195">08</text>
+          <text x="555" y="195">12</text><text x="740" y="195">16</text><text x="925" y="195">20</text><text x="1090" y="195" text-anchor="end">24</text>
+        </g>
+        <!-- PV bell -->
+        <path class="pv-fill" d="M 0 180 L 280 180 Q 340 178 380 160 Q 430 130 480 70 Q 530 30 555 25 Q 580 30 620 55 Q 660 95 700 140 Q 740 170 800 178 L 1100 180 Z"/>
+        <path class="pv" d="M 280 180 Q 340 178 380 160 Q 430 130 480 70 Q 530 30 555 25 Q 580 30 620 55 Q 660 95 700 140 Q 740 170 800 178"/>
+        <!-- Load -->
+        <path class="load" d="M 0 165 Q 100 160 200 158 Q 280 152 360 148 L 400 158 Q 480 162 560 162 L 620 138 L 700 130 Q 800 150 900 160 Q 1000 168 1100 162"/>
+        <!-- Battery (charging midday, discharging evening) -->
+        <path class="batt" d="M 0 105 Q 100 105 200 105 L 280 105 Q 360 95 430 65 L 500 60 Q 540 80 580 95 Q 640 102 720 115 Q 800 145 880 158 Q 970 160 1100 145"/>
+        <!-- Grid -->
+        <path class="grid-l" d="M 0 130 Q 80 128 160 128 L 200 132 Q 240 138 280 140 Q 320 115 380 95 Q 460 60 540 50 Q 620 70 700 95 Q 780 120 860 125 Q 950 130 1100 128"/>
+      </svg>
+    </div>
+
+    <div class="cell sp6">
+      <div class="lbl">Cell voltage spread · BG2134G007 (16 cells)</div>
+      <div class="cells">
+        <div class="cellbar"><div class="fill" style="height:62%"></div><span class="n">1</span></div>
+        <div class="cellbar"><div class="fill" style="height:63%"></div><span class="n">2</span></div>
+        <div class="cellbar"><div class="fill" style="height:61%"></div><span class="n">3</span></div>
+        <div class="cellbar"><div class="fill" style="height:64%"></div><span class="n">4</span></div>
+        <div class="cellbar"><div class="fill" style="height:62%"></div><span class="n">5</span></div>
+        <div class="cellbar"><div class="fill" style="height:63%"></div><span class="n">6</span></div>
+        <div class="cellbar"><div class="fill" style="height:62%"></div><span class="n">7</span></div>
+        <div class="cellbar"><div class="fill" style="height:61%"></div><span class="n">8</span></div>
+        <div class="cellbar"><div class="fill" style="height:64%"></div><span class="n">9</span></div>
+        <div class="cellbar"><div class="fill" style="height:63%"></div><span class="n">10</span></div>
+        <div class="cellbar warn"><div class="fill" style="height:58%"></div><span class="n">11</span></div>
+        <div class="cellbar"><div class="fill" style="height:62%"></div><span class="n">12</span></div>
+        <div class="cellbar"><div class="fill" style="height:63%"></div><span class="n">13</span></div>
+        <div class="cellbar"><div class="fill" style="height:64%"></div><span class="n">14</span></div>
+        <div class="cellbar"><div class="fill" style="height:62%"></div><span class="n">15</span></div>
+        <div class="cellbar"><div class="fill" style="height:63%"></div><span class="n">16</span></div>
+      </div>
+      <div style="font-size:9px;color:#5a5a55;margin-top:8px;letter-spacing:.12em">Δ 18 mV · cell 11 trailing</div>
+    </div>
+
+    <div class="cell sp6">
+      <div class="lbl">Cell voltage spread · DZ2228G532 (16 cells)</div>
+      <div class="cells">
+        <div class="cellbar"><div class="fill" style="height:71%"></div><span class="n">1</span></div>
+        <div class="cellbar"><div class="fill" style="height:70%"></div><span class="n">2</span></div>
+        <div class="cellbar"><div class="fill" style="height:71%"></div><span class="n">3</span></div>
+        <div class="cellbar"><div class="fill" style="height:70%"></div><span class="n">4</span></div>
+        <div class="cellbar"><div class="fill" style="height:71%"></div><span class="n">5</span></div>
+        <div class="cellbar"><div class="fill" style="height:71%"></div><span class="n">6</span></div>
+        <div class="cellbar"><div class="fill" style="height:70%"></div><span class="n">7</span></div>
+        <div class="cellbar"><div class="fill" style="height:71%"></div><span class="n">8</span></div>
+        <div class="cellbar"><div class="fill" style="height:70%"></div><span class="n">9</span></div>
+        <div class="cellbar"><div class="fill" style="height:71%"></div><span class="n">10</span></div>
+        <div class="cellbar"><div class="fill" style="height:70%"></div><span class="n">11</span></div>
+        <div class="cellbar"><div class="fill" style="height:71%"></div><span class="n">12</span></div>
+        <div class="cellbar"><div class="fill" style="height:70%"></div><span class="n">13</span></div>
+        <div class="cellbar"><div class="fill" style="height:71%"></div><span class="n">14</span></div>
+        <div class="cellbar"><div class="fill" style="height:71%"></div><span class="n">15</span></div>
+        <div class="cellbar"><div class="fill" style="height:70%"></div><span class="n">16</span></div>
+      </div>
+      <div style="font-size:9px;color:#5a5a55;margin-top:8px;letter-spacing:.12em">Δ 6 mV · balanced</div>
+    </div>
+
+    <div class="cell sp6">
+      <div class="lbl">Energy ledger · today</div>
+      <table>
+        <thead><tr><th>Source / sink</th><th class="r">kWh</th><th class="r">% of day</th></tr></thead>
+        <tbody>
+          <tr><td>PV generation (DC)</td><td class="r">27.3</td><td class="r">78.2%</td></tr>
+          <tr><td>Battery discharge</td><td class="r">6.5</td><td class="r">18.6%</td></tr>
+          <tr><td>Grid import</td><td class="r">1.1</td><td class="r">3.2%</td></tr>
+          <tr><td style="color:#5a5a55">⎯ Sources total</td><td class="r" style="color:#d4a85a">34.9</td><td class="r">—</td></tr>
+          <tr><td>House consumption</td><td class="r">12.8</td><td class="r">38.3%</td></tr>
+          <tr><td>Battery charge</td><td class="r">10.9</td><td class="r">32.6%</td></tr>
+          <tr><td>Grid export</td><td class="r">9.7</td><td class="r">29.0%</td></tr>
+          <tr><td style="color:#5a5a55">⎯ Sinks total</td><td class="r" style="color:#7fb069">33.4</td><td class="r">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="cell sp6">
+      <div class="lbl">Diagnostic counters</div>
+      <table>
+        <thead><tr><th>Metric</th><th class="r">Value</th><th class="r">24h</th></tr></thead>
+        <tbody>
+          <tr><td>Last successful refresh</td><td class="r">4s ago</td><td class="r">—</td></tr>
+          <tr><td>Consecutive failures</td><td class="r">0</td><td class="r">3</td></tr>
+          <tr><td>Partial refresh failures</td><td class="r">12</td><td class="r">87</td></tr>
+          <tr><td>Inverter heatsink</td><td class="r">38.4°C</td><td class="r">35.1–41.2</td></tr>
+          <tr><td>Charger temp</td><td class="r">31.2°C</td><td class="r">29.8–34.6</td></tr>
+          <tr><td>AC frequency</td><td class="r">49.98 Hz</td><td class="r">49.94–50.04</td></tr>
+          <tr><td>Inverter power factor</td><td class="r">0.94</td><td class="r">0.91–0.99</td></tr>
+          <tr><td>Work time total</td><td class="r">14 274 h</td><td class="r">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+</section>
+
+<!-- ═════════════════ TAB 5 — COACH ═════════════════ -->
+<section class="panel" id="coach">
+
+  <div class="now">
+    <div class="kicker">Right now · 14:32</div>
+    <h2>Battery's full, sun's on, house is small. You're <em>making money</em> for the next four hours.</h2>
+    <p>Exporting 0.7 kW to Octopus at 15p/kWh. Forecast says clear until 18:00 — you'll send roughly another 4 kWh out before the sun fades.</p>
+  </div>
+
+  <div class="recs">
+    <div class="rec">
+      <div class="icon">⚡</div>
+      <h3>Run the dishwasher now</h3>
+      <p>You'd consume your own export rather than selling it. Dishwasher = ~1.4 kWh; you'd save ~21p vs. tonight's import.</p>
+      <div class="cta"><button class="primary">Start now</button><button>Snooze 1h</button></div>
+    </div>
+    <div class="rec">
+      <div class="icon g">🚗</div>
+      <h3>Charge the ID.3 from 11:30 tomorrow</h3>
+      <p>Forecast: 32 kWh PV peak day. Preempt battery filling at 09:00 so the EV soaks up the noon surplus instead of exporting at 15p.</p>
+      <div class="cta"><button class="primary">Schedule</button><button>Show forecast</button></div>
+    </div>
+    <div class="rec">
+      <div class="icon b">🔋</div>
+      <h3>Cell 11 on pack BG is trailing by 18 mV</h3>
+      <p>Not urgent — still within spec. But it's been drifting for 9 days. A balancing cycle on a sunny morning would close the gap.</p>
+      <div class="cta"><button>Plan balance cycle</button><button>Ignore for now</button></div>
+    </div>
+  </div>
+
+  <div class="tariff">
+    <h3>Octopus Flux · next 24h</h3>
+    <div class="strip">
+      <div class="h cheap" title="00:00 — cheap"></div>
+      <div class="h cheap"></div>
+      <div class="h cheap"></div>
+      <div class="h cheap"></div>
+      <div class="h cheap"></div>
+      <div class="h mid"></div>
+      <div class="h mid"></div>
+      <div class="h mid"></div>
+      <div class="h mid"></div>
+      <div class="h mid"></div>
+      <div class="h mid"></div>
+      <div class="h mid"></div>
+      <div class="h mid"></div>
+      <div class="h mid now"></div>
+      <div class="h mid"></div>
+      <div class="h peak"></div>
+      <div class="h peak"></div>
+      <div class="h peak"></div>
+      <div class="h peak"></div>
+      <div class="h mid"></div>
+      <div class="h mid"></div>
+      <div class="h mid"></div>
+      <div class="h mid"></div>
+      <div class="h mid"></div>
+    </div>
+    <div class="axis"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div>
+    <div class="legend">
+      <span class="lc">Cheap · charge from grid · 02:00 — 05:00</span>
+      <span class="lm">Mid · standard import / export</span>
+      <span class="lp">Peak · 16:00 — 19:00 · discharge battery</span>
+    </div>
+  </div>
+
+  <div class="goals">
+    <div class="goal">
+      <div class="lbl">Self-consumption · June</div>
+      <div class="v">87<span class="u">%</span> <span class="t">/ 90%</span></div>
+      <div class="progress"><div class="fill" style="width:97%"></div></div>
+    </div>
+    <div class="goal">
+      <div class="lbl">Saved · June so far</div>
+      <div class="v">£127<span class="t"> / £180</span></div>
+      <div class="progress"><div class="fill" style="width:71%"></div></div>
+    </div>
+    <div class="goal">
+      <div class="lbl">PV · June so far</div>
+      <div class="v">487<span class="u"> kWh</span></div>
+      <div class="progress"><div class="fill" style="width:53%"></div></div>
+    </div>
+    <div class="goal">
+      <div class="lbl">Battery cycles · this year</div>
+      <div class="v">183<span class="t"> / 365</span></div>
+      <div class="progress"><div class="fill" style="width:50%;background:#5a7a9c"></div></div>
+    </div>
+  </div>
+
+</section>
+
+</main>
+
+<footer class="shell">
+  <div>5 design directions · same real data · pick the parts that fit</div>
+  <div class="data">Source: live registry · givenergy_local · SA2114G047</div>
+</footer>
+
+<script>
+// tab switching
+document.querySelectorAll('nav.tabs button').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    const tab = btn.dataset.tab;
+    document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.toggle('active', b===btn));
+    document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active', p.id===tab));
+  });
+});
+
+// flow tab — range pills
+document.querySelectorAll('#flow .ranges button').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.querySelectorAll('#flow .ranges button').forEach(x=>x.classList.toggle('on', x===b));
+  });
+});
+</script>
+
+</body>
+</html>
