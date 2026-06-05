@@ -141,7 +141,11 @@ class GivEnergySelectEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], Selec
         self.entity_description = description
         serial = coordinator.data.inverter_serial_number
         self._attr_unique_id = f"{serial}_{description.key}"
-        self._attr_options = list(description.options or [])
+        # Every select description defines options; assert rather than silently
+        # registering an empty (broken) entity if one ever doesn't. Also narrows
+        # the type for mypy.
+        assert description.options is not None
+        self._attr_options = list(description.options)
         # Carry the device name (mirroring sensor.py/binary_sensor.py) so HA derives
         # the device-name-prefixed entity_id slug even when the select platform sets
         # up before the sensor platform has registered the named device record.
