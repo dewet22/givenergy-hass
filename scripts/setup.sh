@@ -4,6 +4,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+if ! command -v uv >/dev/null 2>&1; then
+  echo "!! uv not found — install it first: https://docs.astral.sh/uv/"
+  exit 1
+fi
+
 # A uv-*managed* interpreter matching .python-version. prek builds each hook in
 # its own venv via `uv venv --python-preference managed --no-python-downloads`;
 # with no managed interpreter present, uv falls back to the system python (macOS

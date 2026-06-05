@@ -344,8 +344,9 @@ After cloning, run the setup script once:
 This provisions the uv-managed Python pinned in `.python-version`, installs the
 dev dependencies, and wires the [prek](https://prek.j178.dev) pre-commit hook.
 The hook step is per-clone — git never clones `.git/hooks` — and prek must be
-installed separately (e.g. `brew install prek`). The hooks are local-only; CI
-runs HACS + hassfest, not these checks.
+installed separately (e.g. `brew install prek`); if it's missing the script
+prints how to install it and stops short of wiring the hook. The hooks are
+local-only; CI runs HACS + hassfest, not these checks.
 
 Day-to-day commands:
 
