@@ -46,7 +46,7 @@ GivTCP actually stopped.
 Serials are auto-detected — no hard-coding needed. Multi-inverter and
 multi-battery setups are handled automatically.
 
-What is migrated by default (all verified ✅ pairs):
+What is migrated by default:
   Solar generation today / lifetime
   Grid import today / lifetime
   Grid export today / lifetime
@@ -136,11 +136,12 @@ INVERTER_PAIRS: list[tuple[str, str, str, bool]] = [
 # Suffixes relative to: sensor.givtcp_<batt_sn>_<givtcp_suffix>
 #                  and: sensor.givenergy_battery_<batt_sn>_<ge_suffix>
 #
-# NOTE: GivTCP tracks battery metrics under the inverter serial only — it does
-# not create per-battery-pack LTS statistics. The givenergy_local charge_cycles
-# sensors (per battery serial) have no GivTCP counterpart to backfill from, so
-# this list is intentionally empty.
-BATTERY_PAIRS: list[tuple[str, str, str, str]] = []
+BATTERY_PAIRS: list[tuple[str, str, str, str]] = [
+    # GivTCP exposes per-battery cycle counts (sensor.givtcp_<batt_sn>_battery_cycles).
+    # The givenergy_local target entity_id is ..._charge_cycles — the slug of the
+    # sensor's "Charge Cycles" name, NOT its internal description key (num_cycles).
+    ("battery_cycles", "charge_cycles", "Battery charge cycles", ""),
+]
 
 # ---------------------------------------------------------------------------
 # Serial detection
