@@ -590,3 +590,29 @@ async def test_unique_id_migration_also_renames_grid_export_power_entity_id(
     assert migrated is not None, f"entity_id {new_entity_id!r} not found after migration"
     assert migrated.unique_id == "SA1234G123_grid_power"
     assert migrated.entity_id == new_entity_id
+
+
+async def test_entity_id_rename_fires_when_unique_id_already_migrated(
+    hass, mock_client, mock_config_entry
+):
+    """Idempotency: on an install where an earlier release already moved the
+    unique_id to grid_power but left the entity_id at '_grid_export_power', the
+    entity_id rename must still fire — it can't be gated on the (now-new) unique_id.
+    Regression for the rc1→rc2 path where the rename silently no-op'd."""
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    # unique_id ALREADY at the new value, entity_id still the stale slug.
+    ent = registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_grid_power", config_entry=mock_config_entry
+    )
+    old_entity_id = "sensor.givenergy_inverter_sa1234g123_grid_export_power"
+    registry.async_update_entity(ent.entity_id, new_entity_id=old_entity_id)
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert registry.async_get(old_entity_id) is None, "stale entity_id not renamed"
+    new_entity_id = "sensor.givenergy_inverter_sa1234g123_grid_power"
+    migrated = registry.async_get(new_entity_id)
+    assert migrated is not None, f"entity_id {new_entity_id!r} not found after migration"
+    assert migrated.unique_id == "SA1234G123_grid_power"
