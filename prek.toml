@@ -102,14 +102,22 @@ hooks = [
 ]
 
 [[repos]]
-repo = "https://github.com/pre-commit/mirrors-mypy"
-rev = "v2.0.0"
+# Run mypy in the project's uv environment rather than mirrors-mypy's isolated
+# venv. The isolated venv only had `pydantic` installed, so mypy couldn't see
+# Home Assistant's (or givenergy-modbus's) types — with `ignore_missing_imports`
+# every HA-API type error silently passed. `uv run mypy` uses the exact
+# pinned deps from uv.lock, matching the validate.yml job. Needs uv on $PATH.
+# pass_filenames = false so mypy uses `files` from pyproject (whole-package
+# analysis), not the staged-file list. See astral-sh/uv-pre-commit#14.
+repo = "local"
 hooks = [
   {
     id = "mypy",
-    additional_dependencies = [
-      "pydantic"
-    ]
+    name = "mypy",
+    entry = "uv run mypy",
+    language = "system",
+    types = ["python"],
+    pass_filenames = false
   }
 ]
 

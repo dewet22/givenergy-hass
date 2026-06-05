@@ -23,3 +23,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: home-assistant/actions/hassfest@master
+
+  mypy:
+    name: mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync
+      # Same invocation as the prek local hook; checks `files` from pyproject.
+      - run: uv run mypy custom_components
+
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run pytest
