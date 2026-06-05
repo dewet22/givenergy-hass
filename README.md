@@ -235,7 +235,7 @@ To avoid that snapshot problem entirely, there's also a dashboard *strategy* tha
 strategy:
   type: custom:givenergy
   mode: classic        # the only mode in this release
-  max_power_kw: 10     # optional; Overview 24h chart y-axis envelope (kW)
+  max_power_kw: 10     # optional; default 10; Overview 24h chart y-axis envelope (kW)
   serial: SA2114G047   # optional; pin one inverter on a multi-plant install
 ```
 
