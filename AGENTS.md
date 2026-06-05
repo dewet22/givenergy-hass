@@ -66,11 +66,16 @@ errors at the source rather than adding `# type: ignore`. The one justified igno
 ### Repo boundaries
 This repo has its own dedicated agent. The sister repos **givenergy-modbus** and
 **givenergy-cli** each have their own agents too. If a task requires a change in a sister
-repo, do not reach into that repo directly. Instead, write a **handoff markdown file**
-that specifies the API boundary the integration will depend on — what symbols/behaviours
-are needed, what must not regress, and what is deferred. Be outcome-focused, not
-implementation-prescriptive. Park the hass-side change and wait for the sister repo's
-pre-release before wiring it up here.
+repo, do not reach into that repo directly. Instead, **file a GitHub issue on the sister
+repo** specifying the API boundary the integration will depend on. Use these headings in
+the body: **What the integration needs** (the symbols/behaviours, described by outcome —
+not implementation-prescriptive), **Must not regress** (existing behaviour the integration
+already relies on), **Deferred / out of scope**, and **Evidence** (link the originating
+hass issue plus any captures/probe data). Cross-link the hass-side issue both ways. Park
+the hass-side change and wait for the sister repo's pre-release before wiring it up here.
+
+Public-text rules apply: these issues are public OSS, so draft the body and get sign-off
+before filing, and redact real serial numbers / network details from captures.
 
 ## Release tracks
 - **`main`** — 1.1.x line, pinned to givenergy-modbus 2.1.x. Pre-releases use `rcN`/`aN`/`bN` suffixes.
