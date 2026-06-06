@@ -1313,12 +1313,12 @@
             { c: curve(N.solar, N.home, true), on: solar != null && solar > 20, color: SOLAR, pwr: solar || 0, flow: flowSolarToHome },
             { c: curve(N.solar, N.grid, false), on: grid != null && grid > 20, color: EXPORT, pwr: grid || 0, flow: flowSolarToGrid },
             { c: curve(N.grid, N.home, true), on: grid != null && grid < -20, color: IMPORT, pwr: -(grid || 0), flow: flowGridToHome },
-            { c: curve(N.solar, N.battery, false), on: batt != null && batt < -20, color: CHARGE, pwr: -(batt || 0), flow: flowSolarToBatt },
+            { c: curve(N.solar, N.battery, false), on: batt != null && batt < -20, color: CHARGE, pwr: -(batt || 0), flow: flowSolarToBatt, labelDx: -38 },
             { c: curve(N.battery, N.home, true), on: batt != null && batt > 20, color: DISCHARGE, pwr: batt || 0, flow: flowBattToHome },
           ];
           var edgeSvg = edges.map(function (e) {
             if (e.on) {
-              var mx = e.c.mid.x.toFixed(1), my = e.c.mid.y.toFixed(1);
+              var mx = (e.c.mid.x + (e.labelDx || 0)).toFixed(1), my = (e.c.mid.y + (e.labelDy || 0)).toFixed(1);
               return '<path class="edge live" ' + edgeStyle(e.pwr, e.color) + ' d="' + e.c.d + '"/>' +
                 '<text class="e-label" x="' + mx + '" y="' + my + '" style="fill:' + e.color + '">' + fmtKw(e.flow) + ' kW</text>';
             }
