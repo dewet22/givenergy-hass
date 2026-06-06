@@ -1579,25 +1579,44 @@
           var importing   = grid  != null && grid  < -THRESH;
 
           // Natural-language status sentence (ASCII-only).
+          // Structure: check net grid direction (exporting/importing/idle) first
+          // within the solarOn group so the sentence is correct even when solar
+          // is present but insufficient to cover demand or the source of battery
+          // charge is ambiguous.
           var sentence;
-          if (solarOn && charging && exporting)
-            sentence = "Solar covering the house and charging the battery, exporting the surplus.";
-          else if (solarOn && charging)
-            sentence = "Solar covering the house and charging the battery.";
-          else if (solarOn && exporting)
-            sentence = "Solar ahead of demand - exporting to the grid.";
-          else if (solarOn && discharging)
-            sentence = "Solar and battery covering the house.";
-          else if (solarOn)
-            sentence = "Solar covering the house.";
-          else if (discharging && !importing)
+          if (solarOn) {
+            if (exporting) {
+              if (charging)
+                sentence = "Solar covering the house and charging the battery, exporting the surplus.";
+              else if (discharging)
+                sentence = "Solar and battery exporting to the grid.";
+              else
+                sentence = "Solar ahead of demand - exporting to the grid.";
+            } else if (importing) {
+              if (charging)
+                sentence = "Solar and grid supplying the house and charging the battery.";
+              else if (discharging)
+                sentence = "Solar, battery, and grid supplying the house.";
+              else
+                sentence = "Solar and grid supplying the house.";
+            } else {
+              // Grid approximately idle: solar balanced against load and battery.
+              if (charging)
+                sentence = "Solar covering the house and charging the battery.";
+              else if (discharging)
+                sentence = "Solar and battery covering the house.";
+              else
+                sentence = "Solar covering the house.";
+            }
+          } else if (discharging && !importing) {
             sentence = "Battery powering the house.";
-          else if (discharging && importing)
+          } else if (discharging && importing) {
             sentence = "Battery and grid supplying the house.";
-          else if (importing)
+          } else if (importing) {
             sentence = "Drawing from the grid.";
-          else
+          } else {
             sentence = "System idle.";
+          }
 
           // Status dot: amber when importing or battery low, green otherwise.
           var dotColor = (importing || (soc != null && soc < 20)) ? "#d4a85a" : "#5bbb6a";

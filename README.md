@@ -234,7 +234,7 @@ To avoid that snapshot problem entirely, there's also a dashboard *strategy* tha
 ```yaml
 strategy:
   type: custom:givenergy
-  mode: classic        # classic (default) | flow — see below
+  mode: classic        # classic (default) | flow | glance — see below
   max_power_kw: 10     # optional; default 10; Overview 24h chart y-axis envelope (kW)
   serial: SA2114G047   # optional; pin one inverter on a multi-plant install
 ```
@@ -255,7 +255,19 @@ strategy:
 
 The Flow view is rendered as a `panel: true` view. If you have the **kiosk-mode** custom integration installed (HACS), the strategy adds hints to hide the header and sidebar for a true full-screen display; without it, the view simply renders inside the normal HA chrome. The card is responsive (container-query based), so it works as a wall-tablet kiosk and reflows for a phone webview.
 
-The remaining directions from [the redesign brief](docs/design/dashboard-redesign-brief.md) — `glance`, `analyst`, and the tariff-aware `coach` — are still to come.
+The remaining directions from [the redesign brief](docs/design/dashboard-redesign-brief.md) — `analyst` and the tariff-aware `coach` — are still to come.
+
+#### `mode: glance`
+
+`mode: glance` leads the dashboard with a calm, full-width **Glance** view: a single-sentence system summary, three large numbers (solar generated today, battery SOC, house consumption today), and a row of health pills showing battery count, import and export totals for the day, and per-string PV generation when active. It's built around a bundled `custom:givenergy-glance` card — nothing extra to install.
+
+```yaml
+strategy:
+  type: custom:givenergy
+  mode: glance
+```
+
+The status sentence is derived from the live signs of grid, battery, and solar power — covering states like self-sufficient, exporting, solar-and-grid importing, battery-only overnight, and so on. The dot to its left pulses green when the system is self-sufficient or exporting, amber when importing from the grid or when battery SOC drops below 20%. The full classic view set follows the Glance panel, so the detailed tabs are still one tap away. Like `flow`, the Glance view is `panel: true` and picks up kiosk-mode hints when the integration is present.
 
 ### Voice assistants & LLM access
 
