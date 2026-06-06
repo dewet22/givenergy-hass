@@ -77,7 +77,7 @@ _STRATEGY_URL = f"/{DOMAIN}/{_STRATEGY_FILENAME}"
 # served from the same package dir so they resolve offline without a CDN.
 _FONTS_DIRNAME = "fonts"
 _FONTS_URL = f"/{DOMAIN}/{_FONTS_DIRNAME}"
-_STRATEGY_VERSION = "5"
+_STRATEGY_VERSION = "8"
 
 # Per-config-entry topology cache. PlantCapabilities is persisted as
 # `to_dict()` directly (no envelope) following HA Core's Store convention —

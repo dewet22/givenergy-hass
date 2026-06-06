@@ -338,3 +338,157 @@ describe("flow mode", () => {
     expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
   });
 });
+
+describe("glance mode", () => {
+  const glanceCard = (dash) => view(dash, "Glance").cards[0];
+
+  it("leads with a panel Glance view, then the full classic view set", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"], acCoupled: true });
+    const dash = await GE.generateDashboard({ mode: "glance" }, hass);
+    expect(titles(dash)).toEqual([
+      "Glance",
+      "Overview",
+      "Energy",
+      "Batteries",
+      "Battery Health",
+      "Controls",
+      "Diagnostics",
+    ]);
+    const gl = view(dash, "Glance");
+    expect(gl.panel).toBe(true);
+    expect(gl.cards.length).toBe(1);
+    expect(gl.cards[0].type).toBe("custom:givenergy-glance");
+  });
+
+  it("resolves every glance slot from the registry and survives the loft_ prefix", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1", "BAT2"], areaPrefix: "loft_" });
+    const dash = await GE.generateDashboard({ mode: "glance" }, hass);
+    const c = glanceCard(dash);
+    const registry = await regSet(hass);
+
+    const slots = [c.solar, c.grid, c.load, c.battery_power, c.battery_soc]
+      .concat(c.solar_strings || [])
+      .concat(Object.values(c.totals || {}))
+      .concat((c.packs || []).map((p) => p.soc));
+
+    expect(slots.length).toBeGreaterThan(8);
+    for (const eid of slots) {
+      expect(registry.has(eid)).toBe(true);
+      expect(eid).toContain("loft_");
+    }
+    expect((c.packs || []).map((p) => p.name)).toEqual(["BAT1", "BAT2"]);
+  });
+
+  it("omits totals whose entities are missing rather than emitting null", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"], omitKeys: ["e_grid_out_day", "e_grid_in_day"] });
+    const c = glanceCard(await GE.generateDashboard({ mode: "glance" }, hass));
+    expect(c.totals.export_today).toBeUndefined();
+    expect(c.totals.import_today).toBeUndefined();
+    expect(c.totals.pv_today).toBeTruthy();
+    expect(hasNullEntity(c)).toBe(false);
+  });
+
+  it("does not emit a Glance panel for an EMS plant", async () => {
+    const hass = makeHass({ ems: true });
+    const dash = await GE.generateDashboard({ mode: "glance" }, hass);
+    expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
+  });
+});
+
+describe("all mode", () => {
+  it("leads with Glance then Flow then Analyst then the full classic view set", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"], acCoupled: true });
+    const dash = await GE.generateDashboard({ mode: "all" }, hass);
+    expect(titles(dash)).toEqual([
+      "Glance",
+      "Flow",
+      "Analyst",
+      "Overview",
+      "Energy",
+      "Batteries",
+      "Battery Health",
+      "Controls",
+      "Diagnostics",
+    ]);
+    expect(view(dash, "Glance").cards[0].type).toBe("custom:givenergy-glance");
+    expect(view(dash, "Flow").cards[0].type).toBe("custom:givenergy-flow");
+    expect(view(dash, "Analyst").cards[0].type).toBe("custom:givenergy-analyst");
+  });
+
+  it("falls back to classic for an EMS plant", async () => {
+    const hass = makeHass({ ems: true });
+    const dash = await GE.generateDashboard({ mode: "all" }, hass);
+    expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
+  });
+});
+
+describe("analyst mode", () => {
+  const analystCard = (dash) => view(dash, "Analyst").cards[0];
+
+  it("leads with a non-panel Analyst view with givenergy-analyst, apexcharts placeholder, and heatmaps", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1", "BAT2"], acCoupled: true });
+    const dash = await GE.generateDashboard({ mode: "analyst" }, hass);
+    expect(titles(dash)).toEqual([
+      "Analyst",
+      "Overview",
+      "Energy",
+      "Batteries",
+      "Battery Health",
+      "Controls",
+      "Diagnostics",
+    ]);
+    const av = view(dash, "Analyst");
+    expect(av.panel).toBeUndefined(); // non-panel
+    expect(av.cards[0].type).toBe("custom:givenergy-analyst");
+    // apexcharts not registered -> placeholder
+    expect(av.cards[1].type).toBe("markdown");
+    expect(av.cards[1].content).toContain("apexcharts-card");
+    // one heatmap per battery pack
+    expect(av.cards[2].type).toBe("custom:ge-cell-heatmap");
+    expect(av.cards[3].type).toBe("custom:ge-cell-heatmap");
+  });
+
+  it("resolves all analyst entity slots from the registry and survives the loft_ prefix", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"], areaPrefix: "loft_" });
+    const dash = await GE.generateDashboard({ mode: "analyst" }, hass);
+    const c = analystCard(dash);
+    const registry = await regSet(hass);
+
+    const liveSlots = [c.solar, c.grid, c.load, c.battery_power, c.battery_soc]
+      .concat(c.solar_strings || [])
+      .filter(Boolean);
+    const totalSlots = Object.values(c.totals || {});
+    const diagSlots  = Object.values(c.diag   || {});
+    const allSlots   = liveSlots.concat(totalSlots).concat(diagSlots);
+
+    expect(liveSlots.length).toBeGreaterThan(4);
+    expect(totalSlots.length).toBe(6); // all 6 energy totals
+    expect(diagSlots.length).toBeGreaterThan(4);
+
+    for (const eid of allSlots) {
+      expect(registry.has(eid)).toBe(true);
+      expect(eid).toContain("loft_");
+    }
+    expect(hasNullEntity(c)).toBe(false);
+  });
+
+  it("omits missing totals and diag entities gracefully rather than emitting null", async () => {
+    const hass = makeHass({
+      batterySerials: ["BAT1"],
+      omitKeys: ["e_grid_out_day", "e_grid_in_day", "consecutive_failures"],
+    });
+    const c = analystCard(await GE.generateDashboard({ mode: "analyst" }, hass));
+    expect(c.totals.export_today).toBeUndefined();
+    expect(c.totals.import_today).toBeUndefined();
+    expect(c.totals.pv_today).toBeTruthy();
+    expect(c.diag.consecutive_failures).toBeUndefined();
+    expect(c.diag.t_inverter_heatsink).toBeTruthy();
+    expect(hasNullEntity(c)).toBe(false);
+  });
+
+  it("does not emit an Analyst view for an EMS plant", async () => {
+    const hass = makeHass({ ems: true });
+    const dash = await GE.generateDashboard({ mode: "analyst" }, hass);
+    expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
+  });
+});

@@ -333,6 +333,162 @@
     return view;
   }
 
+  function glanceViews(plant, opts) {
+    var a = makeAccessors(plant);
+    // Glance is inverter-centric; an EMS plant has no PV/battery/grid data, so
+    // fall back to the classic (EMS) view set with no glance panel.
+    if (plant.target && plant.target.isEms) return classicViews(plant, opts);
+    return [glanceView(plant, a, opts)].concat(classicViews(plant, opts));
+  }
+
+  function glanceView(plant, a, opts) {
+    var cfg = { type: "custom:givenergy-glance" };
+    if (a.inv("p_pv")) cfg.solar = a.inv("p_pv");
+    var strings = [a.inv("p_pv1"), a.inv("p_pv2")].filter(Boolean);
+    if (strings.length) cfg.solar_strings = strings;
+    if (a.inv("grid_power")) cfg.grid = a.inv("grid_power");
+    if (a.inv("p_load_demand")) cfg.load = a.inv("p_load_demand");
+    if (a.inv("p_battery")) cfg.battery_power = a.inv("p_battery");
+    if (a.inv("battery_soc")) cfg.battery_soc = a.inv("battery_soc");
+
+    var packs = plant.batteries
+      .map(function (b) {
+        return { name: String(b.serial).toUpperCase(), soc: a.bat(b, "soc") };
+      })
+      .filter(function (p) { return p.soc; });
+    if (packs.length) cfg.packs = packs;
+
+    // Totals: subset of the flow card's slots (no charge/discharge here).
+    var totalKeys = {
+      pv_today: "e_pv_day",
+      import_today: "e_grid_in_day",
+      export_today: "e_grid_out_day",
+      house_today: "e_consumption_today",
+    };
+    var totals = {};
+    Object.keys(totalKeys).forEach(function (slot) {
+      var eid = a.inv(totalKeys[slot]);
+      if (eid) totals[slot] = eid;
+    });
+    if (Object.keys(totals).length) cfg.totals = totals;
+
+    var view = {
+      title: "Glance",
+      path: "glance",
+      icon: "mdi:eye-outline",
+      panel: true,
+      cards: [cfg],
+    };
+    if (haveCard("kiosk-mode")) {
+      view.kiosk_mode = { hide_header: true, hide_sidebar: true };
+    }
+    return view;
+  }
+
+  // mode: all -- Glance + Flow + Analyst panels followed by the classic tab set.
+  // Not intended as a permanent user-facing mode; remove when modes split into
+  // separate dashboards.
+  function allViews(plant, opts) {
+    var a = makeAccessors(plant);
+    if (plant.target && plant.target.isEms) return classicViews(plant, opts);
+    return [glanceView(plant, a, opts), flowView(plant, a, opts), analystView(plant, a, opts)].concat(classicViews(plant, opts));
+  }
+
+  // mode: analyst -- dense terminal-aesthetic view for diagnostics / debugging /
+  // optimisation. Non-panel multi-card view: givenergy-analyst card (live metrics +
+  // energy ledger + diagnostics table), apexcharts 24h power overlay, and one
+  // ge-cell-heatmap per battery pack. Analyst is inverter-centric; falls back
+  // to classic for EMS plants.
+  function analystViews(plant, opts) {
+    var a = makeAccessors(plant);
+    if (plant.target && plant.target.isEms) return classicViews(plant, opts);
+    return [analystView(plant, a, opts)].concat(classicViews(plant, opts));
+  }
+
+  function analystView(plant, a, opts) {
+    var cards = [];
+
+    // Card 1: custom element handles live metrics, energy ledger, diagnostics.
+    var cfg = { type: "custom:givenergy-analyst" };
+    if (a.inv("p_pv"))          cfg.solar        = a.inv("p_pv");
+    var strings = [a.inv("p_pv1"), a.inv("p_pv2")].filter(Boolean);
+    if (strings.length)         cfg.solar_strings = strings;
+    if (a.inv("grid_power"))    cfg.grid          = a.inv("grid_power");
+    if (a.inv("p_load_demand")) cfg.load          = a.inv("p_load_demand");
+    if (a.inv("p_battery"))     cfg.battery_power = a.inv("p_battery");
+    if (a.inv("battery_soc"))   cfg.battery_soc   = a.inv("battery_soc");
+
+    var totalKeyMap = {
+      pv_today:        "e_pv_day",
+      discharge_today: "e_battery_discharge_day",
+      import_today:    "e_grid_in_day",
+      house_today:     "e_consumption_today",
+      charge_today:    "e_battery_charge_day",
+      export_today:    "e_grid_out_day",
+    };
+    var totals = {};
+    Object.keys(totalKeyMap).forEach(function (slot) {
+      var eid = a.inv(totalKeyMap[slot]);
+      if (eid) totals[slot] = eid;
+    });
+    if (Object.keys(totals).length) cfg.totals = totals;
+
+    var diagKeyMap = {
+      t_inverter_heatsink:  "t_inverter_heatsink",
+      t_charger:            "t_charger",
+      f_ac1:                "f_ac1",
+      pf_inverter:          "pf_inverter_output_now",
+      work_time_total:      "work_time_total",
+      consecutive_failures: "consecutive_failures",
+      last_refresh:         "last_successful_refresh",
+    };
+    var diag = {};
+    Object.keys(diagKeyMap).forEach(function (slot) {
+      var eid = a.inv(diagKeyMap[slot]);
+      if (eid) diag[slot] = eid;
+    });
+    if (Object.keys(diag).length) cfg.diag = diag;
+
+    cards.push(cfg);
+
+    // Card 2: 24h power overlay.
+    var powerSeries = [
+      { entity: a.inv("p_pv"),          name: "PV",      color: "#d4a85a" },
+      { entity: a.inv("p_load_demand"), name: "Load",    color: "#cfcfca" },
+      { entity: a.inv("p_battery"),     name: "Battery", color: "#5bbb6a" },
+      { entity: a.inv("grid_power"),    name: "Grid",    color: "#4a9fd4" },
+    ].filter(function (s) { return s.entity; });
+
+    if (haveCard("apexcharts-card") && powerSeries.length) {
+      var cap = (opts.maxPowerKw || 10) * 1000;
+      cards.push({
+        type: "custom:apexcharts-card",
+        header: { show: true, title: "Power - last 24 h" },
+        graph_span: "24h",
+        yaxis: [{ min: -cap, max: cap }],
+        series: powerSeries,
+      });
+    } else if (powerSeries.length) {
+      cards.push(placeholder("apexcharts-card"));
+    }
+
+    // Card 3+: ge-cell-heatmap per battery pack.
+    plant.batteries.forEach(function (b) {
+      cards.push({
+        type: "custom:ge-cell-heatmap",
+        title: "Cell balance - " + String(b.serial).toUpperCase(),
+        batteries: [b.serial],
+      });
+    });
+
+    return {
+      title: "Analyst",
+      path: "analyst",
+      icon: "mdi:chart-line",
+      cards: cards,
+    };
+  }
+
   function overviewView(plant, a, opts) {
     var cap = (opts.maxPowerKw || 10) * 1000;
     var cards = [];
@@ -1024,7 +1180,12 @@
       };
     }
     // Mode dispatch. Unknown/absent mode falls back to classic.
-    var views = opts.mode === "flow" ? flowViews(plant, opts) : classicViews(plant, opts);
+    var views =
+      opts.mode === "flow"    ? flowViews(plant, opts)    :
+      opts.mode === "glance"  ? glanceViews(plant, opts)  :
+      opts.mode === "analyst" ? analystViews(plant, opts) :
+      opts.mode === "all"     ? allViews(plant, opts)     :
+                                classicViews(plant, opts);
     return { title: "GivEnergy", views: views };
   }
 
@@ -1455,6 +1616,465 @@
       });
     }
 
+    // custom:givenergy-glance - the Glance mode centrepiece. Calm-tech ambient
+    // panel: a natural-language status sentence, three large numbers (solar today /
+    // battery SOC / house today), and health pills. Entity_ids arrive pre-resolved
+    // from the strategy; the card only reads hass.states.
+    if (!customElements.get("givenergy-glance")) {
+      customElements.define("givenergy-glance", class extends HTMLElement {
+        setConfig(cfg) {
+          this._cfg = cfg || {};
+        }
+        set hass(hass) {
+          this._hass = hass;
+          this._render();
+        }
+        getCardSize() {
+          return 5;
+        }
+
+        _render() {
+          var cfg = this._cfg, hass = this._hass;
+          if (!cfg || !hass || !hass.states) return;
+
+          var num = function (eid) {
+            var st = eid && hass.states[eid];
+            var v = st ? parseFloat(st.state) : NaN;
+            return isFinite(v) ? v : null;
+          };
+          var esc = function (s) {
+            return String(s).replace(/[&<>"']/g, function (c) {
+              return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+            });
+          };
+          var fmtKw = function (w) {
+            if (w == null) return "&mdash;";
+            var k = w / 1000;
+            return Math.abs(k) < 10 ? k.toFixed(2) : k.toFixed(1);
+          };
+          var fmtKwh = function (v) {
+            if (v == null) return "&mdash;";
+            return Math.abs(v) < 10 ? v.toFixed(1) : Math.round(v).toString();
+          };
+
+          var solar = num(cfg.solar);
+          var grid  = num(cfg.grid);   // + = export, - = import
+          var batt  = num(cfg.battery_power); // + = discharge, - = charge
+          var soc   = num(cfg.battery_soc);
+          var load  = num(cfg.load);
+          var strings = (cfg.solar_strings || []).map(num);
+          var packs = (cfg.packs || []).map(function (p) {
+            return { name: p.name, soc: num(p.soc) };
+          });
+          var totals = cfg.totals || {};
+
+          // Signature guard: skip DOM rebuild if nothing changed.
+          var sig = [solar, grid, batt, soc, load].join(",") +
+            "|" + strings.join(",") +
+            "|" + packs.map(function (p) { return p.name + ":" + p.soc; }).join(",") +
+            "|" + Object.keys(totals).map(function (k) { return k + "=" + num(totals[k]); }).join(",");
+          if (sig === this._sig) return;
+          this._sig = sig;
+
+          // Flow booleans with hysteresis (Schmitt-trigger style): THRESH_ON to
+          // enter a state, THRESH_OFF to leave it. Prevents the sentence from
+          // flipping between adjacent states when readings are near a threshold
+          // (sensor timing skew, end-of-day grazing, etc.).
+          var THRESH_ON  = 200; // W -- must exceed this to enter a new state
+          var THRESH_OFF =  80; // W -- must drop below this to leave a state
+          var prev = this._flowState || {};
+          var solarOn     = solar != null && (solar >  THRESH_ON || (prev.solarOn     && solar >  THRESH_OFF));
+          var exporting   = grid  != null && (grid  >  THRESH_ON || (prev.exporting   && grid  >  THRESH_OFF));
+          var importing   = grid  != null && (grid  < -THRESH_ON || (prev.importing   && grid  < -THRESH_OFF));
+          var charging    = batt  != null && (batt  < -THRESH_ON || (prev.charging    && batt  < -THRESH_OFF));
+          var discharging = batt  != null && (batt  >  THRESH_ON || (prev.discharging && batt  >  THRESH_OFF));
+          this._flowState = { solarOn: solarOn, exporting: exporting, importing: importing,
+                              charging: charging, discharging: discharging };
+
+          // Natural-language status sentence (ASCII-only).
+          // Structure: check net grid direction (exporting/importing/idle) first
+          // within the solarOn group so the sentence is correct even when solar
+          // is present but insufficient to cover demand or the source of battery
+          // charge is ambiguous.
+          var sentence;
+          if (solarOn) {
+            if (exporting) {
+              if (charging)
+                sentence = "Solar covering the house and charging the battery, exporting the surplus.";
+              else if (discharging)
+                sentence = "Solar and battery exporting to the grid.";
+              else
+                sentence = "Solar ahead of demand - exporting to the grid.";
+            } else if (importing) {
+              if (charging)
+                sentence = "Solar and grid supplying the house and charging the battery.";
+              else if (discharging)
+                sentence = "Solar, battery, and grid supplying the house.";
+              else
+                sentence = "Solar and grid supplying the house.";
+            } else {
+              // Grid approximately idle: solar balanced against load and battery.
+              if (charging)
+                sentence = "Solar covering the house and charging the battery.";
+              else if (discharging)
+                sentence = "Solar and battery covering the house.";
+              else
+                sentence = "Solar covering the house.";
+            }
+          } else if (discharging && !importing) {
+            sentence = "Battery powering the house.";
+          } else if (discharging && importing) {
+            sentence = "Battery and grid supplying the house.";
+          } else if (importing) {
+            sentence = "Drawing from the grid.";
+          } else {
+            sentence = "System idle.";
+          }
+
+          // Status dot: amber when importing or battery low, green otherwise.
+          var dotColor = (importing || (soc != null && soc < 20)) ? "#d4a85a" : "#5bbb6a";
+
+          // ---- Big-3 sub-lines ----
+          var solarSub;
+          if (strings.length) {
+            solarSub = strings.map(function (w, i) {
+              return "String " + (i + 1) + ": " + (w == null ? "&mdash;" : fmtKw(w)) + " kW";
+            }).join(" &middot; ");
+          } else if (solar != null) {
+            solarSub = fmtKw(solar) + " kW now";
+          } else {
+            solarSub = "&mdash;";
+          }
+
+          var battSub;
+          if (packs.length > 1) {
+            battSub = packs.map(function (p) {
+              return esc(p.name) + ": " + (p.soc == null ? "&mdash;" : Math.round(p.soc) + "%");
+            }).join(" &middot; ");
+          } else if (charging) {
+            battSub = "Charging &middot; " + fmtKw(-batt) + " kW";
+          } else if (discharging) {
+            battSub = "Discharging &middot; " + fmtKw(batt) + " kW";
+          } else {
+            battSub = "Idle";
+          }
+
+          var houseSub;
+          if (exporting) {
+            houseSub = "Exporting " + fmtKw(grid) + " kW";
+          } else if (importing) {
+            houseSub = "Importing " + fmtKw(-grid) + " kW";
+          } else if (solar != null || batt != null) {
+            houseSub = "Self-sufficient";
+          } else {
+            houseSub = "&mdash;";
+          }
+
+          // ---- Health pills ----
+          var GREEN = "#5bbb6a", AMBER = "#d4a85a", BLUE = "#4a9fd4";
+          var pills = [];
+          // Battery count.
+          if (packs.length > 0) {
+            var battWord = packs.length === 1 ? "battery" : "batteries";
+            pills.push({ label: packs.length + " " + battWord + " online", color: GREEN });
+            // Per-pack SOC if more than one.
+            if (packs.length > 1) {
+              packs.forEach(function (p) {
+                var pc = (p.soc != null && p.soc < 20) ? AMBER : GREEN;
+                pills.push({ label: esc(p.name) + ": " + (p.soc == null ? "&mdash;" : Math.round(p.soc)) + "%", color: pc });
+              });
+            }
+          } else if (soc != null) {
+            pills.push({ label: "1 battery online", color: GREEN });
+          }
+          // Import / export today.
+          var importKwh = num(totals.import_today);
+          if (importKwh != null && importKwh >= 0.05) {
+            pills.push({ label: fmtKwh(importKwh) + " kWh imported today", color: importKwh > 1 ? AMBER : BLUE });
+          }
+          var exportKwh = num(totals.export_today);
+          if (exportKwh != null && exportKwh >= 0.05) {
+            pills.push({ label: fmtKwh(exportKwh) + " kWh exported today", color: GREEN });
+          }
+          // Per-string generation pills (only when solar is active).
+          if (solarOn && strings.length > 0) {
+            strings.forEach(function (w, i) {
+              if (w != null) {
+                pills.push({ label: "String " + (i + 1) + ": " + fmtKw(w) + " kW", color: BLUE });
+              }
+            });
+          }
+
+          var pillsHtml = pills.map(function (p) {
+            return '<span class="gl-pill"><span class="gl-dot" style="background:' + p.color + '"></span>' + p.label + '</span>';
+          }).join("");
+
+          // ---- Render ----
+          var MONO = "'GE Geist Mono',ui-monospace,monospace";
+          var SERIF = "'GE Fraunces',Georgia,serif";
+          var SANS = "'Roboto',system-ui,sans-serif";
+
+          this.innerHTML =
+            '<ha-card><div class="gegl">' +
+            "<style>" +
+            "@font-face{font-family:'GE Fraunces';src:url('/givenergy_local/fonts/fraunces-subset.woff2') format('woff2');font-weight:300 500;font-display:swap}" +
+            "@font-face{font-family:'GE Geist Mono';src:url('/givenergy_local/fonts/geist-mono-subset.woff2') format('woff2');font-weight:400 600;font-display:swap}" +
+            ".gegl{container-type:inline-size;padding:28px 24px 20px;color:var(--primary-text-color)}" +
+            ".gl-status{display:flex;align-items:flex-start;gap:12px;margin-bottom:32px}" +
+            ".gl-dot-wrap{flex-shrink:0;padding-top:6px}" +
+            ".gl-pulse{width:12px;height:12px;border-radius:50%;animation:gl-pulse 2.4s ease-in-out infinite}" +
+            "@keyframes gl-pulse{0%,100%{opacity:1}50%{opacity:.3}}" +
+            ".gl-sentence{font-family:" + SERIF + ";font-size:28px;font-weight:300;line-height:1.25;letter-spacing:-.01em;max-width:680px}" +
+            ".gl-big3{display:grid;grid-template-columns:repeat(3,1fr);gap:32px;margin-bottom:28px}" +
+            ".gl-num{border-top:1px solid var(--divider-color,#444);padding-top:16px}" +
+            ".gl-lbl{font-family:" + MONO + ";font-size:11px;letter-spacing:.06em;color:var(--secondary-text-color);margin-bottom:6px}" +
+            ".gl-val{font-family:" + SERIF + ";font-size:80px;font-weight:200;line-height:1;letter-spacing:-.03em}" +
+            ".gl-unit{font-family:" + SANS + ";font-size:22px;font-weight:300;color:var(--secondary-text-color);margin-left:4px}" +
+            ".gl-sub{font-family:" + MONO + ";font-size:12px;color:var(--secondary-text-color);margin-top:6px}" +
+            ".gl-pills{display:flex;flex-wrap:wrap;gap:8px}" +
+            ".gl-pill{display:inline-flex;align-items:center;gap:7px;padding:7px 13px;" +
+              "border:1px solid var(--divider-color,#444);border-radius:999px;" +
+              "font-family:" + MONO + ";font-size:12px;color:var(--primary-text-color)}" +
+            ".gl-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}" +
+            "@container (max-width:500px){.gl-sentence{font-size:20px}.gl-big3{grid-template-columns:1fr;gap:20px}.gl-val{font-size:56px}.gl-unit{font-size:16px}}" +
+            "</style>" +
+            '<div class="gl-status">' +
+            '<div class="gl-dot-wrap"><div class="gl-pulse" style="background:' + dotColor + '"></div></div>' +
+            '<div class="gl-sentence">' + sentence + '</div>' +
+            '</div>' +
+            '<div class="gl-big3">' +
+            '<div class="gl-num"><div class="gl-lbl">SOLAR TODAY</div>' +
+            '<div class="gl-val">' + fmtKwh(num(totals.pv_today)) + '<span class="gl-unit">kWh</span></div>' +
+            '<div class="gl-sub">' + solarSub + '</div></div>' +
+            '<div class="gl-num"><div class="gl-lbl">BATTERY</div>' +
+            '<div class="gl-val">' + (soc == null ? "&mdash;" : Math.round(soc)) + '<span class="gl-unit">%</span></div>' +
+            '<div class="gl-sub">' + battSub + '</div></div>' +
+            '<div class="gl-num"><div class="gl-lbl">HOUSE TODAY</div>' +
+            '<div class="gl-val">' + fmtKwh(num(totals.house_today)) + '<span class="gl-unit">kWh</span></div>' +
+            '<div class="gl-sub">' + houseSub + '</div></div>' +
+            '</div>' +
+            '<div class="gl-pills">' + pillsHtml + '</div>' +
+            '</div></ha-card>';
+        }
+      });
+    }
+
+    // custom:givenergy-analyst - the Analyst mode centrepiece. Dense terminal-
+    // aesthetic card: live power metrics strip, energy ledger (sources vs sinks
+    // with kWh and percentages), and an inverter diagnostics table.
+    // Entity_ids arrive pre-resolved from the strategy; the card only reads hass.states.
+    if (!customElements.get("givenergy-analyst")) {
+      customElements.define("givenergy-analyst", class extends HTMLElement {
+        setConfig(cfg) {
+          this._cfg = cfg || {};
+        }
+        set hass(hass) {
+          this._hass = hass;
+          this._render();
+        }
+        getCardSize() {
+          return 8;
+        }
+
+        _render() {
+          var cfg = this._cfg, hass = this._hass;
+          if (!cfg || !hass || !hass.states) return;
+
+          var num = function (eid) {
+            var st = eid && hass.states[eid];
+            var v = st ? parseFloat(st.state) : NaN;
+            return isFinite(v) ? v : null;
+          };
+          var str = function (eid) {
+            var st = eid && hass.states[eid];
+            return st ? st.state : null;
+          };
+          var esc = function (s) {
+            return String(s).replace(/[&<>"']/g, function (c) {
+              return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+            });
+          };
+          // fmtW: integer watts for |w| < 1000, else kW to 2dp.
+          var fmtW = function (w) {
+            if (w == null) return "&mdash;";
+            var abs = Math.abs(w);
+            if (abs < 1000) return Math.round(w) + " W";
+            return (w / 1000).toFixed(2) + " kW";
+          };
+          var fmtKwh = function (v) {
+            if (v == null) return "&mdash;";
+            return Math.abs(v) < 10 ? v.toFixed(1) : Math.round(v).toString();
+          };
+
+          var solar = num(cfg.solar);
+          var grid  = num(cfg.grid);          // + = export, - = import
+          var batt  = num(cfg.battery_power); // + = discharge, - = charge
+          var soc   = num(cfg.battery_soc);
+          var load  = num(cfg.load);
+          var totals = cfg.totals || {};
+          var diag   = cfg.diag   || {};
+
+          // Signature guard: skip full re-render when nothing changed.
+          var totVals = Object.keys(totals).map(function (k) { return num(totals[k]); }).join(",");
+          var diagVals = Object.keys(diag).map(function (k) { return str(diag[k]); }).join(",");
+          var sig = [solar, grid, batt, soc, load].join(",") + "|" + totVals + "|" + diagVals;
+          if (sig === this._sig) return;
+          this._sig = sig;
+
+          // ---- live metrics strip ----
+          var metricCell = function (label, value, sub, borderColor) {
+            return '<div class="an-metric" style="border-left-color:' + borderColor + '">' +
+              '<div class="an-m-lbl">' + label + '</div>' +
+              '<div class="an-m-val">' + value + '</div>' +
+              '<div class="an-m-sub">' + sub + '</div>' +
+              '</div>';
+          };
+
+          // PV cell
+          var pvVal = fmtW(solar);
+          var pvSub = "";
+          if (cfg.solar_strings && cfg.solar_strings.length) {
+            pvSub = cfg.solar_strings.map(function (eid, i) {
+              var v = num(eid);
+              return "S" + (i + 1) + " " + (v == null ? "---" : Math.round(v) + " W");
+            }).join(" / ");
+          }
+
+          // Battery cell
+          var battAbs = batt == null ? null : Math.abs(batt);
+          var battDir = batt == null ? "idle" :
+            (batt < -10 ? "charging" : (batt > 10 ? "discharging" : "idle"));
+          var battSub = battDir + (soc != null ? " | " + Math.round(soc) + "%" : "");
+          var battColor = battDir === "charging"    ? "#4a9fd4" :
+                          battDir === "discharging" ? "#5bbb6a" :
+                                                      "var(--divider-color)";
+
+          // Grid cell
+          var gridAbs = grid == null ? null : Math.abs(grid);
+          var gridDir = grid == null ? "idle" :
+            (grid < -10 ? "importing" : (grid > 10 ? "exporting" : "idle"));
+          var gridColor = gridDir === "exporting" ? "#5bbb6a" :
+                          gridDir === "importing" ? "#e55555" :
+                                                    "var(--divider-color)";
+
+          var metricsHtml =
+            metricCell("PV",      fmtW(solar),   pvSub,   "#d4a85a") +
+            metricCell("LOAD",    fmtW(load),    "",      "var(--divider-color)") +
+            metricCell("BATTERY", fmtW(battAbs), battSub, battColor) +
+            metricCell("GRID",    fmtW(gridAbs), gridDir, gridColor);
+
+          // ---- energy ledger ----
+          var pvToday        = num(totals.pv_today);
+          var dischargeToday = num(totals.discharge_today);
+          var importToday    = num(totals.import_today);
+          var houseToday     = num(totals.house_today);
+          var chargeToday    = num(totals.charge_today);
+          var exportToday    = num(totals.export_today);
+
+          var sumSources = (pvToday || 0) + (dischargeToday || 0) + (importToday || 0);
+          var sumSinks   = (houseToday || 0) + (chargeToday || 0) + (exportToday || 0);
+
+          var pct = function (v, total) {
+            if (v == null || !total) return "&mdash;";
+            return Math.round(v / total * 100) + "%";
+          };
+
+          var ledgerRow = function (label, val, total) {
+            return '<tr><td>' + label + '</td>' +
+              '<td class="an-r">' + fmtKwh(val) + '</td>' +
+              '<td class="an-r">' + pct(val, total) + '</td></tr>';
+          };
+          var ledgerTotalRow = function (label, val, color) {
+            return '<tr class="an-tot" style="color:' + color + '">' +
+              '<td>' + label + '</td>' +
+              '<td class="an-r">' + fmtKwh(val || null) + '</td>' +
+              '<td class="an-r">' + (val ? "100%" : "&mdash;") + '</td></tr>';
+          };
+
+          var ledgerHtml =
+            '<table class="an-tbl">' +
+            '<thead><tr><th>Source</th><th class="an-r">kWh</th><th class="an-r">%</th></tr></thead>' +
+            '<tbody>' +
+            ledgerRow("PV generation",     pvToday,        sumSources) +
+            ledgerRow("Battery discharge", dischargeToday, sumSources) +
+            ledgerRow("Grid import",       importToday,    sumSources) +
+            ledgerTotalRow("Sources total", sumSources, "#d4a85a") +
+            '</tbody></table>' +
+            '<table class="an-tbl an-tbl-mt">' +
+            '<thead><tr><th>Sink</th><th class="an-r">kWh</th><th class="an-r">%</th></tr></thead>' +
+            '<tbody>' +
+            ledgerRow("House consumption", houseToday,  sumSinks) +
+            ledgerRow("Battery charge",    chargeToday, sumSinks) +
+            ledgerRow("Grid export",       exportToday, sumSinks) +
+            ledgerTotalRow("Sinks total", sumSinks, "#5bbb6a") +
+            '</tbody></table>';
+
+          // ---- diagnostics table ----
+          var diagDefs = [
+            { slot: "t_inverter_heatsink",  label: "Heatsink",        unit: " deg C", isNum: true  },
+            { slot: "t_charger",            label: "Charger",          unit: " deg C", isNum: true  },
+            { slot: "f_ac1",                label: "Grid freq",        unit: " Hz",    isNum: true  },
+            // scale: 0.0001 is a stopgap (/10,000 only; correct formula is /10,000 - 1).
+            // Tracked at dewet22/givenergy-modbus#209.
+            { slot: "pf_inverter",          label: "Power factor",     unit: "",       isNum: true, scale: 0.0001 },
+            { slot: "work_time_total",      label: "Work time",        unit: " h",     isNum: true  },
+            { slot: "last_refresh",         label: "Last refresh",     unit: "",       isNum: false },
+            { slot: "consecutive_failures", label: "Consec. failures", unit: "",       isNum: true  },
+          ];
+          var diagRowsHtml = diagDefs.map(function (d) {
+            var eid = diag[d.slot];
+            if (!eid) return "";
+            var raw = d.isNum ? num(eid) : str(eid);
+            if (raw != null && d.scale) raw = parseFloat((raw * d.scale).toFixed(4));
+            var display = raw == null ? "&mdash;" : esc(String(raw)) + esc(d.unit);
+            return '<tr><td>' + d.label + '</td><td class="an-r">' + display + '</td></tr>';
+          }).join("");
+          var diagHtml = diagRowsHtml
+            ? '<table class="an-tbl an-diag">' +
+              '<thead><tr><th>Diagnostic</th><th class="an-r">Value</th></tr></thead>' +
+              '<tbody>' + diagRowsHtml + '</tbody></table>'
+            : "";
+
+          // ---- compose ----
+          this.innerHTML =
+            '<ha-card>' +
+            '<style>' +
+            ':host { display: block; }' +
+            '.an-wrap { padding: 12px 16px; font-family: "GE Geist Mono", ui-monospace, monospace;' +
+            '  container-type: inline-size; }' +
+            '.an-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }' +
+            '@container (max-width: 600px) { .an-metrics { grid-template-columns: repeat(2, 1fr); } }' +
+            '@container (max-width: 300px) { .an-metrics { grid-template-columns: 1fr; } }' +
+            '.an-metric { border-left: 3px solid var(--divider-color); padding: 6px 10px;' +
+            '  background: var(--secondary-background-color); border-radius: 4px; }' +
+            '.an-m-lbl { font-size: 10px; color: var(--secondary-text-color); letter-spacing: 0.08em; }' +
+            '.an-m-val { font-size: 20px; font-weight: 600; color: var(--primary-text-color); line-height: 1.2; }' +
+            '.an-m-sub { font-size: 11px; color: var(--secondary-text-color); }' +
+            '.an-body { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }' +
+            '@container (max-width: 600px) { .an-body { grid-template-columns: 1fr; } }' +
+            '.an-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }' +
+            '.an-tbl th { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;' +
+            '  color: var(--secondary-text-color); padding: 0 4px 4px;' +
+            '  border-bottom: 1px solid var(--divider-color); font-weight: 500; text-align: left; }' +
+            '.an-tbl td { padding: 3px 4px; color: var(--primary-text-color); }' +
+            '.an-tbl tbody tr:hover { background: var(--secondary-background-color); }' +
+            '.an-r { text-align: right; }' +
+            '.an-tot { font-weight: 600; border-top: 1px solid var(--divider-color); }' +
+            '.an-tbl-mt { margin-top: 8px; }' +
+            '.an-diag th { text-align: left; }' +
+            '</style>' +
+            '<div class="an-wrap">' +
+            '<div class="an-metrics">' + metricsHtml + '</div>' +
+            '<div class="an-body">' +
+            '<div>' + ledgerHtml + '</div>' +
+            (diagHtml ? '<div>' + diagHtml + '</div>' : '') +
+            '</div>' +
+            '</div>' +
+            '</ha-card>';
+        }
+      });
+    }
+
     // Discoverability in the "Community dashboards" picker (HA 2026.5+). Harmless
     // where unsupported.
     try {
@@ -1463,7 +2083,7 @@
         type: "givenergy",
         strategyType: "dashboard",
         name: "GivEnergy",
-        description: "Registry-driven GivEnergy dashboard (classic / flow modes).",
+        description: "Registry-driven GivEnergy dashboard (classic / flow / glance / analyst / all modes).",
       });
     } catch (e) {
       /* non-fatal */
