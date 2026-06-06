@@ -1210,7 +1210,9 @@
           var totals = cfg.totals || {};
 
           // Skip the DOM rebuild unless a referenced value (or config) changed.
+          var strings = (cfg.solar_strings || []).map(num);
           var sig = [solar, grid, load, batt, soc].join(",") +
+            "|" + strings.join(",") +
             "|" + packs.map(function (p) { return p.name + ":" + p.soc; }).join(",") +
             "|" + Object.keys(totals).map(function (k) { return k + "=" + num(totals[k]); }).join(",");
           if (sig === this._sig) return;
@@ -1298,31 +1300,58 @@
             var sw = (1.5 + p / 10000 * 3).toFixed(1);
             return 'style="stroke:' + color + ';animation-duration:' + dur + 's;stroke-width:' + sw + '"';
           };
-          // Per-edge actual flow values (Watts). Solar output splits between home,
-          // grid export, and battery charge; the others are direct measurements.
-          var flowSolarToBatt = (batt != null && batt < 0) ? -batt : 0;
-          var flowSolarToGrid = (grid != null && grid > 0) ? grid : 0;
-          var flowSolarToHome = solar != null ? Math.max(0, solar - flowSolarToBatt - flowSolarToGrid) : 0;
-          var flowGridToHome = (grid != null && grid < 0) ? -grid : 0;
-          var flowBattToHome = (batt != null && batt > 0) ? batt : 0;
+          // Flow decomposition (solar takes priority over grid as a source).
+          // All values in Watts; signs follow: batt+ = discharge, grid+ = export.
+          var THRESH = 20; // W -- below this a flow is considered zero / sensor noise
+          var battCharge = (batt != null && batt < 0) ? -batt : 0;
+          var battDischarge = (batt != null && batt > 0) ? batt : 0;
+          var gridImport = (grid != null && grid < 0) ? -grid : 0;
+          var gridExport = (grid != null && grid > 0) ? grid : 0;
+          var solarGen = (solar != null && solar > 0) ? solar : 0;
+
+          var flowSolarToBatt = Math.min(solarGen, battCharge);
+          var flowGridToBatt = Math.max(0, battCharge - flowSolarToBatt);
+          var solarAfterBatt = Math.max(0, solarGen - flowSolarToBatt);
+          var flowSolarToGrid = Math.min(solarAfterBatt, gridExport);
+          var flowBattToGrid = Math.max(0, gridExport - flowSolarToGrid);
+          var flowSolarToHome = Math.max(0, solarAfterBatt - flowSolarToGrid);
+          var flowGridToHome = Math.max(0, gridImport - flowGridToBatt);
+          var flowBattToHome = Math.max(0, battDischarge - flowBattToGrid);
           // Home consumption derived from energy balance so it equals the sum of
           // all incoming flows displayed on the diagram, avoiding the slight drift
           // between the independent load sensor and the solar/grid/battery sensors.
           var homeDisplay = flowSolarToHome + flowGridToHome + flowBattToHome;
+
+          // idleKey groups edges that share a physical connection (same curve,
+          // possibly opposite directions) so only one idle path is rendered.
           var edges = [
-            { c: curve(N.solar, N.home, true), on: solar != null && solar > 20, color: SOLAR, pwr: solar || 0, flow: flowSolarToHome },
-            { c: curve(N.solar, N.grid, false), on: grid != null && grid > 20, color: EXPORT, pwr: grid || 0, flow: flowSolarToGrid },
-            { c: curve(N.grid, N.home, true), on: grid != null && grid < -20, color: IMPORT, pwr: -(grid || 0), flow: flowGridToHome },
-            { c: curve(N.solar, N.battery, false), on: batt != null && batt < -20, color: CHARGE, pwr: -(batt || 0), flow: flowSolarToBatt, labelDx: -38 },
-            { c: curve(N.battery, N.home, true), on: batt != null && batt > 20, color: DISCHARGE, pwr: batt || 0, flow: flowBattToHome },
+            { c: curve(N.solar, N.home, true), on: flowSolarToHome > THRESH, color: SOLAR, pwr: flowSolarToHome, flow: flowSolarToHome, idleKey: 'sh' },
+            { c: curve(N.solar, N.grid, false), on: flowSolarToGrid > THRESH, color: EXPORT, pwr: flowSolarToGrid, flow: flowSolarToGrid, idleKey: 'sg' },
+            { c: curve(N.grid, N.home, true), on: flowGridToHome > THRESH, color: IMPORT, pwr: flowGridToHome, flow: flowGridToHome, idleKey: 'gh' },
+            { c: curve(N.solar, N.battery, false), on: flowSolarToBatt > THRESH, color: CHARGE, pwr: flowSolarToBatt, flow: flowSolarToBatt, labelDx: -38, idleKey: 'sb' },
+            { c: curve(N.battery, N.home, true), on: flowBattToHome > THRESH, color: DISCHARGE, pwr: flowBattToHome, flow: flowBattToHome, idleKey: 'bh' },
+            { c: curve(N.grid, N.battery, false), on: flowGridToBatt > THRESH, color: CHARGE, pwr: flowGridToBatt, flow: flowGridToBatt, idleKey: 'gb' },
+            { c: curve(N.battery, N.grid, false), on: flowBattToGrid > THRESH, color: DISCHARGE, pwr: flowBattToGrid, flow: flowBattToGrid, idleKey: 'gb' },
           ];
+          // Active edges rendered first (animation + label), then a single idle
+          // path per unique connection that has no active direction.
+          var liveKeys = {};
           var edgeSvg = edges.map(function (e) {
             if (e.on) {
+              liveKeys[e.idleKey] = true;
               var mx = (e.c.mid.x + (e.labelDx || 0)).toFixed(1), my = (e.c.mid.y + (e.labelDy || 0)).toFixed(1);
               return '<path class="edge live" ' + edgeStyle(e.pwr, e.color) + ' d="' + e.c.d + '"/>' +
                 '<text class="e-label" x="' + mx + '" y="' + my + '" style="fill:' + e.color + '">' + fmtKw(e.flow) + ' kW</text>';
             }
-            return '<path class="edge idle" d="' + e.c.d + '"/>';
+            return null;
+          }).filter(Boolean).join("");
+          var seenIdle = {};
+          edgeSvg += edges.map(function (e) {
+            if (!e.on && !liveKeys[e.idleKey] && !seenIdle[e.idleKey]) {
+              seenIdle[e.idleKey] = true;
+              return '<path class="edge idle" d="' + e.c.d + '"/>';
+            }
+            return '';
           }).join("");
 
           var node = function (n, ring, label, value, unit, ringColor) {
@@ -1354,7 +1383,6 @@
             '<tspan class="n-unit"> kW</tspan></text>';
 
           // ---- header cards ----
-          var strings = (cfg.solar_strings || []).map(num);
           var strSub = strings.length
             ? strings.map(function (w, i) { return "String " + (i + 1) + " &middot; " + fmtKw(w) + " kW"; }).join("&nbsp;&nbsp;")
             : "&nbsp;";
