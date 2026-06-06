@@ -385,6 +385,15 @@
     return view;
   }
 
+  // mode: all -- dev convenience: all mode panels in front of classic tabs.
+  // Not intended as a permanent user-facing mode; remove when modes split into
+  // separate dashboards.
+  function allViews(plant, opts) {
+    var a = makeAccessors(plant);
+    if (plant.target && plant.target.isEms) return classicViews(plant, opts);
+    return [glanceView(plant, a, opts), flowView(plant, a, opts)].concat(classicViews(plant, opts));
+  }
+
   function overviewView(plant, a, opts) {
     var cap = (opts.maxPowerKw || 10) * 1000;
     var cards = [];
@@ -1079,6 +1088,7 @@
     var views =
       opts.mode === "flow"   ? flowViews(plant, opts)   :
       opts.mode === "glance" ? glanceViews(plant, opts) :
+      opts.mode === "all"    ? allViews(plant, opts)    :
                                classicViews(plant, opts);
     return { title: "GivEnergy", views: views };
   }

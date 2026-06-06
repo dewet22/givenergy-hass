@@ -394,3 +394,28 @@ describe("glance mode", () => {
     expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
   });
 });
+
+describe("all mode", () => {
+  it("leads with Glance then Flow then the full classic view set", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"], acCoupled: true });
+    const dash = await GE.generateDashboard({ mode: "all" }, hass);
+    expect(titles(dash)).toEqual([
+      "Glance",
+      "Flow",
+      "Overview",
+      "Energy",
+      "Batteries",
+      "Battery Health",
+      "Controls",
+      "Diagnostics",
+    ]);
+    expect(view(dash, "Glance").cards[0].type).toBe("custom:givenergy-glance");
+    expect(view(dash, "Flow").cards[0].type).toBe("custom:givenergy-flow");
+  });
+
+  it("falls back to classic for an EMS plant", async () => {
+    const hass = makeHass({ ems: true });
+    const dash = await GE.generateDashboard({ mode: "all" }, hass);
+    expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
+  });
+});
