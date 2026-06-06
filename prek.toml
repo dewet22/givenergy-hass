@@ -122,6 +122,35 @@ hooks = [
 ]
 
 [[repos]]
+# JS gates for the bundled frontend module, mirroring the mypy `local` hook
+# above (run the project's own toolchain rather than an isolated hook venv).
+repo = "local"
+hooks = [
+  # Run the vitest suite at commit-time, matching the `js-tests` CI job. Whole
+  # suite (~300ms), so pass_filenames = false. Needs local `node_modules`
+  # (`npm install`); CI stays the backstop if a contributor hasn't installed.
+  {
+    id = "vitest",
+    name = "vitest",
+    entry = "npm test",
+    language = "system",
+    files = '^(custom_components/givenergy_local/www/|tests/js/).*\.js$',
+    pass_filenames = false
+  },
+  # The statically-served JS must stay ASCII-only (rendered strings use HTML
+  # entities like &mdash;/&middot; rather than literal non-ASCII). Fail if any
+  # served .js contains a byte outside printable-ASCII/whitespace. POSIX class
+  # (not grep -P) so it runs on BSD grep (macOS) and GNU grep (CI) alike.
+  {
+    id = "js-ascii-only",
+    name = "js ascii-only (served module)",
+    entry = '''bash -c '! LC_ALL=C grep -n "[^[:print:][:space:]]" "$@"' --''',
+    language = "system",
+    files = '^custom_components/givenergy_local/www/.*\.js$'
+  }
+]
+
+[[repos]]
 repo = "https://github.com/PyCQA/bandit"
 rev = "1.9.4"
 hooks = [

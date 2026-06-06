@@ -234,7 +234,7 @@ To avoid that snapshot problem entirely, there's also a dashboard *strategy* tha
 ```yaml
 strategy:
   type: custom:givenergy
-  mode: classic        # the only mode in this release
+  mode: classic        # classic (default) | flow — see below
   max_power_kw: 10     # optional; default 10; Overview 24h chart y-axis envelope (kW)
   serial: SA2114G047   # optional; pin one inverter on a multi-plant install
 ```
@@ -243,7 +243,19 @@ The strategy and the bundled cell-heatmap card are served by the integration its
 
 One caveat worth knowing: on a **hard refresh** (Ctrl/Cmd+Shift+R, which bypasses the browser cache) the dashboard may occasionally show "Error loading the dashboard strategy: Timeout waiting for strategy element …". This is a Home Assistant limitation common to all network-loaded dashboard strategies — HA gives the strategy module a fixed 5-second window to register, and a cold re-fetch can lose that race when it's queued behind other custom-card resources. A normal reload serves the module from cache and isn't affected, so it doesn't bite in day-to-day use; if you do hit it, reload again.
 
-This is new in this release and currently reproduces the `classic` layout only; the broader set of modes explored in [the redesign brief](docs/design/dashboard-redesign-brief.md) is still to come.
+#### `mode: flow`
+
+`mode: flow` leads the dashboard with an immersive, full-width **Flow** view — an animated power-flow diagram (solar, grid, battery, home) with the live direction of each flow derived from the sign of the underlying power sensors, three big-number headers, and a today-totals strip. It's a bundled custom card (`custom:givenergy-flow`), so nothing extra to install. The full `classic` view set (Overview, Energy, Batteries, Battery Health, Controls, Diagnostics) follows behind it, so you lose nothing by switching.
+
+```yaml
+strategy:
+  type: custom:givenergy
+  mode: flow
+```
+
+The Flow view is rendered as a `panel: true` view. If you have the **kiosk-mode** custom integration installed (HACS), the strategy adds hints to hide the header and sidebar for a true full-screen display; without it, the view simply renders inside the normal HA chrome. The card is responsive (container-query based), so it works as a wall-tablet kiosk and reflows for a phone webview.
+
+The remaining directions from [the redesign brief](docs/design/dashboard-redesign-brief.md) — `glance`, `analyst`, and the tariff-aware `coach` — are still to come.
 
 ### Voice assistants & LLM access
 
