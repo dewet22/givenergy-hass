@@ -385,7 +385,7 @@
     return view;
   }
 
-  // mode: all -- dev convenience: all mode panels in front of classic tabs.
+  // mode: all -- Glance + Flow + Analyst panels followed by the classic tab set.
   // Not intended as a permanent user-facing mode; remove when modes split into
   // separate dashboards.
   function allViews(plant, opts) {
@@ -2083,7 +2083,7 @@
         type: "givenergy",
         strategyType: "dashboard",
         name: "GivEnergy",
-        description: "Registry-driven GivEnergy dashboard (classic / flow / glance / analyst modes).",
+        description: "Registry-driven GivEnergy dashboard (classic / flow / glance / analyst / all modes).",
       });
     } catch (e) {
       /* non-fatal */

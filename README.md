@@ -234,7 +234,7 @@ To avoid that snapshot problem entirely, there's also a dashboard *strategy* tha
 ```yaml
 strategy:
   type: custom:givenergy
-  mode: classic        # classic (default) | flow | glance — see below
+  mode: classic        # classic (default) | flow | glance | analyst | all — see below
   max_power_kw: 10     # optional; default 10; Overview 24h chart y-axis envelope (kW)
   serial: SA2114G047   # optional; pin one inverter on a multi-plant install
 ```
@@ -255,7 +255,7 @@ strategy:
 
 The Flow view is rendered as a `panel: true` view. If you have the **kiosk-mode** custom integration installed (HACS), the strategy adds hints to hide the header and sidebar for a true full-screen display; without it, the view simply renders inside the normal HA chrome. The card is responsive (container-query based), so it works as a wall-tablet kiosk and reflows for a phone webview.
 
-The remaining directions from [the redesign brief](docs/design/dashboard-redesign-brief.md) — `analyst` and the tariff-aware `coach` — are still to come.
+The tariff-aware `coach` direction from [the redesign brief](docs/design/dashboard-redesign-brief.md) is still to come.
 
 #### `mode: glance`
 
@@ -268,6 +268,28 @@ strategy:
 ```
 
 The status sentence is derived from the live signs of grid, battery, and solar power — covering states like self-sufficient, exporting, solar-and-grid importing, battery-only overnight, and so on. The dot to its left pulses green when the system is self-sufficient or exporting, amber when importing from the grid or when battery SOC drops below 20%. The full classic view set follows the Glance panel, so the detailed tabs are still one tap away. Like `flow`, the Glance view is `panel: true` and picks up kiosk-mode hints when the integration is present.
+
+#### `mode: analyst`
+
+`mode: analyst` leads the dashboard with a dense **Analyst** view aimed at optimisation and debugging: a live metrics strip (PV, load, battery, grid), an energy ledger breaking down today's sources and sinks as kWh and percentages, a diagnostics table (temperatures, grid frequency, power factor, work time, consecutive failures), a 24-hour power overlay chart (requires `apexcharts-card`), and per-pack cell heatmaps. Nothing extra to install beyond the apexcharts card for the chart.
+
+```yaml
+strategy:
+  type: custom:givenergy
+  mode: analyst
+```
+
+The Analyst view is a standard (non-panel) multi-card view, so the full classic tab set still follows it.
+
+#### `mode: all`
+
+`mode: all` stacks all four views — Glance, Flow, Analyst, and the classic tab set — into a single dashboard. Useful if you want to switch between display styles without maintaining separate dashboards.
+
+```yaml
+strategy:
+  type: custom:givenergy
+  mode: all
+```
 
 ### Voice assistants & LLM access
 
