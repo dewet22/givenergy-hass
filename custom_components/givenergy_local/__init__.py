@@ -73,7 +73,11 @@ _DASHBOARD_STORAGE_VERSION = 1
 # _STRATEGY_VERSION whenever the JS changes, to bust the browser cache.
 _STRATEGY_FILENAME = "ge-strategy.js"
 _STRATEGY_URL = f"/{DOMAIN}/{_STRATEGY_FILENAME}"
-_STRATEGY_VERSION = "4"
+# Glyph-subsetted woff2 fonts (Fraunces + Geist Mono) used by the flow card,
+# served from the same package dir so they resolve offline without a CDN.
+_FONTS_DIRNAME = "fonts"
+_FONTS_URL = f"/{DOMAIN}/{_FONTS_DIRNAME}"
+_STRATEGY_VERSION = "5"
 
 # Per-config-entry topology cache. PlantCapabilities is persisted as
 # `to_dict()` directly (no envelope) following HA Core's Store convention —
@@ -263,9 +267,14 @@ async def _async_register_frontend_card(hass: HomeAssistant) -> None:
         # skips where there is nothing to serve from anyway.
         return
     try:
-        module_path = Path(__file__).parent / "www" / _STRATEGY_FILENAME
+        www_dir = Path(__file__).parent / "www"
+        module_path = www_dir / _STRATEGY_FILENAME
+        fonts_path = www_dir / _FONTS_DIRNAME
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(_STRATEGY_URL, str(module_path), False)]
+            [
+                StaticPathConfig(_STRATEGY_URL, str(module_path), False),
+                StaticPathConfig(_FONTS_URL, str(fonts_path), True),
+            ]
         )
         add_extra_js_url(hass, f"{_STRATEGY_URL}?v={_STRATEGY_VERSION}")
     except Exception as exc:  # noqa: BLE001

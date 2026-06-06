@@ -1039,7 +1039,7 @@
   // IIFE. The heatmap card is defined here (inside the guard) so that Node
   // (vitest) never evaluates `extends HTMLElement`, which doesn't exist there.
   if (typeof customElements !== "undefined") {
-    // custom:ge-cell-heatmap — merged from ge-cell-heatmap.js.
+    // custom:ge-cell-heatmap - merged from ge-cell-heatmap.js.
     // Renders one row per battery pack: each of the 16 cell voltages coloured
     // by its mV deviation from that pack's own mean (imbalance visible at any
     // charge level), plus the pack mean (V) and spread (max-min, mV).
@@ -1225,60 +1225,132 @@
           }
 
           // ---- SVG flow diagram ----
-          // Node centres in a 600x320 viewBox.
+          // Node centres in a 600x360 viewBox. Layout follows the HA Energy-flow
+          // convention: grid on the left, home on the right, sources/sinks (solar,
+          // battery) on the central vertical axis. Scales to more peripherals
+          // without breaking, unlike a fixed circular arrangement.
           var N = {
-            solar: { x: 110, y: 84 },
-            grid: { x: 490, y: 84 },
-            battery: { x: 490, y: 238 },
-            home: { x: 300, y: 250 },
+            grid: { x: 80, y: 180 },
+            home: { x: 520, y: 180 },
+            solar: { x: 300, y: 70 },
+            battery: { x: 300, y: 290 },
           };
-          var curve = function (a, b) {
-            var cx = (a.x + b.x) / 2;
-            var cy = (a.y + b.y) / 2 - 22;
-            return "M" + a.x + " " + a.y + " Q " + cx + " " + cy + " " + b.x + " " + b.y;
-          };
+          var R = 40; // node circle radius
+          var HW = 52, HH = 33; // home box half-width / half-height
+          var HOME_L = N.home.x - HW, HOME_R = N.home.x + HW;
+          var HOME_T = N.home.y - HH, HOME_B = N.home.y + HH;
+          var circ = 2 * Math.PI * R;
+
           var SOLAR = "#f5a623", EXPORT = "#5bbb6a", IMPORT = "#e5734d",
             CHARGE = "#4a9fd4", DISCHARGE = "#9b6dd4";
+          var NEUTRAL = "var(--divider-color,#666)";
+
+          // Node outline colour follows the dominant flow direction.
+          var solarColor = (solar != null && solar > 20) ? SOLAR : NEUTRAL;
+          var gridColor = (grid != null && grid > 20) ? EXPORT
+            : (grid != null && grid < -20) ? IMPORT : NEUTRAL;
+          var battColor = (batt != null && batt < -20) ? CHARGE
+            : (batt != null && batt > 20) ? DISCHARGE : NEUTRAL;
+
+          // Clip helpers: shorten bezier endpoints to node perimeters so edges
+          // terminate cleanly at the circle or rectangle boundary.
+          var clipCircle = function (fromX, fromY, cx, cy) {
+            var dx = fromX - cx, dy = fromY - cy;
+            var len = Math.sqrt(dx * dx + dy * dy) || 1;
+            return { x: cx + dx / len * R, y: cy + dy / len * R };
+          };
+          var clipHome = function (ax, ay) {
+            var bx = N.home.x, by = N.home.y;
+            var dx = bx - ax, dy = by - ay;
+            var best = Infinity, px = bx, py = by;
+            var tryT = function (t) {
+              if (t > 1e-6 && t < best) {
+                var xx = ax + t * dx, yy = ay + t * dy;
+                if (xx >= HOME_L - 1 && xx <= HOME_R + 1 && yy >= HOME_T - 1 && yy <= HOME_B + 1) {
+                  best = t; px = xx; py = yy;
+                }
+              }
+            };
+            if (Math.abs(dx) > 0.1) { tryT((HOME_L - ax) / dx); tryT((HOME_R - ax) / dx); }
+            if (Math.abs(dy) > 0.1) { tryT((HOME_T - ay) / dy); tryT((HOME_B - ay) / dy); }
+            return { x: px, y: py };
+          };
+          // Quadratic bezier clipped to the source circle and destination perimeter.
+          // Returns { d, mid } where d is the SVG path string and mid is the t=0.5 point
+          // used to position edge labels.
+          var curve = function (a, b, toHome) {
+            var cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2 - 22;
+            var s = clipCircle(b.x, b.y, a.x, a.y);
+            var e = toHome ? clipHome(a.x, a.y) : clipCircle(a.x, a.y, b.x, b.y);
+            return {
+              d: "M" + s.x.toFixed(1) + " " + s.y.toFixed(1) +
+                " Q " + cx.toFixed(1) + " " + cy.toFixed(1) +
+                " " + e.x.toFixed(1) + " " + e.y.toFixed(1),
+              mid: { x: 0.25 * s.x + 0.5 * cx + 0.25 * e.x,
+                     y: 0.25 * s.y + 0.5 * cy + 0.25 * e.y }
+            };
+          };
+          // Inline style for a live edge: animation speed and stroke width both
+          // scale with flow magnitude (Watts). 0 W -> 1.5 s / 1.5 px; 10 kW -> 0.35 s / 4.5 px.
+          var edgeStyle = function (pwr, color) {
+            var p = Math.min(pwr, 10000);
+            var dur = Math.max(0.35, 1.5 - p / 10000 * 1.15).toFixed(2);
+            var sw = (1.5 + p / 10000 * 3).toFixed(1);
+            return 'style="stroke:' + color + ';animation-duration:' + dur + 's;stroke-width:' + sw + '"';
+          };
+          // Per-edge actual flow values (Watts). Solar output splits between home,
+          // grid export, and battery charge; the others are direct measurements.
+          var flowSolarToBatt = (batt != null && batt < 0) ? -batt : 0;
+          var flowSolarToGrid = (grid != null && grid > 0) ? grid : 0;
+          var flowSolarToHome = solar != null ? Math.max(0, solar - flowSolarToBatt - flowSolarToGrid) : 0;
+          var flowGridToHome = (grid != null && grid < 0) ? -grid : 0;
+          var flowBattToHome = (batt != null && batt > 0) ? batt : 0;
+          // Home consumption derived from energy balance so it equals the sum of
+          // all incoming flows displayed on the diagram, avoiding the slight drift
+          // between the independent load sensor and the solar/grid/battery sensors.
+          var homeDisplay = flowSolarToHome + flowGridToHome + flowBattToHome;
           var edges = [
-            { d: curve(N.solar, N.home), on: solar != null && solar > 20, color: SOLAR },
-            { d: curve(N.solar, N.grid), on: grid != null && grid > 20, color: EXPORT },
-            { d: curve(N.grid, N.home), on: grid != null && grid < -20, color: IMPORT },
-            { d: curve(N.solar, N.battery), on: batt != null && batt < -20, color: CHARGE },
-            { d: curve(N.battery, N.home), on: batt != null && batt > 20, color: DISCHARGE },
+            { c: curve(N.solar, N.home, true), on: solar != null && solar > 20, color: SOLAR, pwr: solar || 0, flow: flowSolarToHome },
+            { c: curve(N.solar, N.grid, false), on: grid != null && grid > 20, color: EXPORT, pwr: grid || 0, flow: flowSolarToGrid },
+            { c: curve(N.grid, N.home, true), on: grid != null && grid < -20, color: IMPORT, pwr: -(grid || 0), flow: flowGridToHome },
+            { c: curve(N.solar, N.battery, false), on: batt != null && batt < -20, color: CHARGE, pwr: -(batt || 0), flow: flowSolarToBatt },
+            { c: curve(N.battery, N.home, true), on: batt != null && batt > 20, color: DISCHARGE, pwr: batt || 0, flow: flowBattToHome },
           ];
           var edgeSvg = edges.map(function (e) {
             if (e.on) {
-              return '<path class="edge live" style="stroke:' + e.color + '" d="' + e.d + '"/>';
+              var mx = e.c.mid.x.toFixed(1), my = e.c.mid.y.toFixed(1);
+              return '<path class="edge live" ' + edgeStyle(e.pwr, e.color) + ' d="' + e.c.d + '"/>' +
+                '<text class="e-label" x="' + mx + '" y="' + my + '" style="fill:' + e.color + '">' + fmtKw(e.flow) + ' kW</text>';
             }
-            return '<path class="edge idle" d="' + e.d + '"/>';
+            return '<path class="edge idle" d="' + e.c.d + '"/>';
           }).join("");
 
-          var node = function (n, ring, label, value, unit) {
+          var node = function (n, ring, label, value, unit, ringColor) {
+            var rc = ringColor || NEUTRAL;
             var c = "";
             if (ring != null) {
               // SOC ring: a circle whose dash represents the percentage.
-              var r = 40, circ = 2 * Math.PI * r;
               var filled = circ * Math.max(0, Math.min(100, ring)) / 100;
-              c = '<circle class="ring-bg" cx="' + n.x + '" cy="' + n.y + '" r="' + r + '"/>' +
-                '<circle class="ring-fg" cx="' + n.x + '" cy="' + n.y + '" r="' + r + '" ' +
+              c = '<circle class="ring-bg" style="stroke:' + rc + '" cx="' + n.x + '" cy="' + n.y + '" r="' + R + '"/>' +
+                '<circle class="ring-fg" cx="' + n.x + '" cy="' + n.y + '" r="' + R + '" ' +
                 'stroke-dasharray="' + filled.toFixed(1) + " " + circ.toFixed(1) + '" ' +
                 'transform="rotate(-90 ' + n.x + " " + n.y + ')"/>';
             } else {
-              c = '<circle class="ring-bg" cx="' + n.x + '" cy="' + n.y + '" r="40"/>';
+              c = '<circle class="ring-bg" style="stroke:' + rc + '" cx="' + n.x + '" cy="' + n.y + '" r="' + R + '"/>';
             }
             return c +
-              '<text class="n-label" x="' + n.x + '" y="' + (n.y - 8) + '">' + label + "</text>" +
-              '<text class="n-value" x="' + n.x + '" y="' + (n.y + 12) + '">' + value +
+              '<text class="n-label" x="' + n.x + '" y="' + (n.y - 10) + '">' + label + "</text>" +
+              '<text class="n-value" x="' + n.x + '" y="' + (n.y + 15) + '">' + value +
               '<tspan class="n-unit"> ' + unit + "</tspan></text>";
           };
-          var gridVal = grid == null ? "&mdash;" : (grid > 0 ? "+" : "") + fmtKw(grid);
+          var gridVal = grid == null ? "&mdash;" : fmtKw(Math.abs(grid));
           var nodesSvg =
-            node(N.solar, null, "SOLAR", fmtKw(solar), "kW") +
-            node(N.grid, null, "GRID", gridVal, "kW") +
-            node(N.battery, soc, "BATTERY", soc == null ? "&mdash;" : Math.round(soc).toString(), "%") +
-            '<rect class="home-box" x="' + (N.home.x - 52) + '" y="' + (N.home.y - 30) + '" width="104" height="60" rx="8"/>' +
-            '<text class="n-label" x="' + N.home.x + '" y="' + (N.home.y - 6) + '">HOME</text>' +
-            '<text class="n-value" x="' + N.home.x + '" y="' + (N.home.y + 14) + '">' + fmtKw(load) +
+            node(N.solar, null, "SOLAR", fmtKw(solar), "kW", solarColor) +
+            node(N.grid, null, "GRID", gridVal, "kW", gridColor) +
+            node(N.battery, soc, "BATTERY", soc == null ? "&mdash;" : Math.round(soc).toString(), "%", battColor) +
+            '<rect class="home-box" x="' + HOME_L + '" y="' + HOME_T + '" width="' + (HW * 2) + '" height="' + (HH * 2) + '" rx="10"/>' +
+            '<text class="n-label" x="' + N.home.x + '" y="' + (N.home.y - 10) + '">HOME</text>' +
+            '<text class="n-value" x="' + N.home.x + '" y="' + (N.home.y + 15) + '">' + fmtKw(homeDisplay) +
             '<tspan class="n-unit"> kW</tspan></text>';
 
           // ---- header cards ----
@@ -1310,31 +1382,34 @@
           this.innerHTML =
             '<ha-card><div class="geflow">' +
             "<style>" +
+            "@font-face{font-family:'GE Fraunces';src:url('/givenergy_local/fonts/fraunces-subset.woff2') format('woff2');font-weight:300 500;font-display:swap}" +
+            "@font-face{font-family:'GE Geist Mono';src:url('/givenergy_local/fonts/geist-mono-subset.woff2') format('woff2');font-weight:400 600;font-display:swap}" +
             ".geflow{container-type:inline-size;padding:16px;color:var(--primary-text-color)}" +
             ".heads{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}" +
             ".head{background:var(--ha-card-background,var(--card-background-color,#1c1c1c));border:1px solid var(--divider-color,#333);border-radius:12px;padding:14px 16px}" +
-            ".h-label{font-size:11px;letter-spacing:.08em;color:var(--secondary-text-color);text-transform:uppercase}" +
-            ".h-value{font-size:34px;font-weight:300;line-height:1.2;margin-top:2px}" +
-            ".h-value .u{font-size:15px;color:var(--secondary-text-color);margin-left:4px}" +
+            ".h-label{font-family:'GE Geist Mono',ui-monospace,monospace;font-size:13px;letter-spacing:.08em;color:var(--secondary-text-color);text-transform:uppercase}" +
+            ".h-value{font-family:'GE Fraunces',Georgia,serif;font-size:43px;font-weight:300;line-height:1.2;margin-top:2px}" +
+            ".h-value .u{font-family:'Roboto',system-ui,sans-serif;font-size:18px;color:var(--secondary-text-color);margin-left:4px}" +
             ".h-sub{font-size:12px;color:var(--secondary-text-color);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" +
             ".diagram{margin:8px 0}" +
             ".diagram svg{width:100%;height:auto;display:block}" +
             ".edge{fill:none;stroke-width:2.5}" +
-            ".edge.idle{stroke:var(--divider-color,#444);opacity:.35;stroke-dasharray:2 6}" +
+            ".edge.idle{stroke:var(--divider-color,#999);opacity:.55;stroke-dasharray:3 7}" +
             ".edge.live{stroke-dasharray:5 9;animation:geflow-ants 0.9s linear infinite}" +
             "@keyframes geflow-ants{to{stroke-dashoffset:-14}}" +
-            ".ring-bg{fill:none;stroke:var(--divider-color,#444);stroke-width:3}" +
+            ".e-label{font-family:'GE Fraunces',Georgia,serif;font-size:11px;font-weight:300;text-anchor:middle;dominant-baseline:middle;paint-order:stroke fill;stroke:var(--ha-card-background,var(--card-background-color,#fff));stroke-width:5;stroke-linejoin:round}" +
+            ".ring-bg{fill:none;stroke-width:3}" +
             ".ring-fg{fill:none;stroke:" + DISCHARGE + ";stroke-width:3;stroke-linecap:round}" +
-            ".home-box{fill:var(--ha-card-background,#1c1c1c);stroke:var(--divider-color,#444);stroke-width:1.5}" +
-            ".n-label{fill:var(--secondary-text-color);font-size:11px;text-anchor:middle;letter-spacing:.06em}" +
-            ".n-value{fill:var(--primary-text-color);font-size:20px;font-weight:300;text-anchor:middle}" +
-            ".n-unit{fill:var(--secondary-text-color);font-size:11px}" +
+            ".home-box{fill:none;stroke:var(--divider-color,#999);stroke-width:1.5}" +
+            ".n-label{font-family:'GE Geist Mono',ui-monospace,monospace;fill:var(--secondary-text-color);font-size:13px;text-anchor:middle;letter-spacing:.06em}" +
+            ".n-value{font-family:'GE Fraunces',Georgia,serif;fill:var(--primary-text-color);font-size:24px;font-weight:300;text-anchor:middle}" +
+            ".n-unit{font-family:'Roboto',system-ui,sans-serif;fill:var(--secondary-text-color);font-size:12px}" +
             ".totals{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-top:8px}" +
             ".total{background:var(--ha-card-background,var(--card-background-color,#1c1c1c));border:1px solid var(--divider-color,#333);border-radius:10px;padding:10px 12px}" +
-            ".t-label{font-size:10px;letter-spacing:.06em;color:var(--secondary-text-color);text-transform:uppercase}" +
+            ".t-label{font-family:'GE Geist Mono',ui-monospace,monospace;font-size:14px;letter-spacing:.06em;color:var(--secondary-text-color);text-transform:uppercase}" +
             ".dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle}" +
-            ".t-val{font-size:20px;font-weight:300;margin-top:2px}" +
-            ".t-unit{font-size:11px;color:var(--secondary-text-color)}" +
+            ".t-val{font-family:'GE Fraunces',Georgia,serif;font-size:31px;font-weight:300;margin-top:2px}" +
+            ".t-unit{font-family:'Roboto',system-ui,sans-serif;font-size:16px;color:var(--secondary-text-color)}" +
             "@container (max-width:640px){.heads{grid-template-columns:1fr}.totals{grid-template-columns:repeat(3,1fr)}.h-value{font-size:28px}}" +
             "@container (max-width:380px){.totals{grid-template-columns:repeat(2,1fr)}}" +
             "</style>" +
@@ -1343,7 +1418,7 @@
             '<div class="head"><div class="h-label">Battery &middot; Combined SOC</div><div class="h-value">' + (soc == null ? "&mdash;" : Math.round(soc)) + '<span class="u">%</span></div><div class="h-sub">' + packSub + "</div></div>" +
             '<div class="head"><div class="h-label">Home &middot; Now</div><div class="h-value">' + fmtKw(load) + '<span class="u">kW</span></div><div class="h-sub">' + gridSub + "</div></div>" +
             "</div>" +
-            '<div class="diagram"><svg viewBox="0 0 600 320" preserveAspectRatio="xMidYMid meet">' +
+            '<div class="diagram"><svg viewBox="0 0 600 360" preserveAspectRatio="xMidYMid meet">' +
             edgeSvg + nodesSvg +
             "</svg></div>" +
             '<div class="totals">' + totalsHtml + "</div>" +
