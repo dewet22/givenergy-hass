@@ -73,7 +73,7 @@ _DASHBOARD_STORAGE_VERSION = 1
 # _STRATEGY_VERSION whenever the JS changes, to bust the browser cache.
 _STRATEGY_FILENAME = "ge-strategy.js"
 _STRATEGY_URL = f"/{DOMAIN}/{_STRATEGY_FILENAME}"
-_STRATEGY_VERSION = "3"
+_STRATEGY_VERSION = "4"
 
 # Per-config-entry topology cache. PlantCapabilities is persisted as
 # `to_dict()` directly (no envelope) following HA Core's Store convention —

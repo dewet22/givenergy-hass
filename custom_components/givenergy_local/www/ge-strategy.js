@@ -270,6 +270,69 @@
     return views;
   }
 
+  // ----- flow mode -----------------------------------------------------------
+
+  // The Flow panel prepended to the full classic view set. Nothing is dropped:
+  // the classic views stay available; per-mode pruning is a later decision.
+  function flowViews(plant, opts) {
+    var a = makeAccessors(plant);
+    // Flow is inverter-centric; an EMS plant has no PV/battery/grid flow, so
+    // fall back to the classic (EMS) view set with no flow panel.
+    if (plant.target && plant.target.isEms) return classicViews(plant, opts);
+    return [flowView(plant, a, opts)].concat(classicViews(plant, opts));
+  }
+
+  function flowView(plant, a, opts) {
+    var cfg = { type: "custom:givenergy-flow", max_power_kw: opts.maxPowerKw || 10 };
+    if (a.inv("p_pv")) cfg.solar = a.inv("p_pv");
+    var strings = [a.inv("p_pv1"), a.inv("p_pv2")].filter(Boolean);
+    if (strings.length) cfg.solar_strings = strings;
+    if (a.inv("grid_power")) cfg.grid = a.inv("grid_power");
+    if (a.inv("p_load_demand")) cfg.load = a.inv("p_load_demand");
+    if (a.inv("p_battery")) cfg.battery_power = a.inv("p_battery");
+    if (a.inv("battery_soc")) cfg.battery_soc = a.inv("battery_soc");
+
+    var packs = plant.batteries
+      .map(function (b) {
+        return { name: String(b.serial).toUpperCase(), soc: a.bat(b, "soc") };
+      })
+      .filter(function (p) {
+        return p.soc;
+      });
+    if (packs.length) cfg.packs = packs;
+
+    // Today-totals strip: card-slot name -> entity key (the same keys the
+    // classic Overview "Today" glance uses).
+    var totalKeys = {
+      pv_today: "e_pv_day",
+      charge_today: "e_battery_charge_day",
+      discharge_today: "e_battery_discharge_day",
+      import_today: "e_grid_in_day",
+      export_today: "e_grid_out_day",
+      house_today: "e_consumption_today",
+    };
+    var totals = {};
+    Object.keys(totalKeys).forEach(function (slot) {
+      var eid = a.inv(totalKeys[slot]);
+      if (eid) totals[slot] = eid;
+    });
+    if (Object.keys(totals).length) cfg.totals = totals;
+
+    var view = {
+      title: "Flow",
+      path: "flow",
+      icon: "mdi:transit-connection-variant",
+      panel: true,
+      cards: [cfg],
+    };
+    // Kiosk-mode hints (feature-detected). Omit when the integration isn't
+    // present so the dashboard still works inside the standard HA shell.
+    if (haveCard("kiosk-mode")) {
+      view.kiosk_mode = { hide_header: true, hide_sidebar: true };
+    }
+    return view;
+  }
+
   function overviewView(plant, a, opts) {
     var cap = (opts.maxPowerKw || 10) * 1000;
     var cards = [];
@@ -931,6 +994,7 @@
     var opts = {
       maxPowerKw: config.max_power_kw != null ? config.max_power_kw : 10,
       serial: config.serial || null,
+      mode: config.mode || "classic",
     };
     var plant = await buildPlant(hass, opts);
     if (!plant.target) {
@@ -959,8 +1023,8 @@
         ],
       };
     }
-    // v1: only `classic`. Unknown/absent mode falls back to classic.
-    var views = classicViews(plant, opts);
+    // Mode dispatch. Unknown/absent mode falls back to classic.
+    var views = opts.mode === "flow" ? flowViews(plant, opts) : classicViews(plant, opts);
     return { title: "GivEnergy", views: views };
   }
 
@@ -1094,6 +1158,200 @@
       });
     }
 
+    // custom:givenergy-flow - the Flow mode centrepiece. Three big-number
+    // headers, an inline SVG power-flow diagram (edge direction follows the sign
+    // of grid/battery power), and a today-totals strip. Entity_ids arrive
+    // pre-resolved from the strategy; the card only reads hass.states. Responsive
+    // via a container query so it works as a panel:true view and as a card slot.
+    if (!customElements.get("givenergy-flow")) {
+      customElements.define("givenergy-flow", class extends HTMLElement {
+        setConfig(cfg) {
+          this._cfg = cfg || {};
+        }
+        set hass(hass) {
+          this._hass = hass;
+          this._render();
+        }
+        getCardSize() {
+          return 8;
+        }
+
+        _render() {
+          var cfg = this._cfg, hass = this._hass;
+          if (!cfg || !hass || !hass.states) return;
+          var num = function (eid) {
+            var st = eid && hass.states[eid];
+            var v = st ? parseFloat(st.state) : NaN;
+            return isFinite(v) ? v : null;
+          };
+          var esc = function (s) {
+            return String(s).replace(/[&<>"']/g, function (c) {
+              return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+            });
+          };
+          var fmtKw = function (w) {
+            if (w == null) return "&mdash;";
+            var k = w / 1000;
+            return Math.abs(k) < 10 ? k.toFixed(2) : k.toFixed(1);
+          };
+          var fmtKwh = function (v) {
+            if (v == null) return "&mdash;";
+            return Math.abs(v) < 10 ? v.toFixed(1) : Math.round(v).toString();
+          };
+
+          var solar = num(cfg.solar);
+          var grid = num(cfg.grid); // + = export, - = import (per v1.1.3 rename)
+          var load = num(cfg.load);
+          var batt = num(cfg.battery_power); // + = discharge, - = charge
+          var soc = num(cfg.battery_soc);
+          var packs = (cfg.packs || []).map(function (p) {
+            return { name: p.name, soc: num(p.soc) };
+          });
+          var totals = cfg.totals || {};
+
+          // Skip the DOM rebuild unless a referenced value (or config) changed.
+          var sig = [solar, grid, load, batt, soc].join(",") +
+            "|" + packs.map(function (p) { return p.name + ":" + p.soc; }).join(",") +
+            "|" + Object.keys(totals).map(function (k) { return k + "=" + num(totals[k]); }).join(",");
+          if (sig === this._sig) return;
+          this._sig = sig;
+
+          // Grid / battery direction sentences.
+          var gridSub = "Idle";
+          if (grid != null && Math.abs(grid) >= 10) {
+            gridSub = grid > 0
+              ? "Exporting " + fmtKw(grid) + " kW to grid"
+              : "Importing " + fmtKw(-grid) + " kW from grid";
+          }
+
+          // ---- SVG flow diagram ----
+          // Node centres in a 600x320 viewBox.
+          var N = {
+            solar: { x: 110, y: 84 },
+            grid: { x: 490, y: 84 },
+            battery: { x: 490, y: 238 },
+            home: { x: 300, y: 250 },
+          };
+          var curve = function (a, b) {
+            var cx = (a.x + b.x) / 2;
+            var cy = (a.y + b.y) / 2 - 22;
+            return "M" + a.x + " " + a.y + " Q " + cx + " " + cy + " " + b.x + " " + b.y;
+          };
+          var SOLAR = "#f5a623", EXPORT = "#5bbb6a", IMPORT = "#e5734d",
+            CHARGE = "#4a9fd4", DISCHARGE = "#9b6dd4";
+          var edges = [
+            { d: curve(N.solar, N.home), on: solar != null && solar > 20, color: SOLAR },
+            { d: curve(N.solar, N.grid), on: grid != null && grid > 20, color: EXPORT },
+            { d: curve(N.grid, N.home), on: grid != null && grid < -20, color: IMPORT },
+            { d: curve(N.solar, N.battery), on: batt != null && batt < -20, color: CHARGE },
+            { d: curve(N.battery, N.home), on: batt != null && batt > 20, color: DISCHARGE },
+          ];
+          var edgeSvg = edges.map(function (e) {
+            if (e.on) {
+              return '<path class="edge live" style="stroke:' + e.color + '" d="' + e.d + '"/>';
+            }
+            return '<path class="edge idle" d="' + e.d + '"/>';
+          }).join("");
+
+          var node = function (n, ring, label, value, unit) {
+            var c = "";
+            if (ring != null) {
+              // SOC ring: a circle whose dash represents the percentage.
+              var r = 40, circ = 2 * Math.PI * r;
+              var filled = circ * Math.max(0, Math.min(100, ring)) / 100;
+              c = '<circle class="ring-bg" cx="' + n.x + '" cy="' + n.y + '" r="' + r + '"/>' +
+                '<circle class="ring-fg" cx="' + n.x + '" cy="' + n.y + '" r="' + r + '" ' +
+                'stroke-dasharray="' + filled.toFixed(1) + " " + circ.toFixed(1) + '" ' +
+                'transform="rotate(-90 ' + n.x + " " + n.y + ')"/>';
+            } else {
+              c = '<circle class="ring-bg" cx="' + n.x + '" cy="' + n.y + '" r="40"/>';
+            }
+            return c +
+              '<text class="n-label" x="' + n.x + '" y="' + (n.y - 8) + '">' + label + "</text>" +
+              '<text class="n-value" x="' + n.x + '" y="' + (n.y + 12) + '">' + value +
+              '<tspan class="n-unit"> ' + unit + "</tspan></text>";
+          };
+          var gridVal = grid == null ? "&mdash;" : (grid > 0 ? "+" : "") + fmtKw(grid);
+          var nodesSvg =
+            node(N.solar, null, "SOLAR", fmtKw(solar), "kW") +
+            node(N.grid, null, "GRID", gridVal, "kW") +
+            node(N.battery, soc, "BATTERY", soc == null ? "&mdash;" : Math.round(soc).toString(), "%") +
+            '<rect class="home-box" x="' + (N.home.x - 52) + '" y="' + (N.home.y - 30) + '" width="104" height="60" rx="8"/>' +
+            '<text class="n-label" x="' + N.home.x + '" y="' + (N.home.y - 6) + '">HOME</text>' +
+            '<text class="n-value" x="' + N.home.x + '" y="' + (N.home.y + 14) + '">' + fmtKw(load) +
+            '<tspan class="n-unit"> kW</tspan></text>';
+
+          // ---- header cards ----
+          var strings = (cfg.solar_strings || []).map(num);
+          var strSub = strings.length
+            ? strings.map(function (w, i) { return "String " + (i + 1) + " &middot; " + fmtKw(w) + " kW"; }).join("&nbsp;&nbsp;")
+            : "&nbsp;";
+          var packSub = packs.length
+            ? packs.map(function (p) { return esc(p.name) + " &middot; " + (p.soc == null ? "&mdash;" : Math.round(p.soc) + "%"); }).join("&nbsp;&nbsp;")
+            : "&nbsp;";
+
+          // ---- totals strip ----
+          var totalDefs = [
+            { k: "pv_today", label: "PV TODAY", color: SOLAR },
+            { k: "discharge_today", label: "DISCHARGE", color: DISCHARGE },
+            { k: "import_today", label: "IMPORTED", color: IMPORT },
+            { k: "house_today", label: "HOUSE", color: "#9e9e9e" },
+            { k: "charge_today", label: "CHARGED", color: CHARGE },
+            { k: "export_today", label: "EXPORTED", color: EXPORT },
+          ];
+          var totalsHtml = totalDefs
+            .filter(function (t) { return totals[t.k]; })
+            .map(function (t) {
+              return '<div class="total"><div class="t-label"><span class="dot" style="background:' + t.color + '"></span>' +
+                t.label + '</div><div class="t-val">' + fmtKwh(num(totals[t.k])) +
+                '<span class="t-unit"> kWh</span></div></div>';
+            }).join("");
+
+          this.innerHTML =
+            '<ha-card><div class="geflow">' +
+            "<style>" +
+            ".geflow{container-type:inline-size;padding:16px;color:var(--primary-text-color)}" +
+            ".heads{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}" +
+            ".head{background:var(--ha-card-background,var(--card-background-color,#1c1c1c));border:1px solid var(--divider-color,#333);border-radius:12px;padding:14px 16px}" +
+            ".h-label{font-size:11px;letter-spacing:.08em;color:var(--secondary-text-color);text-transform:uppercase}" +
+            ".h-value{font-size:34px;font-weight:300;line-height:1.2;margin-top:2px}" +
+            ".h-value .u{font-size:15px;color:var(--secondary-text-color);margin-left:4px}" +
+            ".h-sub{font-size:12px;color:var(--secondary-text-color);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}" +
+            ".diagram{margin:8px 0}" +
+            ".diagram svg{width:100%;height:auto;display:block}" +
+            ".edge{fill:none;stroke-width:2.5}" +
+            ".edge.idle{stroke:var(--divider-color,#444);opacity:.35;stroke-dasharray:2 6}" +
+            ".edge.live{stroke-dasharray:5 9;animation:geflow-ants 0.9s linear infinite}" +
+            "@keyframes geflow-ants{to{stroke-dashoffset:-14}}" +
+            ".ring-bg{fill:none;stroke:var(--divider-color,#444);stroke-width:3}" +
+            ".ring-fg{fill:none;stroke:" + DISCHARGE + ";stroke-width:3;stroke-linecap:round}" +
+            ".home-box{fill:var(--ha-card-background,#1c1c1c);stroke:var(--divider-color,#444);stroke-width:1.5}" +
+            ".n-label{fill:var(--secondary-text-color);font-size:11px;text-anchor:middle;letter-spacing:.06em}" +
+            ".n-value{fill:var(--primary-text-color);font-size:20px;font-weight:300;text-anchor:middle}" +
+            ".n-unit{fill:var(--secondary-text-color);font-size:11px}" +
+            ".totals{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-top:8px}" +
+            ".total{background:var(--ha-card-background,var(--card-background-color,#1c1c1c));border:1px solid var(--divider-color,#333);border-radius:10px;padding:10px 12px}" +
+            ".t-label{font-size:10px;letter-spacing:.06em;color:var(--secondary-text-color);text-transform:uppercase}" +
+            ".dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;vertical-align:middle}" +
+            ".t-val{font-size:20px;font-weight:300;margin-top:2px}" +
+            ".t-unit{font-size:11px;color:var(--secondary-text-color)}" +
+            "@container (max-width:640px){.heads{grid-template-columns:1fr}.totals{grid-template-columns:repeat(3,1fr)}.h-value{font-size:28px}}" +
+            "@container (max-width:380px){.totals{grid-template-columns:repeat(2,1fr)}}" +
+            "</style>" +
+            '<div class="heads">' +
+            '<div class="head"><div class="h-label">Solar &middot; Now</div><div class="h-value">' + fmtKw(solar) + '<span class="u">kW</span></div><div class="h-sub">' + strSub + "</div></div>" +
+            '<div class="head"><div class="h-label">Battery &middot; Combined SOC</div><div class="h-value">' + (soc == null ? "&mdash;" : Math.round(soc)) + '<span class="u">%</span></div><div class="h-sub">' + packSub + "</div></div>" +
+            '<div class="head"><div class="h-label">Home &middot; Now</div><div class="h-value">' + fmtKw(load) + '<span class="u">kW</span></div><div class="h-sub">' + gridSub + "</div></div>" +
+            "</div>" +
+            '<div class="diagram"><svg viewBox="0 0 600 320" preserveAspectRatio="xMidYMid meet">' +
+            edgeSvg + nodesSvg +
+            "</svg></div>" +
+            '<div class="totals">' + totalsHtml + "</div>" +
+            "</div></ha-card>";
+        }
+      });
+    }
+
     // Discoverability in the "Community dashboards" picker (HA 2026.5+). Harmless
     // where unsupported.
     try {
@@ -1102,7 +1360,7 @@
         type: "givenergy",
         strategyType: "dashboard",
         name: "GivEnergy",
-        description: "Registry-driven GivEnergy dashboard (classic mode).",
+        description: "Registry-driven GivEnergy dashboard (classic / flow modes).",
       });
     } catch (e) {
       /* non-fatal */

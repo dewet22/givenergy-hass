@@ -257,3 +257,84 @@ describe("registry read failure", () => {
     expect(dash.views[0].cards[0].content).toContain("Could not read the entity registry");
   });
 });
+
+describe("flow mode", () => {
+  const flowCard = (dash) => view(dash, "Flow").cards[0];
+
+  it("leads with a panel Flow view, then the full classic view set", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"], acCoupled: true });
+    const dash = await GE.generateDashboard({ mode: "flow" }, hass);
+    expect(titles(dash)).toEqual([
+      "Flow",
+      "Overview",
+      "Energy",
+      "Batteries",
+      "Battery Health",
+      "Controls",
+      "Diagnostics",
+    ]);
+    const flow = view(dash, "Flow");
+    expect(flow.panel).toBe(true);
+    expect(flow.cards.length).toBe(1);
+    expect(flow.cards[0].type).toBe("custom:givenergy-flow");
+  });
+
+  it("resolves every flow slot from the registry and survives the loft_ prefix", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1", "BAT2"], areaPrefix: "loft_" });
+    const dash = await GE.generateDashboard({ mode: "flow" }, hass);
+    const c = flowCard(dash);
+    const registry = await regSet(hass);
+
+    const slots = [c.solar, c.grid, c.load, c.battery_power, c.battery_soc]
+      .concat(c.solar_strings || [])
+      .concat(Object.values(c.totals || {}))
+      .concat((c.packs || []).map((p) => p.soc));
+
+    expect(slots.length).toBeGreaterThan(10);
+    for (const eid of slots) {
+      expect(registry.has(eid)).toBe(true); // resolved, not constructed
+      expect(eid).toContain("loft_"); // current area-prefixed id was read
+    }
+    expect((c.packs || []).map((p) => p.name)).toEqual(["BAT1", "BAT2"]);
+  });
+
+  it("omits a slot whose entity is missing rather than emitting null", async () => {
+    // Omit non-marker flow slots (p_pv is the inverter classify marker, so it
+    // must stay for the plant to resolve at all).
+    const hass = makeHass({ batterySerials: ["BAT1"], omitKeys: ["p_load_demand", "e_grid_out_day"] });
+    const c = flowCard(await GE.generateDashboard({ mode: "flow" }, hass));
+    expect(c.load).toBeUndefined();
+    expect(c.totals.export_today).toBeUndefined();
+    expect(c.solar).toBeTruthy(); // unaffected slots still present
+    expect(c.totals.pv_today).toBeTruthy();
+    expect(hasNullEntity(c)).toBe(false);
+  });
+
+  it("adds kiosk-mode hints only when kiosk-mode is registered", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"] });
+    const without = await GE.generateDashboard({ mode: "flow" }, hass);
+    expect(view(without, "Flow").kiosk_mode).toBeUndefined();
+
+    await withCards(["kiosk-mode"], async () => {
+      const hass2 = makeHass({ batterySerials: ["BAT1"] });
+      const withKiosk = await GE.generateDashboard({ mode: "flow" }, hass2);
+      expect(view(withKiosk, "Flow").kiosk_mode).toEqual({
+        hide_header: true,
+        hide_sidebar: true,
+      });
+    });
+  });
+
+  it("falls back to classic for an unknown mode", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"] });
+    const dash = await GE.generateDashboard({ mode: "nonsense" }, hass);
+    expect(titles(dash)[0]).toBe("Overview");
+    expect(view(dash, "Flow")).toBeUndefined();
+  });
+
+  it("does not emit a Flow panel for an EMS plant", async () => {
+    const hass = makeHass({ ems: true });
+    const dash = await GE.generateDashboard({ mode: "flow" }, hass);
+    expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
+  });
+});
