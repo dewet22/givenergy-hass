@@ -1570,13 +1570,20 @@
           if (sig === this._sig) return;
           this._sig = sig;
 
-          // Flow booleans (100 W threshold - higher than flow's 20 W to avoid sentence flicker).
-          var THRESH = 100;
-          var solarOn     = solar != null && solar >  THRESH;
-          var charging    = batt  != null && batt  < -THRESH;
-          var discharging = batt  != null && batt  >  THRESH;
-          var exporting   = grid  != null && grid  >  THRESH;
-          var importing   = grid  != null && grid  < -THRESH;
+          // Flow booleans with hysteresis (Schmitt-trigger style): THRESH_ON to
+          // enter a state, THRESH_OFF to leave it. Prevents the sentence from
+          // flipping between adjacent states when readings are near a threshold
+          // (sensor timing skew, end-of-day grazing, etc.).
+          var THRESH_ON  = 200; // W -- must exceed this to enter a new state
+          var THRESH_OFF =  80; // W -- must drop below this to leave a state
+          var prev = this._flowState || {};
+          var solarOn     = solar != null && (solar >  THRESH_ON || (prev.solarOn     && solar >  THRESH_OFF));
+          var exporting   = grid  != null && (grid  >  THRESH_ON || (prev.exporting   && grid  >  THRESH_OFF));
+          var importing   = grid  != null && (grid  < -THRESH_ON || (prev.importing   && grid  < -THRESH_OFF));
+          var charging    = batt  != null && (batt  < -THRESH_ON || (prev.charging    && batt  < -THRESH_OFF));
+          var discharging = batt  != null && (batt  >  THRESH_ON || (prev.discharging && batt  >  THRESH_OFF));
+          this._flowState = { solarOn: solarOn, exporting: exporting, importing: importing,
+                              charging: charging, discharging: discharging };
 
           // Natural-language status sentence (ASCII-only).
           // Structure: check net grid direction (exporting/importing/idle) first
