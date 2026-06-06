@@ -333,6 +333,58 @@
     return view;
   }
 
+  function glanceViews(plant, opts) {
+    var a = makeAccessors(plant);
+    // Glance is inverter-centric; an EMS plant has no PV/battery/grid data, so
+    // fall back to the classic (EMS) view set with no glance panel.
+    if (plant.target && plant.target.isEms) return classicViews(plant, opts);
+    return [glanceView(plant, a, opts)].concat(classicViews(plant, opts));
+  }
+
+  function glanceView(plant, a, opts) {
+    var cfg = { type: "custom:givenergy-glance" };
+    if (a.inv("p_pv")) cfg.solar = a.inv("p_pv");
+    var strings = [a.inv("p_pv1"), a.inv("p_pv2")].filter(Boolean);
+    if (strings.length) cfg.solar_strings = strings;
+    if (a.inv("grid_power")) cfg.grid = a.inv("grid_power");
+    if (a.inv("p_load_demand")) cfg.load = a.inv("p_load_demand");
+    if (a.inv("p_battery")) cfg.battery_power = a.inv("p_battery");
+    if (a.inv("battery_soc")) cfg.battery_soc = a.inv("battery_soc");
+
+    var packs = plant.batteries
+      .map(function (b) {
+        return { name: String(b.serial).toUpperCase(), soc: a.bat(b, "soc") };
+      })
+      .filter(function (p) { return p.soc; });
+    if (packs.length) cfg.packs = packs;
+
+    // Totals: subset of the flow card's slots (no charge/discharge here).
+    var totalKeys = {
+      pv_today: "e_pv_day",
+      import_today: "e_grid_in_day",
+      export_today: "e_grid_out_day",
+      house_today: "e_consumption_today",
+    };
+    var totals = {};
+    Object.keys(totalKeys).forEach(function (slot) {
+      var eid = a.inv(totalKeys[slot]);
+      if (eid) totals[slot] = eid;
+    });
+    if (Object.keys(totals).length) cfg.totals = totals;
+
+    var view = {
+      title: "Glance",
+      path: "glance",
+      icon: "mdi:eye-outline",
+      panel: true,
+      cards: [cfg],
+    };
+    if (haveCard("kiosk-mode")) {
+      view.kiosk_mode = { hide_header: true, hide_sidebar: true };
+    }
+    return view;
+  }
+
   function overviewView(plant, a, opts) {
     var cap = (opts.maxPowerKw || 10) * 1000;
     var cards = [];
@@ -1024,7 +1076,10 @@
       };
     }
     // Mode dispatch. Unknown/absent mode falls back to classic.
-    var views = opts.mode === "flow" ? flowViews(plant, opts) : classicViews(plant, opts);
+    var views =
+      opts.mode === "flow"   ? flowViews(plant, opts)   :
+      opts.mode === "glance" ? glanceViews(plant, opts) :
+                               classicViews(plant, opts);
     return { title: "GivEnergy", views: views };
   }
 
@@ -1455,6 +1510,223 @@
       });
     }
 
+    // custom:givenergy-glance - the Glance mode centrepiece. Calm-tech ambient
+    // panel: a natural-language status sentence, three large numbers (solar today /
+    // battery SOC / house today), and health pills. Entity_ids arrive pre-resolved
+    // from the strategy; the card only reads hass.states.
+    if (!customElements.get("givenergy-glance")) {
+      customElements.define("givenergy-glance", class extends HTMLElement {
+        setConfig(cfg) {
+          this._cfg = cfg || {};
+        }
+        set hass(hass) {
+          this._hass = hass;
+          this._render();
+        }
+        getCardSize() {
+          return 5;
+        }
+
+        _render() {
+          var cfg = this._cfg, hass = this._hass;
+          if (!cfg || !hass || !hass.states) return;
+
+          var num = function (eid) {
+            var st = eid && hass.states[eid];
+            var v = st ? parseFloat(st.state) : NaN;
+            return isFinite(v) ? v : null;
+          };
+          var esc = function (s) {
+            return String(s).replace(/[&<>"']/g, function (c) {
+              return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+            });
+          };
+          var fmtKw = function (w) {
+            if (w == null) return "&mdash;";
+            var k = w / 1000;
+            return Math.abs(k) < 10 ? k.toFixed(2) : k.toFixed(1);
+          };
+          var fmtKwh = function (v) {
+            if (v == null) return "&mdash;";
+            return Math.abs(v) < 10 ? v.toFixed(1) : Math.round(v).toString();
+          };
+
+          var solar = num(cfg.solar);
+          var grid  = num(cfg.grid);   // + = export, - = import
+          var batt  = num(cfg.battery_power); // + = discharge, - = charge
+          var soc   = num(cfg.battery_soc);
+          var load  = num(cfg.load);
+          var strings = (cfg.solar_strings || []).map(num);
+          var packs = (cfg.packs || []).map(function (p) {
+            return { name: p.name, soc: num(p.soc) };
+          });
+          var totals = cfg.totals || {};
+
+          // Signature guard: skip DOM rebuild if nothing changed.
+          var sig = [solar, grid, batt, soc, load].join(",") +
+            "|" + strings.join(",") +
+            "|" + packs.map(function (p) { return p.name + ":" + p.soc; }).join(",") +
+            "|" + Object.keys(totals).map(function (k) { return k + "=" + num(totals[k]); }).join(",");
+          if (sig === this._sig) return;
+          this._sig = sig;
+
+          // Flow booleans (100 W threshold - higher than flow's 20 W to avoid sentence flicker).
+          var THRESH = 100;
+          var solarOn     = solar != null && solar >  THRESH;
+          var charging    = batt  != null && batt  < -THRESH;
+          var discharging = batt  != null && batt  >  THRESH;
+          var exporting   = grid  != null && grid  >  THRESH;
+          var importing   = grid  != null && grid  < -THRESH;
+
+          // Natural-language status sentence (ASCII-only).
+          var sentence;
+          if (solarOn && charging && exporting)
+            sentence = "Solar covering the house and charging the battery, exporting the surplus.";
+          else if (solarOn && charging)
+            sentence = "Solar covering the house and charging the battery.";
+          else if (solarOn && exporting)
+            sentence = "Solar ahead of demand - exporting to the grid.";
+          else if (solarOn && discharging)
+            sentence = "Solar and battery covering the house.";
+          else if (solarOn)
+            sentence = "Solar covering the house.";
+          else if (discharging && !importing)
+            sentence = "Battery powering the house.";
+          else if (discharging && importing)
+            sentence = "Battery and grid supplying the house.";
+          else if (importing)
+            sentence = "Drawing from the grid.";
+          else
+            sentence = "System idle.";
+
+          // Status dot: amber when importing or battery low, green otherwise.
+          var dotColor = (importing || (soc != null && soc < 20)) ? "#d4a85a" : "#5bbb6a";
+
+          // ---- Big-3 sub-lines ----
+          var solarSub;
+          if (strings.length) {
+            solarSub = strings.map(function (w, i) {
+              return "String " + (i + 1) + ": " + (w == null ? "&mdash;" : fmtKw(w)) + " kW";
+            }).join(" &middot; ");
+          } else if (solar != null) {
+            solarSub = fmtKw(solar) + " kW now";
+          } else {
+            solarSub = "&mdash;";
+          }
+
+          var battSub;
+          if (packs.length > 1) {
+            battSub = packs.map(function (p) {
+              return esc(p.name) + ": " + (p.soc == null ? "&mdash;" : Math.round(p.soc) + "%");
+            }).join(" &middot; ");
+          } else if (charging) {
+            battSub = "Charging &middot; " + fmtKw(-batt) + " kW";
+          } else if (discharging) {
+            battSub = "Discharging &middot; " + fmtKw(batt) + " kW";
+          } else {
+            battSub = "Idle";
+          }
+
+          var houseSub;
+          if (exporting) {
+            houseSub = "Exporting " + fmtKw(grid) + " kW";
+          } else if (importing) {
+            houseSub = "Importing " + fmtKw(-grid) + " kW";
+          } else if (solar != null || batt != null) {
+            houseSub = "Self-sufficient";
+          } else {
+            houseSub = "&mdash;";
+          }
+
+          // ---- Health pills ----
+          var GREEN = "#5bbb6a", AMBER = "#d4a85a", BLUE = "#4a9fd4";
+          var pills = [];
+          // Battery count.
+          if (packs.length > 0) {
+            var battWord = packs.length === 1 ? "battery" : "batteries";
+            pills.push({ label: packs.length + " " + battWord + " online", color: GREEN });
+            // Per-pack SOC if more than one.
+            if (packs.length > 1) {
+              packs.forEach(function (p) {
+                var pc = (p.soc != null && p.soc < 20) ? AMBER : GREEN;
+                pills.push({ label: esc(p.name) + ": " + (p.soc == null ? "&mdash;" : Math.round(p.soc)) + "%", color: pc });
+              });
+            }
+          } else if (soc != null) {
+            pills.push({ label: "1 battery online", color: GREEN });
+          }
+          // Import / export today.
+          var importKwh = num(totals.import_today);
+          if (importKwh != null && importKwh >= 0.05) {
+            pills.push({ label: fmtKwh(importKwh) + " kWh imported today", color: importKwh > 1 ? AMBER : BLUE });
+          }
+          var exportKwh = num(totals.export_today);
+          if (exportKwh != null && exportKwh >= 0.05) {
+            pills.push({ label: fmtKwh(exportKwh) + " kWh exported today", color: GREEN });
+          }
+          // Per-string generation pills (only when solar is active).
+          if (solarOn && strings.length > 0) {
+            strings.forEach(function (w, i) {
+              if (w != null) {
+                pills.push({ label: "String " + (i + 1) + ": " + fmtKw(w) + " kW", color: BLUE });
+              }
+            });
+          }
+
+          var pillsHtml = pills.map(function (p) {
+            return '<span class="gl-pill"><span class="gl-dot" style="background:' + p.color + '"></span>' + p.label + '</span>';
+          }).join("");
+
+          // ---- Render ----
+          var MONO = "'GE Geist Mono',ui-monospace,monospace";
+          var SERIF = "'GE Fraunces',Georgia,serif";
+          var SANS = "'Roboto',system-ui,sans-serif";
+
+          this.innerHTML =
+            '<ha-card><div class="gegl">' +
+            "<style>" +
+            "@font-face{font-family:'GE Fraunces';src:url('/givenergy_local/fonts/fraunces-subset.woff2') format('woff2');font-weight:300 500;font-display:swap}" +
+            "@font-face{font-family:'GE Geist Mono';src:url('/givenergy_local/fonts/geist-mono-subset.woff2') format('woff2');font-weight:400 600;font-display:swap}" +
+            ".gegl{container-type:inline-size;padding:28px 24px 20px;color:var(--primary-text-color)}" +
+            ".gl-status{display:flex;align-items:flex-start;gap:12px;margin-bottom:32px}" +
+            ".gl-dot-wrap{flex-shrink:0;padding-top:6px}" +
+            ".gl-pulse{width:12px;height:12px;border-radius:50%;animation:gl-pulse 2.4s ease-in-out infinite}" +
+            "@keyframes gl-pulse{0%,100%{opacity:1}50%{opacity:.3}}" +
+            ".gl-sentence{font-family:" + SERIF + ";font-size:28px;font-weight:300;line-height:1.25;letter-spacing:-.01em;max-width:680px}" +
+            ".gl-big3{display:grid;grid-template-columns:repeat(3,1fr);gap:32px;margin-bottom:28px}" +
+            ".gl-num{border-top:1px solid var(--divider-color,#444);padding-top:16px}" +
+            ".gl-lbl{font-family:" + MONO + ";font-size:11px;letter-spacing:.06em;color:var(--secondary-text-color);margin-bottom:6px}" +
+            ".gl-val{font-family:" + SERIF + ";font-size:80px;font-weight:200;line-height:1;letter-spacing:-.03em}" +
+            ".gl-unit{font-family:" + SANS + ";font-size:22px;font-weight:300;color:var(--secondary-text-color);margin-left:4px}" +
+            ".gl-sub{font-family:" + MONO + ";font-size:12px;color:var(--secondary-text-color);margin-top:6px}" +
+            ".gl-pills{display:flex;flex-wrap:wrap;gap:8px}" +
+            ".gl-pill{display:inline-flex;align-items:center;gap:7px;padding:7px 13px;" +
+              "border:1px solid var(--divider-color,#444);border-radius:999px;" +
+              "font-family:" + MONO + ";font-size:12px;color:var(--primary-text-color)}" +
+            ".gl-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}" +
+            "@container (max-width:500px){.gl-sentence{font-size:20px}.gl-big3{grid-template-columns:1fr;gap:20px}.gl-val{font-size:56px}.gl-unit{font-size:16px}}" +
+            "</style>" +
+            '<div class="gl-status">' +
+            '<div class="gl-dot-wrap"><div class="gl-pulse" style="background:' + dotColor + '"></div></div>' +
+            '<div class="gl-sentence">' + sentence + '</div>' +
+            '</div>' +
+            '<div class="gl-big3">' +
+            '<div class="gl-num"><div class="gl-lbl">SOLAR TODAY</div>' +
+            '<div class="gl-val">' + fmtKwh(num(totals.pv_today)) + '<span class="gl-unit">kWh</span></div>' +
+            '<div class="gl-sub">' + solarSub + '</div></div>' +
+            '<div class="gl-num"><div class="gl-lbl">BATTERY</div>' +
+            '<div class="gl-val">' + (soc == null ? "&mdash;" : Math.round(soc)) + '<span class="gl-unit">%</span></div>' +
+            '<div class="gl-sub">' + battSub + '</div></div>' +
+            '<div class="gl-num"><div class="gl-lbl">HOUSE TODAY</div>' +
+            '<div class="gl-val">' + fmtKwh(num(totals.house_today)) + '<span class="gl-unit">kWh</span></div>' +
+            '<div class="gl-sub">' + houseSub + '</div></div>' +
+            '</div>' +
+            '<div class="gl-pills">' + pillsHtml + '</div>' +
+            '</div></ha-card>';
+        }
+      });
+    }
+
     // Discoverability in the "Community dashboards" picker (HA 2026.5+). Harmless
     // where unsupported.
     try {
@@ -1463,7 +1735,7 @@
         type: "givenergy",
         strategyType: "dashboard",
         name: "GivEnergy",
-        description: "Registry-driven GivEnergy dashboard (classic / flow modes).",
+        description: "Registry-driven GivEnergy dashboard (classic / flow / glance modes).",
       });
     } catch (e) {
       /* non-fatal */
