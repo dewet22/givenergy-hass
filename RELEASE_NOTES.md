@@ -99,3 +99,105 @@ devices:
   entity currently reads it, so there's no user-facing change. The entity-ID rename
   it implies is deferred to a future per-type device-naming migration to avoid
   putting anyone through it twice.
+
+## v1.1.1
+
+Fixes house-consumption reporting and adopts givenergy-modbus 2.1.1.
+
+The consumption figure read near-zero on single-phase inverters because the
+underlying register (e_load_day / IR35) was a GivTCP-era mislabel — it's actually
+AC charge, not house load. givenergy-modbus 2.1.1 corrected this and added the
+real derived consumption (PV generation + grid import − grid export − AC charge,
+matching the GivEnergy app's "Consumption today").
+
+This release:
+- Adds a House Consumption Today sensor with the correct derived value — the
+  dashboard's "Consumed" series now reflects real consumption.
+- Renames the old "Load Energy Today" sensor to AC Charge Today (its true
+  meaning), preserving existing history via an automatic entity migration.
+- Picks up the modbus 2.1.1 EMS per-slot status fix (#108).
+
+No action needed on update — entities migrate automatically.
+
+## v1.1.2
+
+**EMS: export power limit control**
+An Export Power Limit number entity (0–6000 W, 100 W steps) is now created on EMS plants, exposing the inverter's grid export cap as a configurable control directly from the HA dashboard.
+
+**Battery health: out-of-spec alert sensor**
+A new *Battery Out of Spec* binary sensor (`device_class: problem`) monitors cell voltages (3.0–3.5 V) and cell-group temperatures (0–50 °C) across all connected packs. It uses a hybrid debounce — the sensor only trips after a reading has been out of range for at least 5 minutes *and* across at least 3 consecutive polls, which filters out the transient bad reads that GivEnergy dongles can occasionally produce. Offending cells/groups and their duration are listed in the sensor's attributes even before the debounce fires.
+
+**Debug capture: landing page and signed download**
+`capture_frames` now produces a proper inspection page rather than a bare file in `/local/`. The persistent notification links to a signed landing page showing the environment header (HA version, Python, OS, integration and library versions), an inline frame dump, a one-click download, and a pre-filled GitHub issue link. Captures are stored in `<config>/givenergy_local_captures/` rather than the publicly-accessible `www/` directory.
+
+**Three-phase: suppress single-phase-only sensors**
+On three-phase inverters, the combined PV Power, PV Energy Today, and Battery Nominal Capacity sensors are no longer created — they were derived from single-phase assumptions and rendered as permanently-unavailable orphan entities on three-phase hardware. Per-string sensors (PV String 1/2) remain.
+
+**givenergy-modbus 2.1.3**
+This release requires 2.1.3, which brings resilience fixes: unmapped enum values no longer crash the library, and Smart Load slot polling is gated correctly.
+
+## v1.1.3
+
+**Live dashboard strategy**
+
+A new Lovelace dashboard strategy (`custom:givenergy`) builds the full dashboard from the live entity registry on every render, resolving each entity by its stable unique_id rather than a frozen entity_id. It can't go stale when a device is moved between areas or an entity is renamed — the failure mode that left the static dashboard full of "entity not available" rows once HA 2026.6 began folding a device's area into its entity_ids. Create a dashboard, open the raw configuration editor, and set `strategy: { type: custom:givenergy }`. The `generate_dashboard` service remains as an editable static starting point. One caveat: on a hard browser refresh the strategy can occasionally hit Home Assistant's 5-second "strategy element" registration timeout — a limitation common to all network-loaded strategies; a normal reload serves it from cache and isn't affected.
+
+**A fuller generated dashboard**
+
+The generated dashboard gained substantial coverage: Smart Load and AC-coupled controls, battery power/pause mode controls and all-time energy totals; battery out-of-spec status, AC output telemetry and battery maintenance mode; and per-string PV, three-phase and EPS diagnostics plus solar diverter energy. The bundled cell-balance heatmap card is served by the integration, so there's nothing extra to install for it.
+
+**Dashboards survive area assignment and renames**
+
+For installs staying on the generated YAML, the generator now resolves its entity references through the registry as well, so assigning an inverter to an area (which HA 2026.6 folds into the entity_id) no longer breaks a pasted dashboard.
+
+**Grid Power is now a signed net value**
+
+"Grid Export Power" has been renamed to "Grid Power" and now reports signed net flow — positive when exporting, negative when importing — matching what the underlying register actually measures. The existing entity and its history are migrated in place under the new slug, so no history is lost.
+
+**Stable entity_ids for control entities**
+
+Number, select, switch and time entities now carry their device name in DeviceInfo, keeping their entity_ids stable across restarts and bringing them in line with the sensor platform.
+
+**Charge-cycle history carried over from GivTCP**
+
+The GivTCP statistics migration now copies each battery's charge-cycle count history across too, so that long-term statistic carries over when switching.
+
+**Dependency**
+
+Bundles givenergy-modbus 2.1.3.
+
+## v1.1.4
+
+**Flow mode for the dashboard strategy**
+
+A new `mode: flow` option for the `custom:givenergy` dashboard strategy prepends a full-viewport Energy Flow panel to the existing classic tabs. The panel is built around a new `custom:givenergy-flow` element — no additional card to install — that renders three header tiles (solar generation with per-string breakdown, combined battery state-of-charge with per-pack percentages, and home load with a live import/export direction sentence), an animated SVG flow diagram, and a today-totals energy strip. All entity slots are resolved via the registry, consistent with the rot-immunity approach introduced in v1.1.3.
+
+To use it: create a dashboard, open the raw configuration editor, and set `strategy: { type: custom:givenergy, mode: flow }`. The classic tabs still follow the Flow panel and remain accessible.
+
+**Animated energy paths with correct flow decomposition**
+
+The flow diagram resolves seven directed edges using a solar-first priority: solar fills battery charging first, then covers any grid export, then feeds home directly; grid covers remaining import; battery discharge covers remaining home load or feeds back to the grid. Each path is colour-coded (amber for solar generation, green for export, red for import, blue for charging, purple for discharging) and magnitude-scaled — thicker strokes and faster animation for higher power — so the diagram conveys both direction and quantity at a glance. Inactive paths render as subtle dashed outlines rather than disappearing, keeping the full topology readable when flows are low.
+
+**Self-hosted Fraunces and Geist Mono fonts**
+
+The numeric values use a glyph-subsetted Fraunces woff2 (~12 KB) and the edge labels use Geist Mono (~7 KB), both served directly by the integration at `/givenergy_local/fonts/` with no third-party font requests. Both fonts are OFL-licensed; licence files are included.
+
+**Dependency**
+
+Bundles givenergy-modbus 2.1.3.
+
+## v1.1.5
+
+**Glance mode for the dashboard strategy**
+
+A new `mode: glance` option for the `custom:givenergy` dashboard strategy leads with a calm, full-viewport Glance panel: a single-sentence system summary, three large numbers (solar generated today, battery state-of-charge, house consumption today), and a row of health pills covering battery count, the day's grid import and export totals, and per-string PV generation when active. It's built around a new bundled `custom:givenergy-glance` element — nothing extra to install — and every value is resolved through the entity registry, consistent with the rot-immunity approach introduced in v1.1.3.
+
+To use it: create a dashboard, open the raw configuration editor, and set `strategy: { type: custom:givenergy, mode: glance }`. The classic tabs still follow the Glance panel and remain accessible.
+
+**A live status sentence**
+
+The summary sentence is derived from the live signs of grid, battery, and solar power, covering states like self-sufficient, exporting, importing on solar-and-grid, and battery-only overnight. The status dot pulses green when the system is self-sufficient or exporting, and amber when importing from the grid or when battery SOC drops below 20%. Like flow mode, the Glance view is a full panel and picks up kiosk-mode hints when that integration is present.
+
+**Maintenance**
+
+Bundles givenergy-modbus 2.1.3 (unchanged). Also bumps the dev-only test toolchain (vitest 2 → 4, with transitive vite and esbuild) to clear three Dependabot advisories in the JS test dependencies — no runtime or packaged-integration change.
