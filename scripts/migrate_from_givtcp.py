@@ -778,8 +778,12 @@ async def run(args: argparse.Namespace) -> int:
         print("  ⚠️  This will CLEAR and REWRITE long-term statistics for the")
         print("  ⚠️  listed givenergy_local entities. Back up your recorder")
         print("  ⚠️  database before proceeding.")
-        print("  ℹ️  Re-running (same or different --cutover) is safe: the script")
-        print("  ℹ️  always reads the original GivTCP entity for pre-cutover data.")
+        print("  ℹ️  Re-running with the SAME or a LATER --cutover is safe and")
+        print("  ℹ️  idempotent (the script always re-reads the original GivTCP entity")
+        print("  ℹ️  for pre-cutover data). An EARLIER cutover is not — it would fold")
+        print("  ℹ️  already-migrated history back through the rebase. If you use")
+        print("  ℹ️  today's date, the day's stats are still live, so wait until")
+        print("  ℹ️  tomorrow before re-running.")
         try:
             confirm = input("  Type 'yes' to continue: ").strip().lower()
         except EOFError:
