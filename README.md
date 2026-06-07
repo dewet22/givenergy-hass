@@ -215,21 +215,11 @@ The integration registers the following services under the `givenergy_local` dom
 | `givenergy_local.reboot_inverter` | Sends the inverter reboot command. Requires a `device_id`. |
 | `givenergy_local.calibrate_battery_soc` | Triggers a BMS SOC calibration cycle. Requires a `device_id`. |
 
-![Generated GivEnergy Lovelace dashboard](docs/dashboard.png)
+### Dashboard
 
-After running `generate_dashboard`, a notification appears with a download link:
+The recommended way to set up a full dashboard is the live **dashboard strategy**. It builds the complete six-tab layout but resolves every entity from the registry each time the dashboard loads, so it never goes stale when a device moves between areas or an entity is renamed — the failure mode that left static dashboards full of "entity not available" rows once Home Assistant 2026.6 began folding a device's area into its entity IDs. (I added it because the static YAML kept silently rotting on my own install after area reassignments.)
 
-![Dashboard generated notification](docs/dashboard-notification.png)
-
-If the dashboard schema is updated in a future release, the integration raises a fixable HA Repairs issue — click **Fix** to regenerate automatically with your settings preserved.
-
-![Dashboard outdated repair issue](docs/repairs-fix.png)
-
-The generated YAML is a snapshot of your entity IDs at the moment it runs. Home Assistant 2026.6 onwards builds entity IDs from the device's area (so a device in "Loft" gets `sensor.loft_givenergy_inverter_…`), and Home Assistant doesn't rewrite existing dashboards when entities are renamed. So if you move a device between areas, rename entities, or use **Recreate entity IDs**, just run `generate_dashboard` again afterwards to re-point the cards.
-
-### Dashboard strategy (live, self-maintaining)
-
-To avoid that snapshot problem entirely, there's also a dashboard *strategy* that builds the same six-tab layout but resolves every entity from the registry each time the dashboard loads — so it doesn't go stale when a device moves area or an entity is renamed. I added it because the static YAML kept silently rotting on my own install after area reassignments. To use it, create a new dashboard, open the **raw configuration editor**, and set the whole config to:
+To use it, create a new dashboard, open the **raw configuration editor**, and set the whole config to:
 
 ```yaml
 strategy:
@@ -239,13 +229,15 @@ strategy:
   serial: SA2114G047   # optional; pin one inverter on a multi-plant install
 ```
 
-The strategy and the bundled cell-heatmap card are served by the integration itself, so there's nothing extra to install for them. `power-flow-card-plus` and `apexcharts-card` are still needed for the Overview/Energy charts (install them via **HACS → Frontend**); where they're missing the strategy shows a short placeholder rather than a broken card. `generate_dashboard` remains available as an editable static starting point if you'd rather hand-tweak a copy.
+The strategy and the bundled cell-heatmap card are served by the integration itself, so there's nothing extra to install for them. `power-flow-card-plus` and `apexcharts-card` are still needed for the Overview/Energy charts (install them via **HACS → Frontend**); where they're missing the strategy shows a short placeholder rather than a broken card.
 
 One caveat worth knowing: on a **hard refresh** (Ctrl/Cmd+Shift+R, which bypasses the browser cache) the dashboard may occasionally show "Error loading the dashboard strategy: Timeout waiting for strategy element …". This is a Home Assistant limitation common to all network-loaded dashboard strategies — HA gives the strategy module a fixed 5-second window to register, and a cold re-fetch can lose that race when it's queued behind other custom-card resources. A normal reload serves the module from cache and isn't affected, so it doesn't bite in day-to-day use; if you do hit it, reload again.
 
 #### `mode: flow`
 
 `mode: flow` leads the dashboard with an immersive, full-width **Flow** view — an animated power-flow diagram (solar, grid, battery, home) with the live direction of each flow derived from the sign of the underlying power sensors, three big-number headers, and a today-totals strip. It's a bundled custom card (`custom:givenergy-flow`), so nothing extra to install. The full `classic` view set (Overview, Energy, Batteries, Battery Health, Controls, Diagnostics) follows behind it, so you lose nothing by switching.
+
+![GivEnergy dashboard — flow mode](docs/dashboard-flow.png)
 
 ```yaml
 strategy:
@@ -261,6 +253,8 @@ The tariff-aware `coach` direction from [the redesign brief](docs/design/dashboa
 
 `mode: glance` leads the dashboard with a calm, full-width **Glance** view: a single-sentence system summary, three large numbers (solar generated today, battery SOC, house consumption today), and a row of health pills showing battery count, import and export totals for the day, and per-string PV generation when active. It's built around a bundled `custom:givenergy-glance` card — nothing extra to install.
 
+![GivEnergy dashboard — glance mode](docs/dashboard-glance.png)
+
 ```yaml
 strategy:
   type: custom:givenergy
@@ -272,6 +266,8 @@ The status sentence is derived from the live signs of grid, battery, and solar p
 #### `mode: analyst`
 
 `mode: analyst` leads the dashboard with a dense **Analyst** view aimed at optimisation and debugging: a live metrics strip (PV, load, battery, grid), an energy ledger breaking down today's sources and sinks as kWh and percentages, a diagnostics table (temperatures, grid frequency, power factor, work time, consecutive failures), a 24-hour power overlay chart (requires `apexcharts-card`), and per-pack cell heatmaps. Nothing extra to install beyond the apexcharts card for the chart.
+
+![GivEnergy dashboard — analyst mode](docs/dashboard-analyst.png)
 
 ```yaml
 strategy:
@@ -290,6 +286,10 @@ strategy:
   type: custom:givenergy
   mode: all
 ```
+
+### Static dashboard (deprecated)
+
+An older `generate_dashboard` service produces a one-off Lovelace YAML snapshot. It is **deprecated and slated for removal in a future release** — the strategy above supersedes it and doesn't suffer the entity-ID drift a static snapshot does. If you're still on a generated static dashboard, switch over by creating a dashboard and setting its raw config to `strategy: { type: custom:givenergy }`.
 
 ### Voice assistants & LLM access
 
