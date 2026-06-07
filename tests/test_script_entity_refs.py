@@ -12,10 +12,14 @@ that case by checking every referenced entity against a live registry.
 from __future__ import annotations
 
 import ast
+import importlib.util
 import re
 from pathlib import Path
+from types import ModuleType
 
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import slugify as ha_slugify
 
 from custom_components.givenergy_local.dashboard import generate_dashboard
 
@@ -42,6 +46,20 @@ _ANY_REF = re.compile(
 
 def _registered_entity_ids(hass) -> set[str]:
     return {e.entity_id for e in er.async_get(hass).entities.values()}
+
+
+def _load_migrate_module() -> ModuleType:
+    """Import the migrate script as a module.
+
+    Its `websockets` import is lazy (deferred to HAWebSocket.connect), so the
+    module imports cleanly without the dependency, exposing its pure helpers
+    (`_slugify`, `build_entity_id_resolver`, the *_PAIRS tables) for direct test.
+    """
+    spec = importlib.util.spec_from_file_location("migrate_from_givtcp", _MIGRATE_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _pairs_from_source(var_name: str) -> list[tuple]:
@@ -162,3 +180,95 @@ async def test_migrate_script_battery_targets_all_registered(hass, setup_integra
         "migrate_from_givtcp.py maps to battery entities the integration no "
         f"longer creates (entity rename not propagated to the script?): {missing}"
     )
+
+
+async def test_migrate_slugify_matches_ha(hass, setup_integration):
+    """The script's vendored `_slugify` must match `homeassistant.util.slugify`.
+
+    The script runs out-of-process and can't import HA's slugify, so it carries a
+    small replica used to reconstruct canonical entity ids from device + sensor
+    names. If the two ever diverge for a real GivEnergy name, the resolver would
+    build the wrong canonical key and silently fail to remap that entity.
+    """
+    mod = _load_migrate_module()
+    reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+
+    names: set[str] = set()
+    for ent in er.async_entries_for_config_entry(reg, setup_integration.entry_id):
+        if ent.platform != "givenergy_local":
+            continue
+        if ent.original_name:
+            names.add(ent.original_name)
+        device = dev_reg.async_get(ent.device_id) if ent.device_id else None
+        if device and device.name:
+            names.add(device.name)
+
+    assert names, "no givenergy_local device/sensor names found to check"
+    mismatches = {
+        name: (mod._slugify(name), ha_slugify(name))
+        for name in names
+        if mod._slugify(name) != ha_slugify(name)
+    }
+    assert not mismatches, f"_slugify diverges from homeassistant.util.slugify: {mismatches}"
+
+
+async def test_migrate_resolver_maps_area_prefixed_ids(hass, setup_integration):
+    """The migrate script must remap canonical targets to area-prefixed real ids.
+
+    HA 2026.6 prefixes generated entity_ids (and therefore statistic_ids) with the
+    device area — `sensor.loft_givenergy_inverter_…`. The script's hard-coded
+    canonical targets (`sensor.givenergy_inverter_<sn>_<suffix>`) must resolve to
+    those real ids, or `--apply` writes to phantom statistics nothing references.
+
+    The test HA core predates the 2026.6 area-prefix behaviour, so simulate it:
+    feed the resolver registry payloads whose entity_ids carry a `loft_` prefix,
+    then assert every canonical target resolves to its prefixed counterpart.
+    """
+    mod = _load_migrate_module()
+    reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+
+    entity_entries: list[dict] = []
+    device_entries: list[dict] = []
+    seen_devices: set[str] = set()
+    for ent in er.async_entries_for_config_entry(reg, setup_integration.entry_id):
+        if ent.platform != "givenergy_local" or not ent.entity_id:
+            continue
+        domain, object_id = ent.entity_id.split(".", 1)
+        entity_entries.append(
+            {
+                "entity_id": f"{domain}.loft_{object_id}",
+                "platform": "givenergy_local",
+                "device_id": ent.device_id,
+                "original_name": ent.original_name,
+            }
+        )
+        device = dev_reg.async_get(ent.device_id) if ent.device_id else None
+        if device and device.id not in seen_devices:
+            seen_devices.add(device.id)
+            device_entries.append({"id": device.id, "name": device.name})
+
+    resolver = mod.build_entity_id_resolver(entity_entries, device_entries)
+    assert resolver, "resolver built no canonical→actual mappings"
+
+    canonical_targets = [
+        f"sensor.givenergy_inverter_{INV}_{ge_suffix}"
+        for _givtcp, ge_suffix, *_rest in mod.INVERTER_PAIRS
+    ] + [
+        f"sensor.givenergy_battery_{BATT}_{ge_suffix}"
+        for _givtcp, ge_suffix, *_rest in mod.BATTERY_PAIRS
+    ]
+
+    checked = 0
+    for canonical in canonical_targets:
+        # Only assert about targets whose entity is registered in the fixtures;
+        # the resolver leaves unknown ids untouched (and the *_all_registered
+        # guards above already catch suffix drift).
+        if canonical not in resolver:
+            continue
+        domain, object_id = canonical.split(".", 1)
+        assert resolver[canonical] == f"{domain}.loft_{object_id}"
+        checked += 1
+
+    assert checked, "no canonical targets resolved — vacuous test"

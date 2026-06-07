@@ -46,6 +46,11 @@ GivTCP actually stopped.
 Serials are auto-detected — no hard-coding needed. Multi-inverter and
 multi-battery setups are handled automatically.
 
+givenergy_local target entities are resolved against the live entity/device
+registry, so HA 2026.6 area prefixes (e.g. sensor.loft_givenergy_inverter_…)
+and user renames are followed automatically. GivTCP source entities are read
+as-is — if they were themselves renamed, the source side won't be found.
+
 What is migrated by default:
   Solar generation today / lifetime
   Grid import today / lifetime
@@ -77,14 +82,12 @@ import json
 import re
 import sys
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-try:
-    import websockets
-    import websockets.asyncio.client
-except ImportError:
-    sys.exit("Missing dependency: pip install 'websockets>=12.0'")
+# `websockets` is imported lazily in HAWebSocket.connect() so this module stays
+# importable (for unit-testing the pure helpers below) without the dependency.
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +161,65 @@ _CUTOVER_DETECT_GE = "pv_energy_today"
 
 
 # ---------------------------------------------------------------------------
+# Entity-id resolution
+# ---------------------------------------------------------------------------
+#
+# The mappings above name givenergy_local targets in their canonical form,
+# `{domain}.givenergy_{kind}_{serial}_{slug}`. HA 2026.6 prefixes generated
+# entity_ids with the device area (`sensor.loft_givenergy_inverter_…`) and users
+# can rename entities, so the canonical id may not be the real statistic_id. We
+# rebuild the same canonical→actual map the dashboard generator uses (see
+# custom_components.givenergy_local._build_entity_id_resolver), but from the
+# WebSocket entity/device registries rather than the in-process ones.
+
+_GE_PLATFORM = "givenergy_local"
+
+
+def _slugify(text: str) -> str:
+    """ASCII slugify matching homeassistant.util.slugify for GivEnergy names.
+
+    The integration's device and sensor names are plain ASCII, so lowercasing
+    and collapsing runs of non-alphanumerics to a single underscore reproduces
+    HA's slug. A test pins this against homeassistant.util.slugify for the
+    device names and every mapped sensor name.
+    """
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+
+
+def build_entity_id_resolver(
+    entity_entries: list[dict[str, Any]],
+    device_entries: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Return a canonical→actual map for givenergy_local entity ids.
+
+    Mirrors `_build_entity_id_resolver`: reconstruct each entity's canonical id
+    from its device name and original (integration-assigned) name — the stable
+    identity the entity_id is slugged from — and map it to the entity's actual
+    id. Entries missing a device name or original name are skipped. Callers wrap
+    the result with `.get(eid, eid)` so unknown ids pass through unchanged.
+    """
+    device_name_by_id: dict[str, str | None] = {}
+    for dev in device_entries:
+        device_id = dev.get("id") or dev.get("device_id")
+        if device_id:
+            device_name_by_id[device_id] = dev.get("name")
+
+    canonical_to_actual: dict[str, str] = {}
+    for ent in entity_entries:
+        if ent.get("platform") != _GE_PLATFORM:
+            continue
+        device_name = device_name_by_id.get(ent.get("device_id"))
+        original_name = ent.get("original_name")
+        entity_id = ent.get("entity_id")
+        if not device_name or not original_name or not entity_id:
+            continue
+        domain = entity_id.split(".", 1)[0]
+        canonical = f"{domain}.{_slugify(device_name)}_{_slugify(original_name)}"
+        canonical_to_actual[canonical] = entity_id
+    return canonical_to_actual
+
+
+# ---------------------------------------------------------------------------
 # Recorder write resilience
 # ---------------------------------------------------------------------------
 #
@@ -193,7 +255,14 @@ class HAWebSocket:
         self._msg_id = 0
 
     async def connect(self) -> None:
-        self._ws = await websockets.asyncio.client.connect(self._url)
+        try:
+            import websockets.asyncio.client
+        except ImportError:
+            sys.exit("Missing dependency: pip install 'websockets>=12.0'")
+        # max_size=None lifts the default 1 MiB frame cap: the entity/device
+        # registry listings (and large recorder responses) routinely exceed it
+        # on a populated HA instance. This is a trusted, admin-token local tool.
+        self._ws = await websockets.asyncio.client.connect(self._url, max_size=None)
         hello = await self._recv()
         if hello.get("type") != "auth_required":
             raise RuntimeError(f"Unexpected handshake message: {hello}")
@@ -245,6 +314,14 @@ class HAWebSocket:
 
     async def list_statistic_ids(self, statistic_type: str = "sum") -> list[dict[str, Any]]:
         result = await self._call("recorder/list_statistic_ids", statistic_type=statistic_type)
+        return result or []
+
+    async def list_entity_registry(self) -> list[dict[str, Any]]:
+        result = await self._call("config/entity_registry/list")
+        return result or []
+
+    async def list_device_registry(self) -> list[dict[str, Any]]:
+        result = await self._call("config/device_registry/list")
         return result or []
 
     async def get_statistics(
@@ -316,14 +393,18 @@ def _normalise(row: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-async def detect_cutover(ws: HAWebSocket, inv_sn: str) -> tuple[date | None, date | None]:
+async def detect_cutover(
+    ws: HAWebSocket,
+    inv_sn: str,
+    resolve: Callable[[str], str],
+) -> tuple[date | None, date | None]:
     """
     Return (last_givtcp_date, first_ge_date) for the reference inverter sensor.
 
     Either value may be None if no data was found.
     """
     givtcp_id = f"sensor.givtcp_{inv_sn}_{_CUTOVER_DETECT_GIVTCP}"
-    ge_id = f"sensor.givenergy_inverter_{inv_sn}_{_CUTOVER_DETECT_GE}"
+    ge_id = resolve(f"sensor.givenergy_inverter_{inv_sn}_{_CUTOVER_DETECT_GE}")
 
     now = datetime.now(tz=UTC)
     epoch = datetime(2000, 1, 1, tzinfo=UTC)
@@ -507,21 +588,26 @@ def _build_plan(
     batt_serials: list[str],
     meta_by_id: dict[str, dict[str, Any]],
     include_charge_from_grid: bool,
+    resolve: Callable[[str], str],
 ) -> list[tuple[str, str, str, str, bool]]:
-    """Construct the per-entity migration plan from the detected serials."""
+    """Construct the per-entity migration plan from the detected serials.
+
+    `resolve` maps each canonical givenergy_local target to its real id (the
+    recorder statistic_id), following HA 2026.6 area prefixes and user renames.
+    """
     plan: list[tuple[str, str, str, str, bool]] = []
     for sn in inv_serials:
         for gt_sfx, ge_sfx, desc, default in INVERTER_PAIRS:
             if not default and not include_charge_from_grid:
                 continue
             givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
-            ge_id = f"sensor.givenergy_inverter_{sn}_{ge_sfx}"
+            ge_id = resolve(f"sensor.givenergy_inverter_{sn}_{ge_sfx}")
             unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or "kWh"
             plan.append((givtcp_id, ge_id, desc, unit, not default))
     for sn in batt_serials:
         for gt_sfx, ge_sfx, desc, fallback_unit in BATTERY_PAIRS:
             givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
-            ge_id = f"sensor.givenergy_battery_{sn}_{ge_sfx}"
+            ge_id = resolve(f"sensor.givenergy_battery_{sn}_{ge_sfx}")
             unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or fallback_unit
             plan.append((givtcp_id, ge_id, desc, unit, False))
     return plan
@@ -598,10 +684,19 @@ async def run(args: argparse.Namespace) -> int:
     print(f"Inverter serials : {', '.join(inv_serials)}")
     print(f"Battery serials  : {', '.join(batt_serials) or '(none found)'}")
 
+    # Resolve canonical givenergy_local target ids to the real recorder ids,
+    # following HA 2026.6 area prefixes and user renames.
+    entity_entries = await ws.list_entity_registry()
+    device_entries = await ws.list_device_registry()
+    canonical_to_actual = build_entity_id_resolver(entity_entries, device_entries)
+
+    def resolve(eid: str) -> str:
+        return canonical_to_actual.get(eid, eid)
+
     # Cut-over detection / validation
     if args.cutover is None:
         print("\nDetecting cut-over date …", end=" ", flush=True)
-        last_givtcp, first_ge = await detect_cutover(ws, inv_serials[0])
+        last_givtcp, first_ge = await detect_cutover(ws, inv_serials[0], resolve)
         print("done")
         print()
         _print_cutover_suggestion(last_givtcp, first_ge)
@@ -634,7 +729,9 @@ async def run(args: argparse.Namespace) -> int:
 
     print()
 
-    plan = _build_plan(inv_serials, batt_serials, meta_by_id, args.include_charge_from_grid)
+    plan = _build_plan(
+        inv_serials, batt_serials, meta_by_id, args.include_charge_from_grid, resolve
+    )
 
     # Execute
     results: list[MigrationResult] = []
