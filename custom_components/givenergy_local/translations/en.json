@@ -49,7 +49,7 @@
     },
     "ems_entity_ids_outdated": {
       "title": "GivEnergy EMS entity IDs need recreating",
-      "description": "This update gave your EMS controller its own device identity, so its entities are now named `givenergy_ems_…` instead of `givenergy_inverter_…`. Their recorded history is preserved.\n\nTo move your existing EMS entities onto the new names: open the **EMS device**, use the top-right **⋮ menu → Recreate entity IDs**, then run the **Generate dashboard** service again so the dashboard points at the new IDs.\n\nAny automations or dashboard cards that referenced the old `givenergy_inverter_…` EMS entities will need a one-line update. This notice clears itself once the IDs are recreated."
+      "description": "This update gave your EMS controller its own device identity, so its entities are now named `givenergy_ems_…` instead of `givenergy_inverter_…`. Their recorded history is preserved.\n\nTo move your existing EMS entities onto the new names: open the **EMS device**, use the top-right **⋮ menu → Recreate entity IDs**.\n\nAny automations or dashboard cards that referenced the old `givenergy_inverter_…` EMS entities will need a one-line update. This notice clears itself once the IDs are recreated."
     }
   },
   "services": {
