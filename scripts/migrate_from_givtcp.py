@@ -469,6 +469,7 @@ class MigrationResult:
         "description",
         "ge_id",
         "warn_diverged",
+        "warn_no_ge_pre",
         "status",
         "givtcp_rows",
         "ge_pre_rows",
@@ -482,6 +483,7 @@ class MigrationResult:
         self.description = description
         self.ge_id = ge_id
         self.warn_diverged = warn_diverged
+        self.warn_no_ge_pre = False
         self.status = "pending"
         self.givtcp_rows = 0
         self.ge_pre_rows = 0
@@ -502,6 +504,7 @@ async def migrate_entity(
     cutover: datetime,
     ge_unit: str,
     apply: bool,
+    ge_known: bool,
     warn_diverged: bool = False,
 ) -> MigrationResult:
     r = MigrationResult(description, ge_id, warn_diverged)
@@ -527,6 +530,21 @@ async def migrate_entity(
     if not givtcp_stats:
         r.status = "no_givtcp_data"
         return r
+
+    # Safety guard: the resolved givenergy_local target must be a real recorder
+    # statistic. If it isn't (`ge_known` is False — the id isn't in the recorder's
+    # statistic-id list), resolution produced a phantom: clearing it is a no-op
+    # and importing would create an orphan series nothing references, while the
+    # real entity stays un-migrated. Refuse to touch it.
+    if not ge_known:
+        r.status = "ge_not_found"
+        return r
+
+    # A real target with no pre-cutover history means GivTCP and GE never
+    # overlapped before the boundary, so there's nothing to anchor the rebase
+    # against at the seam. Safe (the rebase still makes GE continue from GivTCP),
+    # but worth surfacing — flag it without blocking.
+    r.warn_no_ge_pre = r.ge_pre_rows == 0
 
     last_givtcp_sum = givtcp_stats[-1].get("sum") or 0.0
     r.sum_at_cutover = last_givtcp_sum
@@ -629,9 +647,12 @@ def _print_summary(results: list[MigrationResult], applying: bool) -> int:
     print(f"  {'Sensor':<{width}} {'GivTCP':>8} {'GE pre':>7} {'GE post':>8}  Result")
     print("─" * 88)
     for r in results:
-        warn_tag = (
-            "  ⚠️  verify values" if r.warn_diverged and r.status in ("migrated", "dry_run") else ""
-        )
+        warn_tag = ""
+        if r.status in ("migrated", "dry_run"):
+            if r.warn_diverged:
+                warn_tag += "  ⚠️  verify values"
+            if r.warn_no_ge_pre:
+                warn_tag += "  ⚠️  no GE overlap"
         print(
             f"  {r.description:<{width}} {r.givtcp_rows:>8} {r.ge_pre_rows:>7}"
             f" {r.ge_post_rows:>8}  {r.status}{warn_tag}"
@@ -640,7 +661,11 @@ def _print_summary(results: list[MigrationResult], applying: bool) -> int:
 
     counts = Counter(r.status for r in results)
     errored = counts["error"]
-    tail = f"No GivTCP data: {counts['no_givtcp_data']}  |  Errors: {errored}"
+    not_found = counts["ge_not_found"]
+    tail = (
+        f"No GivTCP data: {counts['no_givtcp_data']}  |  "
+        f"GE not found: {not_found}  |  Errors: {errored}"
+    )
 
     if not applying:
         print(f"\n  Planned: {counts['dry_run']}  |  {tail}")
@@ -651,8 +676,14 @@ def _print_summary(results: list[MigrationResult], applying: bool) -> int:
     for r in results:
         if r.status == "error":
             print(f"\n  ERROR — {r.description}: {r.error}", file=sys.stderr)
+        elif r.status == "ge_not_found":
+            print(
+                f"\n  ⚠️  {r.description}: givenergy_local target {r.ge_id} not found in "
+                "recorder statistics — resolution failed or the entity has no LTS. Skipped.",
+                file=sys.stderr,
+            )
 
-    return 0 if errored == 0 else 2
+    return 0 if (errored == 0 and not_found == 0) else 2
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -719,6 +750,29 @@ async def run(args: argparse.Namespace) -> int:
     cutover = datetime.combine(cutover_date, datetime.min.time(), tzinfo=UTC)
     print(f"Cut-over date    : {cutover_date} 00:00 UTC")
 
+    plan = _build_plan(
+        inv_serials, batt_serials, meta_by_id, args.include_charge_from_grid, resolve
+    )
+
+    # Pre-flight guard: every resolved givenergy_local target must be a known
+    # recorder statistic. A miss means resolution produced a phantom id (an
+    # area-prefix/rename it couldn't map, or an entity with no LTS) — applying
+    # would clear nothing and import an orphan series while the real entity stays
+    # un-migrated. Refuse to --apply rather than do that silently.
+    missing_targets = [ge_id for (_givtcp, ge_id, *_rest) in plan if ge_id not in meta_by_id]
+    if applying and missing_targets:
+        print()
+        print("  ✋ Refusing to --apply — these givenergy_local targets aren't in the")
+        print("     recorder's statistics (entity-id resolution failed, or no long-term")
+        print("     statistics recorded yet):")
+        for ge_id in missing_targets:
+            print(f"       {ge_id}")
+        print()
+        print("     Writing would create phantom series and leave your real entities")
+        print("     un-migrated. Re-run without --apply to inspect the full table.")
+        await ws.close()
+        return 2
+
     if applying:
         print()
         print("  ⚠️  This will CLEAR and REWRITE long-term statistics for the")
@@ -737,16 +791,15 @@ async def run(args: argparse.Namespace) -> int:
 
     print()
 
-    plan = _build_plan(
-        inv_serials, batt_serials, meta_by_id, args.include_charge_from_grid, resolve
-    )
-
     # Execute
     results: list[MigrationResult] = []
     for idx, (givtcp_id, ge_id, desc, unit, warn) in enumerate(plan):
         verb = "Applying" if applying else "Previewing"
         print(f"  {verb}: {desc} …", end=" ", flush=True)
-        r = await migrate_entity(ws, givtcp_id, ge_id, desc, cutover, unit, applying, warn)
+        ge_known = ge_id in meta_by_id
+        r = await migrate_entity(
+            ws, givtcp_id, ge_id, desc, cutover, unit, applying, ge_known, warn
+        )
         results.append(r)
         print(r.status)
         # Pace writes so the single-threaded recorder can drain between entities.

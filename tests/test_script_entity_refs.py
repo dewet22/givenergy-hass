@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 
@@ -60,6 +61,21 @@ def _load_migrate_module() -> ModuleType:
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+class _FakeWS:
+    """Stand-in for HAWebSocket.get_statistics in migrate_entity guard tests."""
+
+    def __init__(self, series: dict[str, list[dict]]) -> None:
+        self._series = series
+
+    async def get_statistics(self, ids, start, end=None):  # noqa: ANN001 - mirrors real sig
+        return {i: self._series.get(i, []) for i in ids}
+
+
+def _stat_row(dt: datetime, value: float) -> dict:
+    """A recorder statistics row (millisecond `start`, as HA returns)."""
+    return {"start": int(dt.timestamp() * 1000), "sum": value, "state": value}
 
 
 def _pairs_from_source(var_name: str) -> list[tuple]:
@@ -289,3 +305,63 @@ async def test_migrate_resolver_maps_area_prefixed_ids(hass, setup_integration):
         checked += 1
 
     assert checked, "no canonical targets resolved — vacuous test"
+
+
+_CUTOVER = datetime(2026, 6, 7, tzinfo=UTC)
+_GIVTCP = "sensor.givtcp_x_pv_energy_today_kwh"
+_GE = "sensor.givenergy_inverter_x_pv_energy_today"
+
+
+async def test_migrate_entity_refuses_unknown_ge_target():
+    """A resolved GE target that isn't a real recorder statistic must be skipped.
+
+    This is the safety net for the area-prefix/rename failure mode: if resolution
+    produces a phantom id (`ge_known=False`), migrate_entity must refuse rather
+    than clear-and-import an orphan series, leaving the real entity un-migrated.
+    """
+    mod = _load_migrate_module()
+    ws = _FakeWS({_GIVTCP: [_stat_row(datetime(2026, 6, 5, tzinfo=UTC), 100.0)]})
+    r = await mod.migrate_entity(
+        ws, _GIVTCP, _GE, "Solar generation today", _CUTOVER, "kWh", False, ge_known=False
+    )
+    assert r.status == "ge_not_found"
+
+
+async def test_migrate_entity_dry_run_with_overlap():
+    """A known GE target with pre- and post-cutover data previews cleanly."""
+    mod = _load_migrate_module()
+    ws = _FakeWS(
+        {
+            _GIVTCP: [
+                _stat_row(datetime(2026, 6, 5, tzinfo=UTC), 100.0),
+                _stat_row(datetime(2026, 6, 6, tzinfo=UTC), 110.0),
+            ],
+            _GE: [
+                _stat_row(datetime(2026, 6, 5, tzinfo=UTC), 5.0),
+                _stat_row(datetime(2026, 6, 7, 1, tzinfo=UTC), 6.0),
+            ],
+        }
+    )
+    r = await mod.migrate_entity(
+        ws, _GIVTCP, _GE, "Solar generation today", _CUTOVER, "kWh", False, ge_known=True
+    )
+    assert r.status == "dry_run"
+    assert (r.ge_pre_rows, r.ge_post_rows) == (1, 1)
+    assert r.warn_no_ge_pre is False
+
+
+async def test_migrate_entity_flags_missing_overlap():
+    """A known GE target with no pre-cutover history is flagged (not blocked)."""
+    mod = _load_migrate_module()
+    ws = _FakeWS(
+        {
+            _GIVTCP: [_stat_row(datetime(2026, 6, 5, tzinfo=UTC), 100.0)],
+            _GE: [_stat_row(datetime(2026, 6, 7, 1, tzinfo=UTC), 6.0)],  # post-cutover only
+        }
+    )
+    r = await mod.migrate_entity(
+        ws, _GIVTCP, _GE, "Solar generation today", _CUTOVER, "kWh", False, ge_known=True
+    )
+    assert r.status == "dry_run"
+    assert r.ge_pre_rows == 0
+    assert r.warn_no_ge_pre is True
