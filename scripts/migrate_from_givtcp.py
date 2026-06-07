@@ -708,8 +708,9 @@ def _print_summary(results: list[MigrationResult], applying: bool) -> int:
             print(f"\n  ERROR — {r.description}: {r.error}", file=sys.stderr)
         elif r.status == "ge_not_found":
             print(
-                f"\n  ⚠️  {r.description}: givenergy_local target {r.ge_id} not found in "
-                "recorder statistics — resolution failed or the entity has no LTS. Skipped.",
+                f"\n  ⚠️  {r.description}: givenergy_local target {r.ge_id} was not resolved "
+                "from the entity registry (area prefix / rename unmapped, or no such entity). "
+                "Skipped.",
                 file=sys.stderr,
             )
 
