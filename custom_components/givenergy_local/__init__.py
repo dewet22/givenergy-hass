@@ -624,6 +624,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async def handle_generate_dashboard(call: ServiceCall) -> None:
             from .dashboard import generate_dashboard
 
+            _LOGGER.warning(
+                "The 'generate_dashboard' service is deprecated and will be removed in "
+                "a future release. Use the live 'custom:givenergy' dashboard strategy "
+                "instead — set a dashboard's raw config to "
+                "'strategy: { type: custom:givenergy }'."
+            )
             max_power_kw = call.data["max_power_kw"]
             missing = await _missing_dashboard_cards(hass)
             warning = ""
@@ -671,15 +677,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     {
                         "title": "GivEnergy dashboard generated",
                         "message": (
-                            f"Dashboard ready — [download YAML]({url})\n\n"
-                            "Go to **Settings → Dashboards → Add Dashboard** "
-                            "and paste the contents into the raw config editor.\n\n"
-                            "**Tip:** for a dashboard that resolves entities live "
-                            "(and so survives renames and area moves), use the "
-                            "`custom:givenergy` strategy instead — set the raw "
-                            "config to `strategy: { type: custom:givenergy, "
-                            "mode: classic }`. This static YAML stays available as "
-                            "an editable starting point." + warning
+                            "**This service is deprecated** and will be removed in a "
+                            "future release. Use the live `custom:givenergy` dashboard "
+                            "strategy instead — create a dashboard and set its raw "
+                            "config to `strategy: { type: custom:givenergy }`. It "
+                            "resolves entities live, so it survives renames and area "
+                            "moves.\n\n"
+                            f"If you still need the static YAML for now, "
+                            f"[download it here]({url}) and paste it into a "
+                            "dashboard's raw config editor." + warning
                         ),
                         "notification_id": f"givenergy_dashboard_{inv}",
                     },
