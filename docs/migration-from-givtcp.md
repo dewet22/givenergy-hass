@@ -295,7 +295,7 @@ Suffixes shown are after stripping the integration prefix and the inverter/batte
 | 🔁 | `battery_cell_N_temperature` | `cells_N_M_temperature` | GivTCP exposes per-cell temps for cells 1-4 only; givenergy_local groups them as `cells_1_4_temperature`, `cells_5_8_temperature`, `cells_9_12_temperature`, `cells_13_16_temperature` |
 | 🔁 | `battery_cell_N_voltage` | `cell_N_voltage` | N = 1..16 (or 1..cell_count) |
 | 🔁 | `battery_cells` | `cell_count` |  |
-| 🔁 | `battery_cycles` | `charge_cycles` |  |
+| ⚠️ | `battery_cycles` | `charge_cycles` | Same logical sensor, but **not migrated**: GivTCP records cycles as a *mean* statistic (`state_class measurement`) while `charge_cycles` is `total_increasing` (a *sum* series). The migration rebases the source's `sum` column; there is none to read, so it can't carry the history without corrupting the GE counter. Low-value as LTS, so omitted (see `BATTERY_PAIRS`). |
 | 🔁 | `battery_design_capacity` | `design_capacity` |  |
 | 🔁 | `battery_firmware_version` | `bms_firmware_version` |  |
 | 🔁 | `battery_remaining_capacity` | `remaining_capacity` |  |

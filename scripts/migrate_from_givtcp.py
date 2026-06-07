@@ -46,6 +46,11 @@ GivTCP actually stopped.
 Serials are auto-detected — no hard-coding needed. Multi-inverter and
 multi-battery setups are handled automatically.
 
+givenergy_local target entities are resolved against the live entity/device
+registry, so HA 2026.6 area prefixes (e.g. sensor.loft_givenergy_inverter_…)
+and user renames are followed automatically. GivTCP source entities are read
+as-is — if they were themselves renamed, the source side won't be found.
+
 What is migrated by default:
   Solar generation today / lifetime
   Grid import today / lifetime
@@ -53,7 +58,6 @@ What is migrated by default:
   Battery charge today / discharge today
   PV generation today / lifetime
   Battery throughput lifetime
-  Battery charge cycles (per battery pack)
   House consumption today  (GivTCP's load_energy_today_kwh → givenergy_local's
     derived house_consumption_today; givenergy-modbus #174. The old
     load_energy_today read ~0 and was excluded; the derived figure is correct.)
@@ -61,10 +65,15 @@ What is migrated by default:
 Opt-in (--include-charge-from-grid):
   Charge from grid lifetime  ⚠️  values differ on some systems — verify manually
 
-Not migrated (no GivTCP equivalent or register-level gap):
+Not migrated (no GivTCP equivalent, register-level gap, or incompatible type):
   battery_discharge_this_year, work_time_total, total_refresh_failures,
   battery_charge_energy_total_kwh, battery_discharge_energy_total_kwh,
   load_energy_total_kwh
+  battery_cycles  (GivTCP records per-pack charge cycles as a *mean* statistic
+    [state_class measurement], but givenergy_local's charge_cycles is a
+    total_increasing *sum* series. The two are incompatible shapes — there is no
+    sum column to rebase, and forcing it would corrupt the GE counter — so the
+    pre-GE cycle history is not migrated. See BATTERY_PAIRS below.)
 
 See docs/migration-from-givtcp.md for the full sensor catalogue and design notes.
 """
@@ -77,14 +86,12 @@ import json
 import re
 import sys
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-try:
-    import websockets
-    import websockets.asyncio.client
-except ImportError:
-    sys.exit("Missing dependency: pip install 'websockets>=12.0'")
+# `websockets` is imported lazily in HAWebSocket.connect() so this module stays
+# importable (for unit-testing the pure helpers below) without the dependency.
 
 
 # ---------------------------------------------------------------------------
@@ -136,12 +143,16 @@ INVERTER_PAIRS: list[tuple[str, str, str, bool]] = [
 # Suffixes relative to: sensor.givtcp_<batt_sn>_<givtcp_suffix>
 #                  and: sensor.givenergy_battery_<batt_sn>_<ge_suffix>
 #
-BATTERY_PAIRS: list[tuple[str, str, str, str]] = [
-    # GivTCP exposes per-battery cycle counts (sensor.givtcp_<batt_sn>_battery_cycles).
-    # The givenergy_local target entity_id is ..._charge_cycles — the slug of the
-    # sensor's "Charge Cycles" name, NOT its internal description key (num_cycles).
-    ("battery_cycles", "charge_cycles", "Battery charge cycles", ""),
-]
+# Intentionally empty. GivTCP DOES expose per-battery cycle counts
+# (sensor.givtcp_<batt_sn>_battery_cycles), and givenergy_local has a matching
+# charge_cycles sensor — but they are incompatible LTS shapes: GivTCP records
+# cycles as a *mean* statistic (state_class measurement) while charge_cycles is
+# total_increasing (a *sum* series). migrate_entity rebases the source's sum
+# column onto the GE series; with no sum to read it would rebase GE to ~0 and
+# corrupt the existing counter. A correct migration would need a bespoke
+# mean→counter path; the lifetime cycle count is low-value as LTS, so the pair
+# is omitted rather than mis-migrated. (Was added in #126, reverted here.)
+BATTERY_PAIRS: list[tuple[str, str, str, str]] = []
 
 # ---------------------------------------------------------------------------
 # Serial detection
@@ -155,6 +166,65 @@ _BATT_DETECT = re.compile(rf"^sensor\.givtcp_({_SERIAL})_battery_cycles$", re.IG
 # Reference suffixes used for cut-over date detection
 _CUTOVER_DETECT_GIVTCP = "pv_energy_today_kwh"
 _CUTOVER_DETECT_GE = "pv_energy_today"
+
+
+# ---------------------------------------------------------------------------
+# Entity-id resolution
+# ---------------------------------------------------------------------------
+#
+# The mappings above name givenergy_local targets in their canonical form,
+# `{domain}.givenergy_{kind}_{serial}_{slug}`. HA 2026.6 prefixes generated
+# entity_ids with the device area (`sensor.loft_givenergy_inverter_…`) and users
+# can rename entities, so the canonical id may not be the real statistic_id. We
+# rebuild the same canonical→actual map the dashboard generator uses (see
+# custom_components.givenergy_local._build_entity_id_resolver), but from the
+# WebSocket entity/device registries rather than the in-process ones.
+
+_GE_PLATFORM = "givenergy_local"
+
+
+def _slugify(text: str) -> str:
+    """ASCII slugify matching homeassistant.util.slugify for GivEnergy names.
+
+    The integration's device and sensor names are plain ASCII, so lowercasing
+    and collapsing runs of non-alphanumerics to a single underscore reproduces
+    HA's slug. A test pins this against homeassistant.util.slugify for the
+    device names and every mapped sensor name.
+    """
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+
+
+def build_entity_id_resolver(
+    entity_entries: list[dict[str, Any]],
+    device_entries: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Return a canonical→actual map for givenergy_local entity ids.
+
+    Mirrors `_build_entity_id_resolver`: reconstruct each entity's canonical id
+    from its device name and original (integration-assigned) name — the stable
+    identity the entity_id is slugged from — and map it to the entity's actual
+    id. Entries missing a device name or original name are skipped. Callers wrap
+    the result with `.get(eid, eid)` so unknown ids pass through unchanged.
+    """
+    device_name_by_id: dict[str, str | None] = {}
+    for dev in device_entries:
+        device_id = dev.get("id") or dev.get("device_id")
+        if device_id:
+            device_name_by_id[device_id] = dev.get("name")
+
+    canonical_to_actual: dict[str, str] = {}
+    for ent in entity_entries:
+        if ent.get("platform") != _GE_PLATFORM:
+            continue
+        device_name = device_name_by_id.get(ent.get("device_id"))
+        original_name = ent.get("original_name")
+        entity_id = ent.get("entity_id")
+        if not device_name or not original_name or not entity_id:
+            continue
+        domain = entity_id.split(".", 1)[0]
+        canonical = f"{domain}.{_slugify(device_name)}_{_slugify(original_name)}"
+        canonical_to_actual[canonical] = entity_id
+    return canonical_to_actual
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +263,14 @@ class HAWebSocket:
         self._msg_id = 0
 
     async def connect(self) -> None:
-        self._ws = await websockets.asyncio.client.connect(self._url)
+        try:
+            import websockets.asyncio.client
+        except ImportError:
+            sys.exit("Missing dependency: pip install 'websockets>=12.0'")
+        # max_size=None lifts the default 1 MiB frame cap: the entity/device
+        # registry listings (and large recorder responses) routinely exceed it
+        # on a populated HA instance. This is a trusted, admin-token local tool.
+        self._ws = await websockets.asyncio.client.connect(self._url, max_size=None)
         hello = await self._recv()
         if hello.get("type") != "auth_required":
             raise RuntimeError(f"Unexpected handshake message: {hello}")
@@ -245,6 +322,14 @@ class HAWebSocket:
 
     async def list_statistic_ids(self, statistic_type: str = "sum") -> list[dict[str, Any]]:
         result = await self._call("recorder/list_statistic_ids", statistic_type=statistic_type)
+        return result or []
+
+    async def list_entity_registry(self) -> list[dict[str, Any]]:
+        result = await self._call("config/entity_registry/list")
+        return result or []
+
+    async def list_device_registry(self) -> list[dict[str, Any]]:
+        result = await self._call("config/device_registry/list")
         return result or []
 
     async def get_statistics(
@@ -316,14 +401,18 @@ def _normalise(row: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-async def detect_cutover(ws: HAWebSocket, inv_sn: str) -> tuple[date | None, date | None]:
+async def detect_cutover(
+    ws: HAWebSocket,
+    inv_sn: str,
+    resolve: Callable[[str], str],
+) -> tuple[date | None, date | None]:
     """
     Return (last_givtcp_date, first_ge_date) for the reference inverter sensor.
 
     Either value may be None if no data was found.
     """
     givtcp_id = f"sensor.givtcp_{inv_sn}_{_CUTOVER_DETECT_GIVTCP}"
-    ge_id = f"sensor.givenergy_inverter_{inv_sn}_{_CUTOVER_DETECT_GE}"
+    ge_id = resolve(f"sensor.givenergy_inverter_{inv_sn}_{_CUTOVER_DETECT_GE}")
 
     now = datetime.now(tz=UTC)
     epoch = datetime(2000, 1, 1, tzinfo=UTC)
@@ -380,6 +469,7 @@ class MigrationResult:
         "description",
         "ge_id",
         "warn_diverged",
+        "warn_no_ge_pre",
         "status",
         "givtcp_rows",
         "ge_pre_rows",
@@ -393,6 +483,7 @@ class MigrationResult:
         self.description = description
         self.ge_id = ge_id
         self.warn_diverged = warn_diverged
+        self.warn_no_ge_pre = False
         self.status = "pending"
         self.givtcp_rows = 0
         self.ge_pre_rows = 0
@@ -413,6 +504,7 @@ async def migrate_entity(
     cutover: datetime,
     ge_unit: str,
     apply: bool,
+    ge_known: bool,
     warn_diverged: bool = False,
 ) -> MigrationResult:
     r = MigrationResult(description, ge_id, warn_diverged)
@@ -438,6 +530,22 @@ async def migrate_entity(
     if not givtcp_stats:
         r.status = "no_givtcp_data"
         return r
+
+    # Safety guard: the target must have been recognised by the registry resolver
+    # (`ge_known`). If it wasn't, resolution produced a phantom — clearing it is a
+    # no-op and importing would create (or overwrite) an orphan series nothing
+    # references, while the real entity stays un-migrated. This trusts registry
+    # recognition, not recorder presence: an orphan a prior broken run left at the
+    # canonical id is in the recorder but is still not a real target. Refuse it.
+    if not ge_known:
+        r.status = "ge_not_found"
+        return r
+
+    # A real target with no pre-cutover history means GivTCP and GE never
+    # overlapped before the boundary, so there's nothing to anchor the rebase
+    # against at the seam. Safe (the rebase still makes GE continue from GivTCP),
+    # but worth surfacing — flag it without blocking.
+    r.warn_no_ge_pre = r.ge_pre_rows == 0
 
     last_givtcp_sum = givtcp_stats[-1].get("sum") or 0.0
     r.sum_at_cutover = last_givtcp_sum
@@ -507,24 +615,58 @@ def _build_plan(
     batt_serials: list[str],
     meta_by_id: dict[str, dict[str, Any]],
     include_charge_from_grid: bool,
-) -> list[tuple[str, str, str, str, bool]]:
-    """Construct the per-entity migration plan from the detected serials."""
-    plan: list[tuple[str, str, str, str, bool]] = []
+    canonical_to_actual: dict[str, str],
+) -> list[tuple[str, str, str, str, bool, bool]]:
+    """Construct the per-entity migration plan from the detected serials.
+
+    Each entry's final field records whether the canonical givenergy_local
+    target was **recognised by the registry resolver** (a key in
+    `canonical_to_actual`). That is the only trustworthy proof the target maps to
+    a real entity: a statistic merely present in the recorder is not — a prior
+    run of the buggy area-prefix version may have left an orphan at the canonical
+    id. HA 2026.6 area prefixes and user renames are followed via the map.
+    """
+    plan: list[tuple[str, str, str, str, bool, bool]] = []
     for sn in inv_serials:
         for gt_sfx, ge_sfx, desc, default in INVERTER_PAIRS:
             if not default and not include_charge_from_grid:
                 continue
             givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
-            ge_id = f"sensor.givenergy_inverter_{sn}_{ge_sfx}"
+            canonical = f"sensor.givenergy_inverter_{sn}_{ge_sfx}"
+            resolved = canonical in canonical_to_actual
+            ge_id = canonical_to_actual.get(canonical, canonical)
             unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or "kWh"
-            plan.append((givtcp_id, ge_id, desc, unit, not default))
+            plan.append((givtcp_id, ge_id, desc, unit, not default, resolved))
     for sn in batt_serials:
         for gt_sfx, ge_sfx, desc, fallback_unit in BATTERY_PAIRS:
             givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
-            ge_id = f"sensor.givenergy_battery_{sn}_{ge_sfx}"
+            canonical = f"sensor.givenergy_battery_{sn}_{ge_sfx}"
+            resolved = canonical in canonical_to_actual
+            ge_id = canonical_to_actual.get(canonical, canonical)
             unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or fallback_unit
-            plan.append((givtcp_id, ge_id, desc, unit, False))
+            plan.append((givtcp_id, ge_id, desc, unit, False, resolved))
     return plan
+
+
+def _systemic_resolution_failure(
+    plan: list[tuple[str, str, str, str, bool, bool]],
+) -> list[str]:
+    """Return the targets to abort on iff the resolver mapped *none* of them.
+
+    Each entry's final field is the registry-recognition flag from `_build_plan`
+    — the only trustworthy proof of resolution. A partial miss is not fatal: a
+    target's GivTCP source may be irrelevant, or the entity is gated off on this
+    topology (e.g. `single_phase_only` sensors — PV Energy Today, House
+    Consumption Today — are never created on a three-phase inverter). Those are
+    skipped per-entity (`ge_not_found`) without blocking the rest. But if NOT ONE
+    target was recognised, the resolver failed wholesale and `--apply` would
+    rewrite only phantoms (including any orphan a prior broken run left in the
+    recorder — which is exactly why this never consults the recorder). Surface
+    them all for an up-front abort; returns [] as soon as one target resolves.
+    """
+    if any(resolved for (*_rest, resolved) in plan):
+        return []
+    return [ge_id for (_givtcp, ge_id, *_rest) in plan]
 
 
 def _print_summary(results: list[MigrationResult], applying: bool) -> int:
@@ -535,9 +677,12 @@ def _print_summary(results: list[MigrationResult], applying: bool) -> int:
     print(f"  {'Sensor':<{width}} {'GivTCP':>8} {'GE pre':>7} {'GE post':>8}  Result")
     print("─" * 88)
     for r in results:
-        warn_tag = (
-            "  ⚠️  verify values" if r.warn_diverged and r.status in ("migrated", "dry_run") else ""
-        )
+        warn_tag = ""
+        if r.status in ("migrated", "dry_run"):
+            if r.warn_diverged:
+                warn_tag += "  ⚠️  verify values"
+            if r.warn_no_ge_pre:
+                warn_tag += "  ⚠️  no GE overlap"
         print(
             f"  {r.description:<{width}} {r.givtcp_rows:>8} {r.ge_pre_rows:>7}"
             f" {r.ge_post_rows:>8}  {r.status}{warn_tag}"
@@ -546,7 +691,11 @@ def _print_summary(results: list[MigrationResult], applying: bool) -> int:
 
     counts = Counter(r.status for r in results)
     errored = counts["error"]
-    tail = f"No GivTCP data: {counts['no_givtcp_data']}  |  Errors: {errored}"
+    not_found = counts["ge_not_found"]
+    tail = (
+        f"No GivTCP data: {counts['no_givtcp_data']}  |  "
+        f"GE not found: {not_found}  |  Errors: {errored}"
+    )
 
     if not applying:
         print(f"\n  Planned: {counts['dry_run']}  |  {tail}")
@@ -557,8 +706,15 @@ def _print_summary(results: list[MigrationResult], applying: bool) -> int:
     for r in results:
         if r.status == "error":
             print(f"\n  ERROR — {r.description}: {r.error}", file=sys.stderr)
+        elif r.status == "ge_not_found":
+            print(
+                f"\n  ⚠️  {r.description}: givenergy_local target {r.ge_id} was not resolved "
+                "from the entity registry (area prefix / rename unmapped, or no such entity). "
+                "Skipped.",
+                file=sys.stderr,
+            )
 
-    return 0 if errored == 0 else 2
+    return 0 if (errored == 0 and not_found == 0) else 2
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -598,10 +754,19 @@ async def run(args: argparse.Namespace) -> int:
     print(f"Inverter serials : {', '.join(inv_serials)}")
     print(f"Battery serials  : {', '.join(batt_serials) or '(none found)'}")
 
+    # Resolve canonical givenergy_local target ids to the real recorder ids,
+    # following HA 2026.6 area prefixes and user renames.
+    entity_entries = await ws.list_entity_registry()
+    device_entries = await ws.list_device_registry()
+    canonical_to_actual = build_entity_id_resolver(entity_entries, device_entries)
+
+    def resolve(eid: str) -> str:
+        return canonical_to_actual.get(eid, eid)
+
     # Cut-over detection / validation
     if args.cutover is None:
         print("\nDetecting cut-over date …", end=" ", flush=True)
-        last_givtcp, first_ge = await detect_cutover(ws, inv_serials[0])
+        last_givtcp, first_ge = await detect_cutover(ws, inv_serials[0], resolve)
         print("done")
         print()
         _print_cutover_suggestion(last_givtcp, first_ge)
@@ -616,13 +781,42 @@ async def run(args: argparse.Namespace) -> int:
     cutover = datetime.combine(cutover_date, datetime.min.time(), tzinfo=UTC)
     print(f"Cut-over date    : {cutover_date} 00:00 UTC")
 
+    plan = _build_plan(
+        inv_serials, batt_serials, meta_by_id, args.include_charge_from_grid, canonical_to_actual
+    )
+
+    # Pre-flight guard: if the registry resolver mapped NO target, --apply would
+    # only write phantom series while the real entities stay un-migrated. Refuse
+    # up front rather than do that silently. A partial miss (some targets gated
+    # off on this topology, e.g. single_phase_only sensors) is left to the
+    # per-entity path, which skips each as `ge_not_found` without blocking the
+    # rest. The check trusts registry recognition, never the recorder — an orphan
+    # from a prior broken run must not pass for a real, resolved target.
+    missing_targets = _systemic_resolution_failure(plan)
+    if applying and missing_targets:
+        print()
+        print("  ✋ Refusing to --apply — not one givenergy_local target was resolved from")
+        print("     the entity registry, so entity-id resolution has failed (an area")
+        print("     prefix or rename the script couldn't map). Affected targets:")
+        for ge_id in missing_targets:
+            print(f"       {ge_id}")
+        print()
+        print("     Writing would create phantom series and leave your real entities")
+        print("     un-migrated. Re-run without --apply to inspect the full table.")
+        await ws.close()
+        return 2
+
     if applying:
         print()
         print("  ⚠️  This will CLEAR and REWRITE long-term statistics for the")
         print("  ⚠️  listed givenergy_local entities. Back up your recorder")
         print("  ⚠️  database before proceeding.")
-        print("  ℹ️  Re-running (same or different --cutover) is safe: the script")
-        print("  ℹ️  always reads the original GivTCP entity for pre-cutover data.")
+        print("  ℹ️  Re-running with the SAME or a LATER --cutover is safe and")
+        print("  ℹ️  idempotent (the script always re-reads the original GivTCP entity")
+        print("  ℹ️  for pre-cutover data). An EARLIER cutover is not — it would fold")
+        print("  ℹ️  already-migrated history back through the rebase. If you use")
+        print("  ℹ️  today's date, the day's stats are still live, so wait until")
+        print("  ℹ️  tomorrow before re-running.")
         try:
             confirm = input("  Type 'yes' to continue: ").strip().lower()
         except EOFError:
@@ -634,14 +828,16 @@ async def run(args: argparse.Namespace) -> int:
 
     print()
 
-    plan = _build_plan(inv_serials, batt_serials, meta_by_id, args.include_charge_from_grid)
-
     # Execute
     results: list[MigrationResult] = []
-    for idx, (givtcp_id, ge_id, desc, unit, warn) in enumerate(plan):
+    for idx, (givtcp_id, ge_id, desc, unit, warn, resolved) in enumerate(plan):
         verb = "Applying" if applying else "Previewing"
         print(f"  {verb}: {desc} …", end=" ", flush=True)
-        r = await migrate_entity(ws, givtcp_id, ge_id, desc, cutover, unit, applying, warn)
+        # `resolved` (registry recognition), not recorder presence, is what makes
+        # a target real — so an orphan from a prior broken run is never written.
+        r = await migrate_entity(
+            ws, givtcp_id, ge_id, desc, cutover, unit, applying, resolved, warn
+        )
         results.append(r)
         print(r.status)
         # Pace writes so the single-threaded recorder can drain between entities.
