@@ -6,6 +6,7 @@ from givenergy_modbus.exceptions import PlantTopologyMismatch
 from givenergy_modbus.model.inverter import Model
 from givenergy_modbus.model.plant import PlantCapabilities
 from homeassistant.config_entries import ConfigEntryState
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
@@ -298,6 +299,124 @@ async def test_topology_mismatch_persists_actual_and_raises_repairs_issue(
     assert (DOMAIN, f"plant_topology_changed_{mock_config_entry.entry_id}") in issues
     # And a reload was queued.
     reload_mock.assert_called_with(mock_config_entry.entry_id)
+
+
+async def test_persistent_loss_raises_error_repair_and_keeps_cache(
+    hass, mock_client, mock_config_entry
+):
+    """A persistent device loss raises a loud fixable ERROR repair and does NOT
+    persist the reduced topology or reload — the full prior stays cached."""
+    prior = PlantCapabilities(
+        device_type=Model.HYBRID,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32, 0x33],
+        bcu_stacks=[],
+    )
+    actual = PlantCapabilities(
+        device_type=Model.HYBRID,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
+    mismatch = PlantTopologyMismatch("battery missing", prior=prior, actual=actual)
+    mock_client.detect = AsyncMock(side_effect=mismatch)
+
+    mock_config_entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.givenergy_local._load_capabilities",
+            new=AsyncMock(return_value=prior),
+        ),
+        patch("custom_components.givenergy_local._save_capabilities", new=AsyncMock()) as save_mock,
+        patch.object(
+            hass.config_entries, "async_reload", new=AsyncMock(return_value=True)
+        ) as reload_mock,
+        patch("custom_components.givenergy_local.coordinator.asyncio.sleep", AsyncMock()),
+    ):
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    # Reduced topology NOT persisted, integration NOT reloaded.
+    save_mock.assert_not_awaited()
+    reload_mock.assert_not_called()
+    # A loud, fixable ERROR repair names the missing battery.
+    issue = ir.async_get(hass).issues.get(
+        (DOMAIN, f"expected_devices_missing_{mock_config_entry.entry_id}")
+    )
+    assert issue is not None
+    assert issue.severity is ir.IssueSeverity.ERROR
+    assert issue.is_fixable is True
+    assert "battery at 0x33" in issue.translation_placeholders["devices"]
+
+
+async def test_full_topology_detect_clears_stale_missing_repair(
+    hass, mock_client, mock_config_entry
+):
+    """A successful detect (full topology) clears any standing device-missing repair."""
+    mock_config_entry.add_to_hass(hass)
+    # Pre-seed a stale repair as if a prior run had flagged a missing device.
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        f"expected_devices_missing_{mock_config_entry.entry_id}",
+        is_fixable=True,
+        severity=ir.IssueSeverity.ERROR,
+        translation_key="expected_devices_missing",
+        translation_placeholders={"devices": "battery at 0x33"},
+        data={"entry_id": mock_config_entry.entry_id},
+    )
+
+    # Default mock_client.detect succeeds (no mismatch) → healed callback fires.
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert (
+        DOMAIN,
+        f"expected_devices_missing_{mock_config_entry.entry_id}",
+    ) not in ir.async_get(hass).issues
+
+
+async def test_missing_device_fix_flow_clears_cache_and_reloads(hass):
+    """The repair's Fix step clears the entry's cached topology and reloads it."""
+    from custom_components.givenergy_local.repairs import (
+        ExpectedDevicesMissingRepairFlow,
+    )
+
+    flow = ExpectedDevicesMissingRepairFlow({"entry_id": "entry-xyz", "devices": "battery at 0x33"})
+    flow.hass = hass
+
+    fake_store = AsyncMock()
+    with (
+        patch(
+            "custom_components.givenergy_local._capabilities_store",
+            return_value=fake_store,
+        ) as store_factory,
+        patch.object(hass.config_entries, "async_schedule_reload") as reload_mock,
+    ):
+        result = await flow.async_step_init({})
+
+    store_factory.assert_called_once_with(hass, "entry-xyz")
+    fake_store.async_remove.assert_awaited_once()
+    reload_mock.assert_called_once_with("entry-xyz")
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
+async def test_missing_device_fix_flow_form_names_devices(hass):
+    """Before confirming, the Fix form surfaces which device(s) went missing."""
+    from custom_components.givenergy_local.repairs import (
+        ExpectedDevicesMissingRepairFlow,
+    )
+
+    flow = ExpectedDevicesMissingRepairFlow({"entry_id": "e", "devices": "battery at 0x33"})
+    flow.hass = hass
+
+    result = await flow.async_step_init()
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["description_placeholders"]["devices"] == "battery at 0x33"
 
 
 async def test_cold_start_saves_capabilities_on_first_successful_refresh(

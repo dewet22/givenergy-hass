@@ -43,6 +43,17 @@
         }
       }
     },
+    "expected_devices_missing": {
+      "title": "GivEnergy device not responding",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "A known GivEnergy device stopped responding",
+            "description": "These device(s) were part of your system last time but did not respond on the latest connection: {devices}.\n\nThe integration has NOT removed them — it is still serving the rest of your system, and the affected entities show as unavailable. This is usually a transient comms issue (for example a slow battery BMS); the previous layout is kept and retried, so it normally clears on its own.\n\nIf the device has come back, or if you have genuinely removed it, click Fix to clear the cached layout and run a fresh hardware detection. Otherwise you can dismiss this — the integration picks the device back up automatically on its next successful detection."
+          }
+        }
+      }
+    },
     "plant_topology_changed": {
       "title": "GivEnergy plant topology has changed",
       "description": "The hardware layout of your GivEnergy system has changed since the last start — typically a battery was added or removed, or the inverter device type changed.\n\nThe integration has already accepted the new topology and reloaded itself; this notice is purely advisory and can be dismissed."
