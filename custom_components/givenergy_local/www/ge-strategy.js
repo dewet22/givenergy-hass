@@ -3,9 +3,9 @@
 //
 // Registers a Lovelace *dashboard strategy* `custom:givenergy` that generates
 // the dashboard from the live registry on every render, so it never goes stale.
-// v1 ships `mode: classic` - a faithful reproduction of the six-tab dashboard
-// the `givenergy_local.generate_dashboard` service emits as static YAML, but
-// resolved from the registry instead of frozen entity-id strings.
+// v1 ships `mode: classic` - a faithful reproduction of the six-tab static
+// dashboard layout, resolved from the live registry instead of frozen entity-id
+// strings.
 //
 //   strategy:
 //     type: custom:givenergy
@@ -1077,17 +1077,6 @@
       type: "entities",
       title: "Integration",
       entities: [
-        {
-          type: "button",
-          name: "Regenerate Dashboard",
-          icon: "mdi:view-dashboard-refresh",
-          action_name: "Run",
-          tap_action: {
-            action: "perform-action",
-            perform_action: "givenergy_local.generate_dashboard",
-            data: { max_power_kw: opts.maxPowerKw || 10 },
-          },
-        },
         {
           type: "button",
           name: "Capture Debug Frames (60 s)",
