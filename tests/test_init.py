@@ -15,7 +15,6 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.givenergy_local import (
     _STRATEGY_URL,
     _STRATEGY_VERSION,
-    _missing_dashboard_cards,
     async_setup,
 )
 from custom_components.givenergy_local.const import (
@@ -27,43 +26,6 @@ from custom_components.givenergy_local.const import (
     SERVICE_REDETECT_PLANT,
     SERVICE_SET_SYSTEM_DATETIME,
 )
-
-
-def _hass_with_resources(urls: list[str]) -> MagicMock:
-    hass = MagicMock()
-    resources = MagicMock()
-    resources.async_items = MagicMock(return_value=[{"url": u} for u in urls])
-    hass.data = {"lovelace": MagicMock(resources=resources)}
-    return hass
-
-
-async def test_missing_dashboard_cards_flags_absent_only():
-    hass = _hass_with_resources(["/hacsfiles/apexcharts-card/apexcharts-card.js"])
-    assert await _missing_dashboard_cards(hass) == ["power-flow-card-plus"]
-
-
-async def test_missing_dashboard_cards_empty_when_all_present():
-    hass = _hass_with_resources(
-        [
-            "/hacsfiles/apexcharts-card/apexcharts-card.js",
-            "/hacsfiles/power-flow-card-plus/power-flow-card-plus.js",
-        ]
-    )
-    assert await _missing_dashboard_cards(hass) == []
-
-
-async def test_missing_dashboard_cards_silent_when_registry_absent():
-    hass = MagicMock()
-    hass.data = {}  # no lovelace data at all
-    assert await _missing_dashboard_cards(hass) == []
-
-
-async def test_missing_dashboard_cards_swallows_registry_errors():
-    hass = MagicMock()
-    resources = MagicMock()
-    resources.async_items = MagicMock(side_effect=RuntimeError("boom"))
-    hass.data = {"lovelace": MagicMock(resources=resources)}
-    assert await _missing_dashboard_cards(hass) == []
 
 
 async def test_frontend_modules_served_and_autoloaded():

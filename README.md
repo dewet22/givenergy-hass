@@ -208,7 +208,6 @@ The integration registers the following services under the `givenergy_local` dom
 
 | Service | Description |
 |---|---|
-| `givenergy_local.generate_dashboard` | Generates a topology-aware Lovelace dashboard YAML for your inverter and battery configuration, saves it to `/local/`, and sends a persistent notification with a download link. Import via **Settings → Dashboards → Add Dashboard**. Accepts an optional `max_power_kw` parameter (default 10). |
 | `givenergy_local.expose_recommended_entities` | Exposes an opinionated headline set of entities (battery SOC, PV/grid/load power, today's and lifetime energy totals, inverter status) to one or more voice/LLM assistants. Defaults to the `conversation` assistant (Assist, the LLM tools API, MCP-via-conversation); pass `assistants` to override. See **Voice assistants & LLM access** below. |
 | `givenergy_local.redetect_plant` | Clears the cached plant topology for the inverter and reloads the integration, forcing a full hardware-detection sweep. Use after adding or removing a battery. Requires a `device_id`. |
 | `givenergy_local.capture_frames` | Captures raw Modbus wire frames for a configurable duration (10–300 s, default 60 s), writes a redacted copy to `/local/`, and sends a download link via persistent notification. Serial numbers are zeroed before the file is written. Attach the file to a GitHub issue when reporting connectivity problems. |
@@ -286,10 +285,6 @@ strategy:
   type: custom:givenergy
   mode: all
 ```
-
-### Static dashboard (deprecated)
-
-An older `generate_dashboard` service produces a one-off Lovelace YAML snapshot. It is **deprecated and slated for removal in a future release** — the strategy above supersedes it and doesn't suffer the entity-ID drift a static snapshot does. If you're still on a generated static dashboard, switch over by creating a dashboard and setting its raw config to `strategy: { type: custom:givenergy }`.
 
 ### Voice assistants & LLM access
 

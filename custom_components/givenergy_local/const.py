@@ -16,7 +16,6 @@ PLATFORMS = ["binary_sensor", "sensor", "switch", "number", "select", "time"]
 
 SERVICE_REBOOT_INVERTER = "reboot_inverter"
 SERVICE_CALIBRATE_BATTERY_SOC = "calibrate_battery_soc"
-SERVICE_GENERATE_DASHBOARD = "generate_dashboard"
 SERVICE_CAPTURE_FRAMES = "capture_frames"
 SERVICE_REDETECT_PLANT = "redetect_plant"
 SERVICE_EXPOSE_RECOMMENDED_ENTITIES = "expose_recommended_entities"
