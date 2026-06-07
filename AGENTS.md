@@ -14,7 +14,7 @@ givenergy-modbus as its core library.
   `client.refresh()` + `client.load_config()` (full refresh every N ticks)
 - `sensor.py`, `number.py`, `select.py`, `switch.py`, `time.py` — entity platforms
 - `config_flow.py` — UI setup (IP, port, scan interval, battery count, passive mode)
-- `dashboard.py` — `generate_dashboard` service; produces a Lovelace YAML file
+- `dashboard.py` — `generate_dashboard` service (deprecated; scheduled for removal); produces a Lovelace YAML file
 - `www/` — bundled frontend assets (e.g. `ge-cell-heatmap.js`) served at `/local/`
 
 ## Key Notes
