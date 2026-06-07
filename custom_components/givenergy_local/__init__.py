@@ -52,7 +52,7 @@ from .const import (
     SERVICE_REDETECT_PLANT,
     SERVICE_SET_SYSTEM_DATETIME,
 )
-from .coordinator import GivEnergyUpdateCoordinator
+from .coordinator import GivEnergyUpdateCoordinator, missing_devices
 from .dashboard import DASHBOARD_VERSION
 from .http import (
     CaptureDownloadView,
@@ -498,6 +498,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         hass.config_entries.async_schedule_reload(entry.entry_id)
 
+    async def _on_devices_missing(prior: PlantCapabilities, actual: PlantCapabilities) -> None:
+        # A previously-known device stopped responding and the loss persisted
+        # across retries. Do NOT persist the reduced topology and do NOT reload —
+        # the full prior stays cached so the next reconnect re-probes it and can
+        # self-heal. Raise a loud, fixable repair so a human decides whether this
+        # is transient or a genuine removal.
+        devices = ", ".join(missing_devices(prior, actual)) or "a device"
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"expected_devices_missing_{entry.entry_id}",
+            is_fixable=True,
+            is_persistent=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key="expected_devices_missing",
+            translation_placeholders={"devices": devices},
+            data={"entry_id": entry.entry_id, "devices": devices},
+        )
+
+    async def _on_topology_healed() -> None:
+        # Full expected topology confirmed — clear any standing "device missing"
+        # repair the moment the device answers again (idempotent: a no-op when
+        # no such issue exists).
+        ir.async_delete_issue(hass, DOMAIN, f"expected_devices_missing_{entry.entry_id}")
+
     coordinator = GivEnergyUpdateCoordinator(
         hass=hass,
         host=entry.data[CONF_HOST],
@@ -506,6 +531,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         passive=entry.data.get(CONF_PASSIVE, DEFAULT_PASSIVE),
         prior_capabilities=prior_capabilities,
         on_topology_changed=_on_topology_changed,
+        on_devices_missing=_on_devices_missing,
+        on_topology_healed=_on_topology_healed,
     )
 
     await coordinator.async_config_entry_first_refresh()

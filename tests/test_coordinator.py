@@ -17,9 +17,12 @@ from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.givenergy_local.coordinator import (
     _PARTIAL_LOG_EVERY,
+    DETECT_LOSS_RETRIES,
+    DETECT_LOSS_RETRY_DELAY,
     PROBE_RETRIES,
     PROBE_TIMEOUT_SECONDS,
     GivEnergyUpdateCoordinator,
+    missing_devices,
 )
 
 
@@ -983,3 +986,170 @@ async def test_topology_mismatch_without_callback_still_accepts_actual(hass, moc
 
     assert client.plant.capabilities is actual
     assert coordinator._prior_capabilities is actual
+
+
+def test_missing_devices_classification():
+    """missing_devices() flags losses (battery/meter/HV) but not adds or type changes."""
+    base = _caps(lv_battery_addresses=[0x32, 0x33])
+    # Battery dropped.
+    assert missing_devices(base, _caps(lv_battery_addresses=[0x32])) == ["battery at 0x33"]
+    # Meter dropped.
+    assert missing_devices(_caps(meter_addresses=[0x01]), _caps(meter_addresses=[])) == [
+        "meter at 0x01"
+    ]
+    # HV stack offset removed.
+    assert missing_devices(_caps(bcu_stacks=[(0, 4)]), _caps(bcu_stacks=[])) == ["HV stack at 0x70"]
+    # HV stack module count shrank.
+    assert missing_devices(_caps(bcu_stacks=[(0, 4)]), _caps(bcu_stacks=[(0, 2)])) == [
+        "HV stack at 0x70 (2 of 4 modules)"
+    ]
+    # An add is not a loss.
+    assert missing_devices(_caps(lv_battery_addresses=[0x32]), base) == []
+    # A device_type change is not a loss (the routine reload path handles it).
+    assert missing_devices(_caps(), _caps(device_type=Model.AC)) == []
+
+
+async def test_loss_retried_then_heals(hass, mock_plant):
+    """A loss that clears on retry: full prior kept, healed callback, no loss callback."""
+    prior = _caps(lv_battery_addresses=[0x32, 0x33])
+    actual = _caps(lv_battery_addresses=[0x32])
+    mismatch = PlantTopologyMismatch("battery missing", prior=prior, actual=actual)
+    on_missing, on_changed, on_healed = AsyncMock(), AsyncMock(), AsyncMock()
+    coordinator = GivEnergyUpdateCoordinator(
+        hass,
+        "192.168.1.1",
+        8899,
+        30,
+        prior_capabilities=prior,
+        on_topology_changed=on_changed,
+        on_devices_missing=on_missing,
+        on_topology_healed=on_healed,
+    )
+
+    with (
+        patch("custom_components.givenergy_local.coordinator.Client") as mock_cls,
+        patch(
+            "custom_components.givenergy_local.coordinator.asyncio.sleep", AsyncMock()
+        ) as mock_sleep,
+    ):
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.detect = AsyncMock(side_effect=[mismatch, None])  # heals on retry
+        mock_cls.return_value = client
+
+        await coordinator._connect()  # must NOT raise
+
+    assert client.detect.await_count == 2  # initial + one healing retry
+    mock_sleep.assert_awaited_once_with(DETECT_LOSS_RETRY_DELAY)
+    on_missing.assert_not_awaited()
+    on_changed.assert_not_awaited()
+    on_healed.assert_awaited_once()
+    assert coordinator._prior_capabilities is prior  # full prior never overwritten
+
+
+async def test_persistent_loss_invokes_on_devices_missing(hass, mock_plant):
+    """A loss surviving retries: loss callback, prior kept, reduced caps for the tick."""
+    prior = _caps(lv_battery_addresses=[0x32, 0x33])
+    actual = _caps(lv_battery_addresses=[0x32])
+    mismatch = PlantTopologyMismatch("battery missing", prior=prior, actual=actual)
+    on_missing, on_changed, on_healed = AsyncMock(), AsyncMock(), AsyncMock()
+    coordinator = GivEnergyUpdateCoordinator(
+        hass,
+        "192.168.1.1",
+        8899,
+        30,
+        prior_capabilities=prior,
+        on_topology_changed=on_changed,
+        on_devices_missing=on_missing,
+        on_topology_healed=on_healed,
+    )
+
+    with (
+        patch("custom_components.givenergy_local.coordinator.Client") as mock_cls,
+        patch("custom_components.givenergy_local.coordinator.asyncio.sleep", AsyncMock()),
+    ):
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.detect = AsyncMock(side_effect=mismatch)  # never recovers
+        mock_cls.return_value = client
+
+        await coordinator._connect()  # must NOT raise
+
+    assert client.detect.await_count == 1 + DETECT_LOSS_RETRIES
+    on_missing.assert_awaited_once_with(prior, actual)
+    on_changed.assert_not_awaited()  # not a routine change → no persist/reload
+    on_healed.assert_not_awaited()
+    assert coordinator._prior_capabilities is prior  # loss NOT baked in
+    assert client.plant.capabilities is actual  # reduced topology served this tick
+
+
+async def test_device_type_change_uses_topology_changed_path(hass, mock_plant):
+    """A device_type change is routine (not a loss): accept, update prior, reload."""
+    prior = _caps()
+    actual = _caps(device_type=Model.AC)
+    mismatch = PlantTopologyMismatch("type changed", prior=prior, actual=actual)
+    on_missing, on_changed = AsyncMock(), AsyncMock()
+    coordinator = GivEnergyUpdateCoordinator(
+        hass,
+        "192.168.1.1",
+        8899,
+        30,
+        prior_capabilities=prior,
+        on_topology_changed=on_changed,
+        on_devices_missing=on_missing,
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.detect = AsyncMock(side_effect=mismatch)
+        mock_cls.return_value = client
+
+        await coordinator._connect()
+
+    client.detect.assert_awaited_once()  # no retries for a non-loss
+    on_changed.assert_awaited_once_with(actual)
+    on_missing.assert_not_awaited()
+    assert coordinator._prior_capabilities is actual
+    assert client.plant.capabilities is actual
+
+
+async def test_loss_retry_surfacing_add_falls_through(hass, mock_plant):
+    """A loss whose retry reveals a non-loss change (an add) takes the routine path."""
+    prior = _caps(lv_battery_addresses=[0x32, 0x33])
+    loss_actual = _caps(lv_battery_addresses=[0x32])
+    add_actual = _caps(lv_battery_addresses=[0x32, 0x33, 0x34])
+    loss = PlantTopologyMismatch("battery missing", prior=prior, actual=loss_actual)
+    add = PlantTopologyMismatch("battery added", prior=prior, actual=add_actual)
+    on_missing, on_changed, on_healed = AsyncMock(), AsyncMock(), AsyncMock()
+    coordinator = GivEnergyUpdateCoordinator(
+        hass,
+        "192.168.1.1",
+        8899,
+        30,
+        prior_capabilities=prior,
+        on_topology_changed=on_changed,
+        on_devices_missing=on_missing,
+        on_topology_healed=on_healed,
+    )
+
+    with (
+        patch("custom_components.givenergy_local.coordinator.Client") as mock_cls,
+        patch("custom_components.givenergy_local.coordinator.asyncio.sleep", AsyncMock()),
+    ):
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.detect = AsyncMock(side_effect=[loss, add])
+        mock_cls.return_value = client
+
+        await coordinator._connect()
+
+    assert client.detect.await_count == 2
+    on_changed.assert_awaited_once_with(add_actual)  # routine path with the retry's actual
+    on_missing.assert_not_awaited()
+    on_healed.assert_not_awaited()
+    assert coordinator._prior_capabilities is add_actual

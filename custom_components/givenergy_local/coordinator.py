@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
@@ -28,6 +29,17 @@ InverterModel = SinglePhaseInverter | ThreePhaseInverter
 # the coordinator itself stays free of HA UI / config-entry concerns.
 TopologyChangedCallback = Callable[[PlantCapabilities], Awaitable[None]]
 
+# Invoked when detect() reports that a previously-known device did NOT respond
+# (a loss) and the loss persisted across retries. Receives (prior, actual) so
+# the caller can raise a loud, fixable repair WITHOUT persisting the reduced
+# topology — the full prior stays cached so the next reconnect re-probes it.
+DevicesMissingCallback = Callable[[PlantCapabilities, PlantCapabilities], Awaitable[None]]
+
+# Invoked whenever a (re)connect confirms the full expected topology (detect
+# succeeded with no mismatch, or a loss healed on retry). Lets the caller clear
+# a stale "device missing" repair the moment the device answers again.
+TopologyHealedCallback = Callable[[], Awaitable[None]]
+
 _LOGGER = logging.getLogger(__name__)
 
 # Target interval between full holding-register refreshes in active mode.
@@ -48,6 +60,48 @@ _PARTIAL_LOG_EVERY = 20
 # so the extra latency is bounded to ~one slow probe per detect.
 PROBE_TIMEOUT_SECONDS = 1.0
 PROBE_RETRIES = 3
+
+# When detect() reports a DEVICE LOSS (a previously-known battery/meter/stack
+# stopped answering), re-probe a few times before believing it — a slow BMS
+# often answers on the next sweep. Kept small: this blocks _connect(), which
+# runs under HA's coordinator lock, so total added latency on a persistent loss
+# is bounded to DETECT_LOSS_RETRIES * (one detect sweep + DETECT_LOSS_RETRY_DELAY).
+DETECT_LOSS_RETRIES = 2
+DETECT_LOSS_RETRY_DELAY = 5.0  # seconds
+
+
+def missing_devices(prior: PlantCapabilities, actual: PlantCapabilities) -> list[str]:
+    """Describe devices present in ``prior`` but absent from ``actual``.
+
+    An empty list means this is *not* a device loss — a pure add or a
+    ``device_type`` change returns ``[]`` so the routine accept-persist-reload
+    path handles it. A non-empty list means a previously-known device is gone
+    (the descriptors double as the repair message), which the caller should
+    retry and, if persistent, surface loudly rather than silently bake in.
+
+    Membership comparison (not positional) — the library may reorder addresses;
+    only an *absence* (or a shrunk HV module count) counts as a loss.
+    """
+    if prior.device_type != actual.device_type:
+        return []
+    missing: list[str] = []
+    for addr in prior.lv_battery_addresses:
+        if addr not in actual.lv_battery_addresses:
+            missing.append(f"battery at 0x{addr:02x}")
+    for addr in prior.meter_addresses:
+        if addr not in actual.meter_addresses:
+            missing.append(f"meter at 0x{addr:02x}")
+    # bcu_stacks entries are (bcu_offset, num_modules); device addr = 0x70+offset.
+    actual_modules_by_offset = {off: mods for off, mods in actual.bcu_stacks}
+    for off, mods in prior.bcu_stacks:
+        if off not in actual_modules_by_offset:
+            missing.append(f"HV stack at 0x{0x70 + off:02x}")
+        elif actual_modules_by_offset[off] < mods:
+            missing.append(
+                f"HV stack at 0x{0x70 + off:02x} "
+                f"({actual_modules_by_offset[off]} of {mods} modules)"
+            )
+    return missing
 
 
 class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
@@ -76,6 +130,8 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         retries: int = 1,
         prior_capabilities: PlantCapabilities | None = None,
         on_topology_changed: TopologyChangedCallback | None = None,
+        on_devices_missing: DevicesMissingCallback | None = None,
+        on_topology_healed: TopologyHealedCallback | None = None,
     ) -> None:
         super().__init__(
             hass,
@@ -94,6 +150,8 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         # this attribute at async_setup_entry time.
         self._prior_capabilities = prior_capabilities
         self._on_topology_changed = on_topology_changed
+        self._on_devices_missing = on_devices_missing
+        self._on_topology_healed = on_topology_healed
         self._client: Client | None = None
         self.last_successful_refresh: datetime | None = None
         self.consecutive_failures: int = 0
@@ -362,6 +420,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         """
         self._client = Client(host=self.host, port=self.port)
         await self._client.connect()
+        topology_confirmed = True
         try:
             # The library's battery sweep probes additional packs (0x33+) with a
             # stingy default budget (probe_timeout=0.5s, probe_retries=1) and
@@ -378,24 +437,94 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                 probe_retries=PROBE_RETRIES,
             )
         except PlantTopologyMismatch as exc:
-            _LOGGER.warning(
-                "Plant topology has changed since last seen — accepting new layout "
-                "(prior=%r, actual=%r); a reload will refresh entity counts",
-                exc.prior,
-                exc.actual,
-            )
-            # Library leaves plant.capabilities=None on mismatch; assign so this
-            # tick's refresh_plant() still dispatches correctly using the new
-            # topology before the reload tears things down.
-            assert self._client is not None  # set two lines above
-            self._client.plant.capabilities = exc.actual
-            self._prior_capabilities = exc.actual
-            if self._on_topology_changed is not None:
-                await self._on_topology_changed(exc.actual)
+            topology_confirmed = await self._handle_topology_mismatch(exc)
+        if topology_confirmed and self._on_topology_healed is not None:
+            # Full expected topology is present — clear any stale "device
+            # missing" repair (covers both restart and mid-session recovery).
+            await self._on_topology_healed()
         self._last_inverter_time = None
         self._unchanged_ticks = 0
         self._active_tick = 0
         _LOGGER.info("Connected to inverter at %s:%s", self.host, self.port)
+
+    async def _handle_topology_mismatch(self, exc: PlantTopologyMismatch) -> bool:
+        """Resolve a detect() topology mismatch.
+
+        Returns True only when the full expected topology is confirmed (a loss
+        that healed on retry) so the caller can clear a stale repair. Returns
+        False for a persistent loss (surfaced via on_devices_missing, prior kept)
+        and for a routine add / device_type change (accepted, persisted, reloaded
+        via on_topology_changed).
+        """
+        assert self._client is not None  # _connect set it before calling
+
+        missing = missing_devices(exc.prior, exc.actual)
+        if missing:
+            # A previously-known device didn't answer. Re-probe a few times — a
+            # slow BMS often responds on the next sweep — before believing it.
+            for attempt in range(1, DETECT_LOSS_RETRIES + 1):
+                _LOGGER.warning(
+                    "detect() reports missing device(s) %s (attempt %d/%d); "
+                    "re-probing in %.0fs before accepting the loss",
+                    missing,
+                    attempt,
+                    DETECT_LOSS_RETRIES,
+                    DETECT_LOSS_RETRY_DELAY,
+                )
+                await asyncio.sleep(DETECT_LOSS_RETRY_DELAY)
+                try:
+                    await self._client.detect(
+                        prior=self._prior_capabilities,
+                        probe_timeout=PROBE_TIMEOUT_SECONDS,
+                        probe_retries=PROBE_RETRIES,
+                    )
+                except PlantTopologyMismatch as retry_exc:
+                    # A retry can surface a *different* mismatch (e.g. an add now);
+                    # re-classify against this retry's prior/actual.
+                    exc = retry_exc
+                    missing = missing_devices(retry_exc.prior, retry_exc.actual)
+                    if not missing:
+                        break  # no longer a loss → routine add/device_type path
+                    continue
+                else:
+                    # Retry succeeded: detect() repopulated plant.capabilities with
+                    # the full prior. Nothing to bake in, no callback, prior kept.
+                    _LOGGER.info("Missing device(s) reappeared on retry; full topology restored")
+                    return True
+
+        if missing:
+            # Persistent loss. Do NOT touch self._prior_capabilities — keep the
+            # full prior so the next reconnect re-probes it and self-heals. Serve
+            # the reduced topology for this tick only so the live poll dispatches
+            # for what responded; the missing device's entities read unavailable.
+            _LOGGER.error(
+                "Expected device(s) %s did not respond after %d retries; serving the "
+                "reduced topology for this poll but NOT persisting it — affected "
+                "entities will read unavailable until they reappear or you re-detect",
+                missing,
+                DETECT_LOSS_RETRIES,
+            )
+            self._client.plant.capabilities = exc.actual
+            if self._on_devices_missing is not None:
+                await self._on_devices_missing(exc.prior, exc.actual)
+            return False
+
+        # Not (or no longer) a loss: routine add / device_type change. Preserve
+        # the existing behaviour — accept, persist, and reload via the callback.
+        _LOGGER.warning(
+            "Plant topology has changed since last seen — accepting new layout "
+            "(prior=%r, actual=%r); a reload will refresh entity counts",
+            exc.prior,
+            exc.actual,
+        )
+        # Library leaves plant.capabilities=None on mismatch; assign so this
+        # tick's refresh_plant() still dispatches correctly using the new
+        # topology before the reload tears things down.
+        self._client.plant.capabilities = exc.actual
+        self._prior_capabilities = exc.actual
+        if self._on_topology_changed is not None:
+            await self._on_topology_changed(exc.actual)
+        return False
 
     async def _reset_client(self) -> None:
         """Close and discard the client so the next tick triggers a reconnect."""
