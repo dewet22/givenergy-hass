@@ -8,6 +8,40 @@ that release. For releases prior to v1.1.0, see the
 
 ---
 
+## v1.1.6
+
+**Missing-device resilience**
+
+When a battery BMS is slow to answer a topology probe — the scenario that originally
+prompted this work, where a pack was physically present and responding but missed one
+detection window — the integration now retries before accepting the loss. If the device
+still doesn't answer after retries, the previous (fuller) topology is kept rather than
+being overwritten: the missing device's entities show as unavailable instead of
+disappearing, and a fixable ERROR repair appears in the Repairs panel. The integration
+retries automatically on each poll cycle (at most once every five minutes), and the
+repair clears itself as soon as the device is seen again. No user action is normally
+needed; the Fix button is there for genuinely removed hardware and triggers the same
+fresh detection as the Re-detect plant topology service.
+
+**GivTCP migration: HA 2026.6 area-prefixed entity IDs**
+
+Home Assistant 2026.6 began prepending a device's assigned area to its auto-generated
+entity IDs (e.g. `sensor.loft_givenergy_inverter_…` instead of
+`sensor.givenergy_inverter_…`). The `scripts/migrate_from_givtcp.py` resolver now
+handles this, so `--apply` writes to the correct prefixed statistics IDs rather than
+orphaned canonical ones. The script detects whether area-prefixing is in effect from the
+live entity registry and adapts automatically.
+
+**generate_dashboard service removed**
+
+The static YAML dashboard generator is gone. The live `custom:givenergy` strategy
+supersedes it entirely and doesn't suffer the entity-ID drift that left static snapshots
+stale after area reassignments. Any lingering *Dashboard outdated* repair notices clear
+automatically on next load. If you're still on a generated static dashboard, switch by
+setting a dashboard's raw config to `strategy: { type: custom:givenergy }`.
+
+---
+
 ## v1.1.5
 
 The dashboard strategy gains two new full-screen modes — **Glance** and **Analyst** —
