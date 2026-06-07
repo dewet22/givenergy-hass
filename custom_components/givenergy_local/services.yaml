@@ -152,11 +152,13 @@ redetect_plant:
         text:
 
 generate_dashboard:
-  name: Generate dashboard
+  name: Generate dashboard (deprecated)
   description: >
-    Generates a pre-configured dashboard YAML file for all connected
-    inverters and makes it available for download via a persistent notification.
-    Import it via Settings → Dashboards → Add Dashboard.
+    Deprecated and slated for removal in a future release — use the live
+    custom:givenergy dashboard strategy instead. Generates a pre-configured
+    dashboard YAML file for all connected inverters and makes it available for
+    download via a persistent notification. Import it via Settings → Dashboards
+    → Add Dashboard.
   fields:
     max_power_kw:
       name: Power chart envelope (kW)

@@ -1485,10 +1485,14 @@
 
           // idleKey groups edges that share a physical connection (same curve,
           // possibly opposite directions) so only one idle path is rendered.
+          // The two edges crossing the diagram centre (solar->battery vertical,
+          // grid->home horizontal) share a midpoint, so each offsets its label
+          // perpendicular to its own axis (labelDx / labelDy) to avoid the two
+          // values colliding when both flows are active.
           var edges = [
             { c: curve(N.solar, N.home, true), on: flowSolarToHome > THRESH, color: SOLAR, pwr: flowSolarToHome, flow: flowSolarToHome, idleKey: 'sh' },
             { c: curve(N.solar, N.grid, false), on: flowSolarToGrid > THRESH, color: EXPORT, pwr: flowSolarToGrid, flow: flowSolarToGrid, idleKey: 'sg' },
-            { c: curve(N.grid, N.home, true), on: flowGridToHome > THRESH, color: IMPORT, pwr: flowGridToHome, flow: flowGridToHome, idleKey: 'gh' },
+            { c: curve(N.grid, N.home, true), on: flowGridToHome > THRESH, color: IMPORT, pwr: flowGridToHome, flow: flowGridToHome, labelDy: -26, idleKey: 'gh' },
             { c: curve(N.solar, N.battery, false), on: flowSolarToBatt > THRESH, color: CHARGE, pwr: flowSolarToBatt, flow: flowSolarToBatt, labelDx: -38, idleKey: 'sb' },
             { c: curve(N.battery, N.home, true), on: flowBattToHome > THRESH, color: DISCHARGE, pwr: flowBattToHome, flow: flowBattToHome, idleKey: 'bh' },
             { c: curve(N.grid, N.battery, false), on: flowGridToBatt > THRESH, color: CHARGE, pwr: flowGridToBatt, flow: flowGridToBatt, idleKey: 'gb' },
