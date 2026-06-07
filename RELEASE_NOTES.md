@@ -158,9 +158,9 @@ For installs staying on the generated YAML, the generator now resolves its entit
 
 Number, select, switch and time entities now carry their device name in DeviceInfo, keeping their entity_ids stable across restarts and bringing them in line with the sensor platform.
 
-**Charge-cycle history carried over from GivTCP**
+**Charge-cycle history from GivTCP (did not work; later removed)**
 
-The GivTCP statistics migration now copies each battery's charge-cycle count history across too, so that long-term statistic carries over when switching.
+This release added a charge-cycle pair to the GivTCP statistics migration script, meant to carry each battery's cycle count across. It never actually worked: GivTCP records cycles as a *mean* statistic, but givenergy_local's `charge_cycles` is `total_increasing` (a sum series), so battery detection never matched the source and nothing was copied. The pair was removed in a later migration-script update — cycle history is not migrated.
 
 **Dependency**
 
