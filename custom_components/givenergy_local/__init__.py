@@ -413,7 +413,9 @@ def _migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Clear any legacy dashboard_outdated issues left by the now-removed
     # generate_dashboard service so the Repairs UI doesn't show a broken Fix button.
-    ir.async_delete_issue(hass, DOMAIN, f"dashboard_outdated_{entry.entry_id}")
+    # Issues were versioned (dashboard_outdated_v1 … dashboard_outdated_v11).
+    for _v in range(1, 12):
+        ir.async_delete_issue(hass, DOMAIN, f"dashboard_outdated_v{_v}")
 
     # Persisted topology lets the coordinator skip the cold-detect sweep on
     # most reconnects/restarts. Client.detect(prior=...) accepts the cached
