@@ -68,6 +68,7 @@ PROBE_RETRIES = 3
 # is bounded to DETECT_LOSS_RETRIES * (one detect sweep + DETECT_LOSS_RETRY_DELAY).
 DETECT_LOSS_RETRIES = 2
 DETECT_LOSS_RETRY_DELAY = 5.0  # seconds
+LOSS_REDETECT_INTERVAL = 300.0  # seconds between loss-driven reconnect-and-detect attempts
 
 
 def missing_devices(prior: PlantCapabilities | None, actual: PlantCapabilities) -> list[str]:
@@ -154,6 +155,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self._on_topology_healed = on_topology_healed
         self._client: Client | None = None
         self._schedule_reconnect: bool = False
+        self._loss_redetect_after: float = 0.0
         self.last_successful_refresh: datetime | None = None
         self.consecutive_failures: int = 0
         self.total_failures: int = 0
@@ -180,9 +182,12 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
 
     async def _async_update_data(self) -> Plant:
         try:
-            if self._schedule_reconnect:
+            loop = asyncio.get_running_loop()
+            if self._schedule_reconnect and loop.time() >= self._loss_redetect_after:
                 self._schedule_reconnect = False
                 await self._reset_client()
+                loop = asyncio.get_running_loop()
+                self._loss_redetect_after = loop.time() + LOSS_REDETECT_INTERVAL
             reconnecting = self._client is None or not self._client.connected
             if reconnecting:
                 await self._connect()

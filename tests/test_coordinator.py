@@ -1088,6 +1088,28 @@ async def test_persistent_loss_invokes_on_devices_missing(hass, mock_plant):
     assert coordinator._schedule_reconnect  # forces a reconnect on the next poll
 
 
+async def test_loss_reconnect_respects_cooldown(hass, mock_plant):
+    """_schedule_reconnect within cooldown: no reset, normal poll continues."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        mock_cls.return_value = client
+        coordinator._client = client
+        coordinator._schedule_reconnect = True
+        coordinator._loss_redetect_after = float("inf")  # cooldown not yet expired
+
+        await coordinator._async_update_data()
+
+    # Client must NOT have been reset — reconnect was deferred by cooldown.
+    client.close.assert_not_awaited()
+    assert coordinator._client is client
+    # Flag remains set so the reconnect fires once the cooldown expires.
+    assert coordinator._schedule_reconnect
+
+
 async def test_device_type_change_uses_topology_changed_path(hass, mock_plant):
     """A device_type change is routine (not a loss): accept, update prior, reload."""
     prior = _caps()
