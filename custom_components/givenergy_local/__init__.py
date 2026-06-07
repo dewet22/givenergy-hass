@@ -4,11 +4,10 @@ import importlib.metadata
 import logging
 import platform
 import sys
-from collections.abc import Callable
 from datetime import datetime
 from functools import partial
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import TypedDict
 
 import voluptuous as vol
 from givenergy_modbus.client import commands
@@ -32,7 +31,6 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.loader import async_get_integration
 from homeassistant.util import dt as dt_util
-from homeassistant.util import slugify
 
 from .const import (
     CONF_PASSIVE,
@@ -47,13 +45,11 @@ from .const import (
     SERVICE_CALIBRATE_BATTERY_SOC,
     SERVICE_CAPTURE_FRAMES,
     SERVICE_EXPOSE_RECOMMENDED_ENTITIES,
-    SERVICE_GENERATE_DASHBOARD,
     SERVICE_REBOOT_INVERTER,
     SERVICE_REDETECT_PLANT,
     SERVICE_SET_SYSTEM_DATETIME,
 )
 from .coordinator import GivEnergyUpdateCoordinator, missing_devices
-from .dashboard import DASHBOARD_VERSION
 from .http import (
     CaptureDownloadView,
     CaptureLandingView,
@@ -62,9 +58,6 @@ from .http import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-_DASHBOARD_STORAGE_KEY = f"{DOMAIN}.dashboard"
-_DASHBOARD_STORAGE_VERSION = 1
 
 # Bundled frontend module: the dashboard strategy (custom:givenergy) and the
 # cell-balance heatmap card (custom:ge-cell-heatmap) are shipped together in a
@@ -141,13 +134,6 @@ SERVICE_DEVICE_OR_SERIAL_SCHEMA = vol.Schema(
 
 SERVICE_DEVICE_SCHEMA = vol.Schema({vol.Required("device_id"): cv.string})
 
-SERVICE_GENERATE_DASHBOARD_SCHEMA = vol.Schema(
-    {
-        vol.Optional("max_power_kw", default=10): vol.All(
-            vol.Coerce(int), vol.Range(min=1, max=100)
-        ),
-    }
-)
 
 SERVICE_CAPTURE_FRAMES_SCHEMA = vol.Schema(
     {
@@ -344,35 +330,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-# External HACS cards the generated dashboard depends on (the bundled
-# ge-cell-heatmap is served by us and needs no check). Keep in sync with the
-# custom: cards emitted in dashboard.py.
-_REQUIRED_HACS_CARDS = ("apexcharts-card", "power-flow-card-plus")
-
-
-async def _missing_dashboard_cards(hass: HomeAssistant) -> list[str]:
-    """Best-effort list of required HACS cards with no registered Lovelace resource.
-
-    Returns [] when all are present *or* when the resource registry can't be
-    read — we warn only on a confident miss, never cry wolf. Only storage-mode
-    resources are enumerable; YAML-mode users register resources in
-    configuration.yaml and won't appear here, so the warning is advisory.
-    """
-    try:
-        resources = getattr(hass.data.get("lovelace"), "resources", None)
-        if resources is None:
-            return []
-        items = resources.async_items()
-        if not items and hasattr(resources, "async_load"):
-            await resources.async_load()
-            items = resources.async_items()
-        urls = " ".join(str(item.get("url", "")) for item in items)
-    except Exception as exc:  # noqa: BLE001 - advisory check must never break generation
-        _LOGGER.debug("Could not read Lovelace resources for pre-flight check: %s", exc)
-        return []
-    return [card for card in _REQUIRED_HACS_CARDS if card not in urls]
-
-
 # unique_id suffixes renamed in givenergy-modbus #174 (2.1.1). The old data is
 # valid — IR35 was always AC charge, merely mislabelled "load" — so re-point the
 # existing registry entry to the new unique_id, carrying its history, statistics
@@ -451,28 +408,6 @@ def _migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
                 _LOGGER.info("Migrating %s in place: %s", ent.entity_id, updates)
                 registry.async_update_entity(ent.entity_id, **updates)
             break
-
-
-def _build_entity_id_resolver(hass: HomeAssistant, entry_id: str) -> Callable[[str], str]:
-    """Map the dashboard generator's canonical entity ids to the real ones.
-
-    The generator builds ids as `{domain}.givenergy_{kind}_{serial}_{slug}`, but
-    HA 2026.6 prefixes generated entity_ids with the device's area
-    (`sensor.loft_givenergy_inverter_…`) and users may rename entities. Reconstruct
-    each entity's canonical id from its device's (integration) name and original
-    name — the stable identity the generator also slugs from — and map it to the
-    entity's actual id. Returns a resolver that leaves unknown ids untouched.
-    """
-    reg = er.async_get(hass)
-    dev_reg = dr.async_get(hass)
-    canonical_to_actual: dict[str, str] = {}
-    for ent in er.async_entries_for_config_entry(reg, entry_id):
-        device = dev_reg.async_get(ent.device_id) if ent.device_id else None
-        if device is None or device.name is None or ent.original_name is None:
-            continue
-        canonical = f"{ent.domain}.{slugify(device.name)}_{slugify(ent.original_name)}"
-        canonical_to_actual[canonical] = ent.entity_id
-    return lambda entity_id: canonical_to_actual.get(entity_id, entity_id)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -562,36 +497,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    store: Store[dict[str, Any]] = Store(hass, _DASHBOARD_STORAGE_VERSION, _DASHBOARD_STORAGE_KEY)
-    stored = await store.async_load() or {}
-    stored_version = stored.get("schema_version", 0)
-
-    # Clean up repair issues from all previous schema versions.
-    for v in range(1, DASHBOARD_VERSION):
-        ir.async_delete_issue(hass, DOMAIN, f"dashboard_outdated_v{v}")
-
-    if 0 < stored_version < DASHBOARD_VERSION:
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            f"dashboard_outdated_v{DASHBOARD_VERSION}",
-            is_fixable=True,
-            is_persistent=False,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="dashboard_outdated",
-            translation_placeholders={
-                "old_version": str(stored_version),
-                "new_version": str(DASHBOARD_VERSION),
-            },
-            data={
-                "max_power_kw": stored.get("max_power_kw", 10),
-                "old_version": stored_version,
-                "new_version": DASHBOARD_VERSION,
-            },
-        )
-    else:
-        ir.async_delete_issue(hass, DOMAIN, f"dashboard_outdated_v{DASHBOARD_VERSION}")
-
     # EMS entity-id realignment prompt. An EMS controller's entities are now named
     # `givenergy_ems_…` (sensor._device_kind); existing installs still carry the old
     # `givenergy_inverter_…` ids until the user runs HA's "Recreate entity IDs" on the
@@ -647,80 +552,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 raise HomeAssistantError("GivEnergy inverter is not currently connected")
             # Sync the inverter's clock to Home Assistant's current local time.
             await c._client.one_shot_command(commands.set_system_date_time(dt_util.now()))
-
-        async def handle_generate_dashboard(call: ServiceCall) -> None:
-            from .dashboard import generate_dashboard
-
-            _LOGGER.warning(
-                "The 'generate_dashboard' service is deprecated and will be removed in "
-                "a future release. Use the live 'custom:givenergy' dashboard strategy "
-                "instead — set a dashboard's raw config to "
-                "'strategy: { type: custom:givenergy }'."
-            )
-            max_power_kw = call.data["max_power_kw"]
-            missing = await _missing_dashboard_cards(hass)
-            warning = ""
-            if missing:
-                warning = (
-                    "\n\n**Note:** these cards the dashboard needs don't appear to be "
-                    "installed — affected cards will show \"Custom element doesn't "
-                    'exist" until you add them via **HACS → Frontend**:\n'
-                    + "\n".join(f"- `{card}`" for card in missing)
-                    + "\n\n(If you register Lovelace resources via YAML, ignore this.)"
-                )
-            for entry_id, coordinator in hass.data.get(DOMAIN, {}).items():
-                if coordinator.data is None:
-                    continue
-                inv = coordinator.data.inverter.serial_number.lower()
-                bats = [b.serial_number.lower() for b in coordinator.data.batteries]
-                is_ems = coordinator.data.ems is not None
-                caps = coordinator.data.capabilities
-                has_ac_config_block = bool(
-                    caps and caps.has_ac_config_block and not caps.is_three_phase
-                )
-                # TODO: source from `caps.has_smart_load` once givenergy-modbus
-                # exposes the capability (#181, targeted at 2.1.3). Until then
-                # always emit; rows render as unavailable on non-Smart-Load installs.
-                has_smart_load = not is_ems
-                resolve_entity_id = _build_entity_id_resolver(hass, entry_id)
-                yaml = generate_dashboard(
-                    inv,
-                    bats,
-                    max_power_kw=max_power_kw,
-                    is_ems=is_ems,
-                    has_ac_config_block=has_ac_config_block,
-                    has_smart_load=has_smart_load,
-                    resolve_entity_id=resolve_entity_id,
-                )
-                filename = f"dashboard_givenergy_{inv}.yaml"
-                www_dir = Path(hass.config.path("www"))
-                await hass.async_add_executor_job(partial(www_dir.mkdir, exist_ok=True))
-                await hass.async_add_executor_job((www_dir / filename).write_text, yaml)
-                url = f"/local/{filename}"
-                _LOGGER.info("GivEnergy dashboard available at %s", url)
-                await hass.services.async_call(
-                    "persistent_notification",
-                    "create",
-                    {
-                        "title": "GivEnergy dashboard generated",
-                        "message": (
-                            "**This service is deprecated** and will be removed in a "
-                            "future release. Use the live `custom:givenergy` dashboard "
-                            "strategy instead — create a dashboard and set its raw "
-                            "config to `strategy: { type: custom:givenergy }`. It "
-                            "resolves entities live, so it survives renames and area "
-                            "moves.\n\n"
-                            f"If you still need the static YAML for now, "
-                            f"[download it here]({url}) and paste it into a "
-                            "dashboard's raw config editor." + warning
-                        ),
-                        "notification_id": f"givenergy_dashboard_{inv}",
-                    },
-                )
-            await store.async_save(
-                {"schema_version": DASHBOARD_VERSION, "max_power_kw": max_power_kw}
-            )
-            ir.async_delete_issue(hass, DOMAIN, f"dashboard_outdated_v{DASHBOARD_VERSION}")
 
         async def handle_capture_frames(call: ServiceCall) -> None:
             device_id = call.data.get("device_id")
@@ -797,12 +628,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             SERVICE_SET_SYSTEM_DATETIME,
             handle_set_system_datetime,
             SERVICE_DEVICE_OR_SERIAL_SCHEMA,
-        )
-        hass.services.async_register(
-            DOMAIN,
-            SERVICE_GENERATE_DASHBOARD,
-            handle_generate_dashboard,
-            SERVICE_GENERATE_DASHBOARD_SCHEMA,
         )
 
         async def handle_redetect_plant(call: ServiceCall) -> None:
@@ -907,7 +732,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, SERVICE_REBOOT_INVERTER)
         hass.services.async_remove(DOMAIN, SERVICE_CALIBRATE_BATTERY_SOC)
         hass.services.async_remove(DOMAIN, SERVICE_SET_SYSTEM_DATETIME)
-        hass.services.async_remove(DOMAIN, SERVICE_GENERATE_DASHBOARD)
         hass.services.async_remove(DOMAIN, SERVICE_CAPTURE_FRAMES)
         hass.services.async_remove(DOMAIN, SERVICE_REDETECT_PLANT)
         hass.services.async_remove(DOMAIN, SERVICE_EXPOSE_RECOMMENDED_ENTITIES)

@@ -34,17 +34,6 @@
     }
   },
   "issues": {
-    "dashboard_outdated": {
-      "title": "GivEnergy dashboard schema update available",
-      "fix_flow": {
-        "step": {
-          "init": {
-            "title": "Regenerate GivEnergy dashboard",
-            "description": "Your GivEnergy dashboard was generated with schema v{old_version}. Schema v{new_version} is now available with layout improvements.\n\nClicking Fix will regenerate the dashboard and save the updated YAML to `/local/`. A notification will appear with a download link when it is ready.\n\nYour current settings (power chart envelope, etc.) will be preserved."
-          }
-        }
-      }
-    },
     "expected_devices_missing": {
       "title": "GivEnergy device not responding",
       "fix_flow": {
