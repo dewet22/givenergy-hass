@@ -639,6 +639,26 @@ def _build_plan(
     return plan
 
 
+def _systemic_resolution_failure(
+    plan: list[tuple[str, str, str, str, bool]],
+    known_ids: set[str],
+) -> list[str]:
+    """Return the unresolved GE targets iff resolution failed *systemically*.
+
+    A single missing target is not fatal: its GivTCP source may be irrelevant,
+    or the entity is gated off on this topology — e.g. `single_phase_only`
+    sensors (PV Energy Today, House Consumption Today) are never created on a
+    three-phase inverter. Those are skipped per-entity (`ge_not_found`) without
+    blocking the rest. But if NOT ONE target resolved, the resolver itself
+    failed (an area prefix / rename it couldn't map), so `--apply` would write
+    only phantom series — surface every miss for an up-front abort. Returns []
+    as soon as at least one target resolves.
+    """
+    missing = [ge_id for (_givtcp, ge_id, *_rest) in plan if ge_id not in known_ids]
+    resolved_any = any(ge_id in known_ids for (_givtcp, ge_id, *_rest) in plan)
+    return missing if (missing and not resolved_any) else []
+
+
 def _print_summary(results: list[MigrationResult], applying: bool) -> int:
     """Print the results table + counts; return the process exit code."""
     width = 46
@@ -754,17 +774,17 @@ async def run(args: argparse.Namespace) -> int:
         inv_serials, batt_serials, meta_by_id, args.include_charge_from_grid, resolve
     )
 
-    # Pre-flight guard: every resolved givenergy_local target must be a known
-    # recorder statistic. A miss means resolution produced a phantom id (an
-    # area-prefix/rename it couldn't map, or an entity with no LTS) — applying
-    # would clear nothing and import an orphan series while the real entity stays
-    # un-migrated. Refuse to --apply rather than do that silently.
-    missing_targets = [ge_id for (_givtcp, ge_id, *_rest) in plan if ge_id not in meta_by_id]
+    # Pre-flight guard: if resolution failed for EVERY target, --apply would only
+    # write phantom series while the real entities stay un-migrated. Refuse up
+    # front rather than do that silently. A partial miss (some targets gated off
+    # on this topology, e.g. single_phase_only sensors) is left to the per-entity
+    # path, which skips each as `ge_not_found` without blocking the rest.
+    missing_targets = _systemic_resolution_failure(plan, set(meta_by_id))
     if applying and missing_targets:
         print()
-        print("  ✋ Refusing to --apply — these givenergy_local targets aren't in the")
-        print("     recorder's statistics (entity-id resolution failed, or no long-term")
-        print("     statistics recorded yet):")
+        print("  ✋ Refusing to --apply — not one givenergy_local target resolved to a")
+        print("     recorder statistic, so entity-id resolution has failed (an area")
+        print("     prefix or rename the script couldn't map). Affected targets:")
         for ge_id in missing_targets:
             print(f"       {ge_id}")
         print()

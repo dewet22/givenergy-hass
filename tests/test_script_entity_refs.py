@@ -312,6 +312,32 @@ _GIVTCP = "sensor.givtcp_x_pv_energy_today_kwh"
 _GE = "sensor.givenergy_inverter_x_pv_energy_today"
 
 
+def test_systemic_resolution_failure_only_when_nothing_resolves():
+    """The pre-flight abort fires only when no target resolves at all.
+
+    A partial miss — e.g. single_phase_only sensors absent on a three-phase
+    inverter — must not block the whole --apply; those are skipped per-entity.
+    Only a total resolution failure (the area-prefix/rename bug) is fatal.
+    """
+    mod = _load_migrate_module()
+    # plan tuples: (givtcp_id, ge_id, desc, unit, warn)
+    plan = [
+        ("sensor.givtcp_x_pv_energy_today_kwh", "sensor.ge_x_pv", "PV", "kWh", False),
+        ("sensor.givtcp_x_grid_import_today_kwh", "sensor.ge_x_import", "Import", "kWh", False),
+    ]
+
+    # Nothing resolved -> systemic failure -> both surfaced for abort.
+    assert sorted(mod._systemic_resolution_failure(plan, set())) == [
+        "sensor.ge_x_import",
+        "sensor.ge_x_pv",
+    ]
+    # One target legitimately absent (e.g. single_phase_only) but another
+    # resolved -> not systemic -> no abort, per-entity handles the miss.
+    assert mod._systemic_resolution_failure(plan, {"sensor.ge_x_import"}) == []
+    # Everything resolved -> nothing to abort on.
+    assert mod._systemic_resolution_failure(plan, {s[1] for s in plan}) == []
+
+
 async def test_migrate_entity_refuses_unknown_ge_target():
     """A resolved GE target that isn't a real recorder statistic must be skipped.
 
