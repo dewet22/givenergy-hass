@@ -70,7 +70,7 @@ DETECT_LOSS_RETRIES = 2
 DETECT_LOSS_RETRY_DELAY = 5.0  # seconds
 
 
-def missing_devices(prior: PlantCapabilities, actual: PlantCapabilities) -> list[str]:
+def missing_devices(prior: PlantCapabilities | None, actual: PlantCapabilities) -> list[str]:
     """Describe devices present in ``prior`` but absent from ``actual``.
 
     An empty list means this is *not* a device loss — a pure add or a
@@ -82,7 +82,7 @@ def missing_devices(prior: PlantCapabilities, actual: PlantCapabilities) -> list
     Membership comparison (not positional) — the library may reorder addresses;
     only an *absence* (or a shrunk HV module count) counts as a loss.
     """
-    if prior.device_type != actual.device_type:
+    if prior is None or prior.device_type != actual.device_type:
         return []
     missing: list[str] = []
     for addr in prior.lv_battery_addresses:
@@ -153,6 +153,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self._on_devices_missing = on_devices_missing
         self._on_topology_healed = on_topology_healed
         self._client: Client | None = None
+        self._schedule_reconnect: bool = False
         self.last_successful_refresh: datetime | None = None
         self.consecutive_failures: int = 0
         self.total_failures: int = 0
@@ -179,6 +180,9 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
 
     async def _async_update_data(self) -> Plant:
         try:
+            if self._schedule_reconnect:
+                self._schedule_reconnect = False
+                await self._reset_client()
             reconnecting = self._client is None or not self._client.connected
             if reconnecting:
                 await self._connect()
@@ -505,6 +509,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                 DETECT_LOSS_RETRIES,
             )
             self._client.plant.capabilities = exc.actual
+            self._schedule_reconnect = True
             if self._on_devices_missing is not None:
                 await self._on_devices_missing(exc.prior, exc.actual)
             return False

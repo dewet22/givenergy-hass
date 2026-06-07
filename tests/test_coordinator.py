@@ -1007,6 +1007,8 @@ def test_missing_devices_classification():
     assert missing_devices(_caps(lv_battery_addresses=[0x32]), base) == []
     # A device_type change is not a loss (the routine reload path handles it).
     assert missing_devices(_caps(), _caps(device_type=Model.AC)) == []
+    # No prior (cold start) is not a loss.
+    assert missing_devices(None, base) == []
 
 
 async def test_loss_retried_then_heals(hass, mock_plant):
@@ -1083,6 +1085,7 @@ async def test_persistent_loss_invokes_on_devices_missing(hass, mock_plant):
     on_healed.assert_not_awaited()
     assert coordinator._prior_capabilities is prior  # loss NOT baked in
     assert client.plant.capabilities is actual  # reduced topology served this tick
+    assert coordinator._schedule_reconnect  # forces a reconnect on the next poll
 
 
 async def test_device_type_change_uses_topology_changed_path(hass, mock_plant):
