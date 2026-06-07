@@ -182,6 +182,23 @@ async def test_migrate_script_battery_targets_all_registered(hass, setup_integra
     )
 
 
+def test_battery_cycles_not_migrated():
+    """`battery_cycles` must stay out of BATTERY_PAIRS.
+
+    GivTCP records per-pack cycles as a *mean* statistic, but givenergy_local's
+    charge_cycles is total_increasing (a *sum* series). migrate_entity rebases a
+    sum column the source lacks, so migrating cycles would rebase the GE counter
+    to ~0 and corrupt it. Re-adding the pair needs a bespoke mean→counter path,
+    not a plain BATTERY_PAIRS entry — this guards a naive re-add (reverted #126).
+    """
+    mod = _load_migrate_module()
+    givtcp_sources = {givtcp for givtcp, *_rest in mod.BATTERY_PAIRS}
+    assert "battery_cycles" not in givtcp_sources, (
+        "battery_cycles is a mean statistic and cannot be migrated onto the "
+        "total_increasing charge_cycles sum series without a bespoke path"
+    )
+
+
 async def test_migrate_slugify_matches_ha(hass, setup_integration):
     """The script's vendored `_slugify` must match `homeassistant.util.slugify`.
 

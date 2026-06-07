@@ -58,7 +58,6 @@ What is migrated by default:
   Battery charge today / discharge today
   PV generation today / lifetime
   Battery throughput lifetime
-  Battery charge cycles (per battery pack)
   House consumption today  (GivTCP's load_energy_today_kwh → givenergy_local's
     derived house_consumption_today; givenergy-modbus #174. The old
     load_energy_today read ~0 and was excluded; the derived figure is correct.)
@@ -66,10 +65,15 @@ What is migrated by default:
 Opt-in (--include-charge-from-grid):
   Charge from grid lifetime  ⚠️  values differ on some systems — verify manually
 
-Not migrated (no GivTCP equivalent or register-level gap):
+Not migrated (no GivTCP equivalent, register-level gap, or incompatible type):
   battery_discharge_this_year, work_time_total, total_refresh_failures,
   battery_charge_energy_total_kwh, battery_discharge_energy_total_kwh,
   load_energy_total_kwh
+  battery_cycles  (GivTCP records per-pack charge cycles as a *mean* statistic
+    [state_class measurement], but givenergy_local's charge_cycles is a
+    total_increasing *sum* series. The two are incompatible shapes — there is no
+    sum column to rebase, and forcing it would corrupt the GE counter — so the
+    pre-GE cycle history is not migrated. See BATTERY_PAIRS below.)
 
 See docs/migration-from-givtcp.md for the full sensor catalogue and design notes.
 """
@@ -139,12 +143,16 @@ INVERTER_PAIRS: list[tuple[str, str, str, bool]] = [
 # Suffixes relative to: sensor.givtcp_<batt_sn>_<givtcp_suffix>
 #                  and: sensor.givenergy_battery_<batt_sn>_<ge_suffix>
 #
-BATTERY_PAIRS: list[tuple[str, str, str, str]] = [
-    # GivTCP exposes per-battery cycle counts (sensor.givtcp_<batt_sn>_battery_cycles).
-    # The givenergy_local target entity_id is ..._charge_cycles — the slug of the
-    # sensor's "Charge Cycles" name, NOT its internal description key (num_cycles).
-    ("battery_cycles", "charge_cycles", "Battery charge cycles", ""),
-]
+# Intentionally empty. GivTCP DOES expose per-battery cycle counts
+# (sensor.givtcp_<batt_sn>_battery_cycles), and givenergy_local has a matching
+# charge_cycles sensor — but they are incompatible LTS shapes: GivTCP records
+# cycles as a *mean* statistic (state_class measurement) while charge_cycles is
+# total_increasing (a *sum* series). migrate_entity rebases the source's sum
+# column onto the GE series; with no sum to read it would rebase GE to ~0 and
+# corrupt the existing counter. A correct migration would need a bespoke
+# mean→counter path; the lifetime cycle count is low-value as LTS, so the pair
+# is omitted rather than mis-migrated. (Was added in #126, reverted here.)
+BATTERY_PAIRS: list[tuple[str, str, str, str]] = []
 
 # ---------------------------------------------------------------------------
 # Serial detection
