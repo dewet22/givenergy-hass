@@ -312,30 +312,25 @@ _GIVTCP = "sensor.givtcp_x_pv_energy_today_kwh"
 _GE = "sensor.givenergy_inverter_x_pv_energy_today"
 
 
-def test_systemic_resolution_failure_only_when_nothing_resolves():
-    """The pre-flight abort fires only when no target resolves at all.
+def test_systemic_resolution_failure_uses_registry_recognition():
+    """The pre-flight abort keys on registry recognition, not recorder presence.
 
-    A partial miss — e.g. single_phase_only sensors absent on a three-phase
-    inverter — must not block the whole --apply; those are skipped per-entity.
-    Only a total resolution failure (the area-prefix/rename bug) is fatal.
+    A partial miss (one target unrecognised, another recognised) is not systemic,
+    so the migration proceeds and the miss is skipped per-entity. But if NOT ONE
+    target was recognised it aborts — even when an orphan from a prior broken
+    --apply sits in the recorder under the canonical id (which this check, keyed
+    only on the plan's registry-recognition flag, never consults).
     """
     mod = _load_migrate_module()
-    # plan tuples: (givtcp_id, ge_id, desc, unit, warn)
-    plan = [
-        ("sensor.givtcp_x_pv_energy_today_kwh", "sensor.ge_x_pv", "PV", "kWh", False),
-        ("sensor.givtcp_x_grid_import_today_kwh", "sensor.ge_x_import", "Import", "kWh", False),
-    ]
+    # plan tuple: (givtcp_id, ge_id, desc, unit, warn, resolved)
+    recognised = ("sensor.givtcp_x_import", "sensor.loft_x_import", "Import", "kWh", False, True)
+    unresolved = ("sensor.givtcp_x_pv", "sensor.ge_x_pv", "PV", "kWh", False, False)
 
-    # Nothing resolved -> systemic failure -> both surfaced for abort.
-    assert sorted(mod._systemic_resolution_failure(plan, set())) == [
-        "sensor.ge_x_import",
-        "sensor.ge_x_pv",
-    ]
-    # One target legitimately absent (e.g. single_phase_only) but another
-    # resolved -> not systemic -> no abort, per-entity handles the miss.
-    assert mod._systemic_resolution_failure(plan, {"sensor.ge_x_import"}) == []
-    # Everything resolved -> nothing to abort on.
-    assert mod._systemic_resolution_failure(plan, {s[1] for s in plan}) == []
+    # At least one target recognised -> not systemic -> no abort.
+    assert mod._systemic_resolution_failure([recognised, unresolved]) == []
+    # Nothing recognised -> systemic -> surface every target, regardless of any
+    # orphan the recorder may hold for these ids.
+    assert mod._systemic_resolution_failure([unresolved]) == ["sensor.ge_x_pv"]
 
 
 async def test_migrate_entity_refuses_unknown_ge_target():

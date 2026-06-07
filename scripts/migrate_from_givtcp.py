@@ -531,11 +531,12 @@ async def migrate_entity(
         r.status = "no_givtcp_data"
         return r
 
-    # Safety guard: the resolved givenergy_local target must be a real recorder
-    # statistic. If it isn't (`ge_known` is False — the id isn't in the recorder's
-    # statistic-id list), resolution produced a phantom: clearing it is a no-op
-    # and importing would create an orphan series nothing references, while the
-    # real entity stays un-migrated. Refuse to touch it.
+    # Safety guard: the target must have been recognised by the registry resolver
+    # (`ge_known`). If it wasn't, resolution produced a phantom — clearing it is a
+    # no-op and importing would create (or overwrite) an orphan series nothing
+    # references, while the real entity stays un-migrated. This trusts registry
+    # recognition, not recorder presence: an orphan a prior broken run left at the
+    # canonical id is in the recorder but is still not a real target. Refuse it.
     if not ge_known:
         r.status = "ge_not_found"
         return r
@@ -614,49 +615,58 @@ def _build_plan(
     batt_serials: list[str],
     meta_by_id: dict[str, dict[str, Any]],
     include_charge_from_grid: bool,
-    resolve: Callable[[str], str],
-) -> list[tuple[str, str, str, str, bool]]:
+    canonical_to_actual: dict[str, str],
+) -> list[tuple[str, str, str, str, bool, bool]]:
     """Construct the per-entity migration plan from the detected serials.
 
-    `resolve` maps each canonical givenergy_local target to its real id (the
-    recorder statistic_id), following HA 2026.6 area prefixes and user renames.
+    Each entry's final field records whether the canonical givenergy_local
+    target was **recognised by the registry resolver** (a key in
+    `canonical_to_actual`). That is the only trustworthy proof the target maps to
+    a real entity: a statistic merely present in the recorder is not — a prior
+    run of the buggy area-prefix version may have left an orphan at the canonical
+    id. HA 2026.6 area prefixes and user renames are followed via the map.
     """
-    plan: list[tuple[str, str, str, str, bool]] = []
+    plan: list[tuple[str, str, str, str, bool, bool]] = []
     for sn in inv_serials:
         for gt_sfx, ge_sfx, desc, default in INVERTER_PAIRS:
             if not default and not include_charge_from_grid:
                 continue
             givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
-            ge_id = resolve(f"sensor.givenergy_inverter_{sn}_{ge_sfx}")
+            canonical = f"sensor.givenergy_inverter_{sn}_{ge_sfx}"
+            resolved = canonical in canonical_to_actual
+            ge_id = canonical_to_actual.get(canonical, canonical)
             unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or "kWh"
-            plan.append((givtcp_id, ge_id, desc, unit, not default))
+            plan.append((givtcp_id, ge_id, desc, unit, not default, resolved))
     for sn in batt_serials:
         for gt_sfx, ge_sfx, desc, fallback_unit in BATTERY_PAIRS:
             givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
-            ge_id = resolve(f"sensor.givenergy_battery_{sn}_{ge_sfx}")
+            canonical = f"sensor.givenergy_battery_{sn}_{ge_sfx}"
+            resolved = canonical in canonical_to_actual
+            ge_id = canonical_to_actual.get(canonical, canonical)
             unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or fallback_unit
-            plan.append((givtcp_id, ge_id, desc, unit, False))
+            plan.append((givtcp_id, ge_id, desc, unit, False, resolved))
     return plan
 
 
 def _systemic_resolution_failure(
-    plan: list[tuple[str, str, str, str, bool]],
-    known_ids: set[str],
+    plan: list[tuple[str, str, str, str, bool, bool]],
 ) -> list[str]:
-    """Return the unresolved GE targets iff resolution failed *systemically*.
+    """Return the targets to abort on iff the resolver mapped *none* of them.
 
-    A single missing target is not fatal: its GivTCP source may be irrelevant,
-    or the entity is gated off on this topology — e.g. `single_phase_only`
-    sensors (PV Energy Today, House Consumption Today) are never created on a
-    three-phase inverter. Those are skipped per-entity (`ge_not_found`) without
-    blocking the rest. But if NOT ONE target resolved, the resolver itself
-    failed (an area prefix / rename it couldn't map), so `--apply` would write
-    only phantom series — surface every miss for an up-front abort. Returns []
-    as soon as at least one target resolves.
+    Each entry's final field is the registry-recognition flag from `_build_plan`
+    — the only trustworthy proof of resolution. A partial miss is not fatal: a
+    target's GivTCP source may be irrelevant, or the entity is gated off on this
+    topology (e.g. `single_phase_only` sensors — PV Energy Today, House
+    Consumption Today — are never created on a three-phase inverter). Those are
+    skipped per-entity (`ge_not_found`) without blocking the rest. But if NOT ONE
+    target was recognised, the resolver failed wholesale and `--apply` would
+    rewrite only phantoms (including any orphan a prior broken run left in the
+    recorder — which is exactly why this never consults the recorder). Surface
+    them all for an up-front abort; returns [] as soon as one target resolves.
     """
-    missing = [ge_id for (_givtcp, ge_id, *_rest) in plan if ge_id not in known_ids]
-    resolved_any = any(ge_id in known_ids for (_givtcp, ge_id, *_rest) in plan)
-    return missing if (missing and not resolved_any) else []
+    if any(resolved for (*_rest, resolved) in plan):
+        return []
+    return [ge_id for (_givtcp, ge_id, *_rest) in plan]
 
 
 def _print_summary(results: list[MigrationResult], applying: bool) -> int:
@@ -771,19 +781,21 @@ async def run(args: argparse.Namespace) -> int:
     print(f"Cut-over date    : {cutover_date} 00:00 UTC")
 
     plan = _build_plan(
-        inv_serials, batt_serials, meta_by_id, args.include_charge_from_grid, resolve
+        inv_serials, batt_serials, meta_by_id, args.include_charge_from_grid, canonical_to_actual
     )
 
-    # Pre-flight guard: if resolution failed for EVERY target, --apply would only
-    # write phantom series while the real entities stay un-migrated. Refuse up
-    # front rather than do that silently. A partial miss (some targets gated off
-    # on this topology, e.g. single_phase_only sensors) is left to the per-entity
-    # path, which skips each as `ge_not_found` without blocking the rest.
-    missing_targets = _systemic_resolution_failure(plan, set(meta_by_id))
+    # Pre-flight guard: if the registry resolver mapped NO target, --apply would
+    # only write phantom series while the real entities stay un-migrated. Refuse
+    # up front rather than do that silently. A partial miss (some targets gated
+    # off on this topology, e.g. single_phase_only sensors) is left to the
+    # per-entity path, which skips each as `ge_not_found` without blocking the
+    # rest. The check trusts registry recognition, never the recorder — an orphan
+    # from a prior broken run must not pass for a real, resolved target.
+    missing_targets = _systemic_resolution_failure(plan)
     if applying and missing_targets:
         print()
-        print("  ✋ Refusing to --apply — not one givenergy_local target resolved to a")
-        print("     recorder statistic, so entity-id resolution has failed (an area")
+        print("  ✋ Refusing to --apply — not one givenergy_local target was resolved from")
+        print("     the entity registry, so entity-id resolution has failed (an area")
         print("     prefix or rename the script couldn't map). Affected targets:")
         for ge_id in missing_targets:
             print(f"       {ge_id}")
@@ -817,12 +829,13 @@ async def run(args: argparse.Namespace) -> int:
 
     # Execute
     results: list[MigrationResult] = []
-    for idx, (givtcp_id, ge_id, desc, unit, warn) in enumerate(plan):
+    for idx, (givtcp_id, ge_id, desc, unit, warn, resolved) in enumerate(plan):
         verb = "Applying" if applying else "Previewing"
         print(f"  {verb}: {desc} …", end=" ", flush=True)
-        ge_known = ge_id in meta_by_id
+        # `resolved` (registry recognition), not recorder presence, is what makes
+        # a target real — so an orphan from a prior broken run is never written.
         r = await migrate_entity(
-            ws, givtcp_id, ge_id, desc, cutover, unit, applying, ge_known, warn
+            ws, givtcp_id, ge_id, desc, cutover, unit, applying, resolved, warn
         )
         results.append(r)
         print(r.status)
