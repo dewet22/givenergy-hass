@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from givenergy_modbus.model.battery import Battery, BatteryMaintenance
@@ -35,7 +36,9 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
@@ -52,6 +55,10 @@ class GivEnergyInverterSensorDescription(SensorEntityDescription):
     # underlying field is single-phase-only (e.g. a p_pv1+p_pv2 sum) and so would
     # be meaningless or surface as a permanently-unavailable orphan entity.
     single_phase_only: bool = False
+    # If True, the entity's native_value is clamped to never decrease within a
+    # session. Use for computed TOTAL_INCREASING sensors whose source value can
+    # transiently dip due to multi-register polling skew.
+    monotonic: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -504,16 +511,16 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         # register; givenergy-modbus computes it (PV gen + grid-in - grid-out -
         # AC-charge). Three-phase has no such field, so skip_if_none drops it
         # there (and the value_fn getattr keeps it None-safe).
-        # TOTAL (not TOTAL_INCREASING) because the value is computed from several
-        # registers polled at slightly different times; a reading can transiently
-        # dip by a few Wh when one component updates before the others, which
-        # triggers HA's strictly-increasing guard. Direct hardware counters (PV,
-        # grid, battery) stay TOTAL_INCREASING since they never decrease.
+        # monotonic=True because the value is computed from several registers
+        # polled at slightly different times; a reading can transiently dip by
+        # a few Wh when one component updates before the others, tripping
+        # TOTAL_INCREASING's strictly-increasing guard (#142).
         key="e_consumption_today",
         name="House Consumption Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        monotonic=True,
         value_fn=lambda inv: getattr(inv, "e_consumption_today", None),
         skip_if_none=True,
     ),
@@ -1112,7 +1119,19 @@ def _derive_display_precision(description: SensorEntityDescription, model: Any) 
     return model.precision_of(description.key)
 
 
-class GivEnergyInverterSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
+# A drop larger than this (in the sensor's native unit) is treated as a
+# genuine source reset rather than a transient polling artefact. Covers the
+# case where the inverter clock lags HA's local midnight by one scan interval,
+# so the actual counter reset arrives on a subsequent read after the day
+# boundary has already been committed. The value is intentionally conservative:
+# transient multi-register skew is a few Wh; a 500 Wh floor is far above any
+# realistic polling noise while still detecting any meaningful midnight reset.
+_MONOTONIC_RESET_THRESHOLD = 0.5  # kWh (matches e_consumption_today's native unit)
+
+
+class GivEnergyInverterSensor(
+    CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity, RestoreEntity
+):
     _attr_has_entity_name = True
     entity_description: GivEnergyInverterSensorDescription
 
@@ -1123,6 +1142,8 @@ class GivEnergyInverterSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Sen
     ) -> None:
         super().__init__(coordinator)
         self.entity_description = description
+        self._monotonic_max: float | None = None
+        self._monotonic_date: date | None = None
         precision = _derive_display_precision(description, coordinator.data.inverter)
         if precision is not None:
             self._attr_suggested_display_precision = precision
@@ -1138,9 +1159,50 @@ class GivEnergyInverterSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Sen
             serial_number=serial,
         )
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if not self.entity_description.monotonic:
+            return
+        last_state = await self.async_get_last_state()
+        if last_state is None:
+            return
+        try:
+            restored = float(last_state.state)
+        except ValueError, TypeError:
+            return
+        last_date = dt_util.as_local(last_state.last_updated).date()
+        if last_date == dt_util.now().date():
+            # Seed the intra-day max from the last persisted value so a
+            # transient dip on the first post-restart reading doesn't become
+            # the new baseline while the recorder still holds the higher value.
+            self._monotonic_max = restored
+            self._monotonic_date = last_date
+
     @property
     def native_value(self) -> Any:
-        return self.entity_description.value_fn(self.coordinator.data.inverter)
+        value = self.entity_description.value_fn(self.coordinator.data.inverter)
+        if self.entity_description.monotonic and isinstance(value, (int, float)):
+            today = dt_util.now().date()
+            if self._monotonic_date != today:
+                # New calendar day in HA's timezone: start fresh so the
+                # midnight reset passes through as a real decrease.
+                self._monotonic_max = value
+                self._monotonic_date = today
+            elif (
+                self._monotonic_max is not None
+                and value < self._monotonic_max - _MONOTONIC_RESET_THRESHOLD
+            ):
+                # Large same-day drop: treat as a genuine source reset.
+                # This handles an inverter clock that lags HA's midnight by
+                # one poll cycle — the actual counter reset arrives on a
+                # subsequent read after date tracking has already committed
+                # the new day, so we must detect it by magnitude rather than
+                # date alone.
+                self._monotonic_max = value
+            else:
+                self._monotonic_max = max(value, self._monotonic_max or value)
+            return self._monotonic_max
+        return value
 
 
 class GivEnergyBatterySensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
