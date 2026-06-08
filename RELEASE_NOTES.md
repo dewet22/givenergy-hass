@@ -8,6 +8,16 @@ that release. For releases prior to v1.1.0, see the
 
 ---
 
+## v1.1.7
+
+**House Consumption Today: spurious recorder warnings fixed**
+
+The House Consumption Today sensor is derived from several Modbus registers (PV generation, grid import, grid export, AC charge) polled within the same scan cycle. When one register updates a fraction ahead of the others the computed total can dip by a few Wh, and HA's strictly-increasing guard logs a warning and corrupts the accumulated daily statistic.
+
+The fix applies a stateful monotonic filter on the sensor: the entity tracks the intra-day maximum and returns `max(new, session_max)` instead of the raw value, making transient dips invisible to the recorder. The filter resets at midnight in HA's configured timezone so the genuine daily counter reset passes through as a real decrease and a new energy cycle begins. Two supplementary guards cover edge cases: a 0.5 kWh drop threshold detects an inverter clock that lags HA's midnight by one poll interval (emitting one more "yesterday" reading before rolling over), and last-known state is restored on HA restart so the first post-restart reading can't undercut the recorder's prior value.
+
+---
+
 ## v1.1.6
 
 **Missing-device resilience**
