@@ -504,11 +504,16 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         # register; givenergy-modbus computes it (PV gen + grid-in - grid-out -
         # AC-charge). Three-phase has no such field, so skip_if_none drops it
         # there (and the value_fn getattr keeps it None-safe).
+        # TOTAL (not TOTAL_INCREASING) because the value is computed from several
+        # registers polled at slightly different times; a reading can transiently
+        # dip by a few Wh when one component updates before the others, which
+        # triggers HA's strictly-increasing guard. Direct hardware counters (PV,
+        # grid, battery) stay TOTAL_INCREASING since they never decrease.
         key="e_consumption_today",
         name="House Consumption Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         value_fn=lambda inv: getattr(inv, "e_consumption_today", None),
         skip_if_none=True,
     ),
