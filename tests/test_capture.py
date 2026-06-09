@@ -17,6 +17,7 @@ from custom_components.givenergy_local.const import DOMAIN, SERVICE_CAPTURE_FRAM
 from custom_components.givenergy_local.http import (
     CAPTURE_FILENAME_RE,
     _split_header,
+    build_capture_notification_url,
     capture_dir,
 )
 
@@ -131,6 +132,24 @@ async def test_capture_frames_posts_landing_notification(hass, mock_client, capt
     message = note["message"]
     assert f"/api/{DOMAIN}/capture/" in message
     assert "authSig=" in message  # signed landing link
+    # Raw <a target="_blank">, not a markdown link: a markdown link is hijacked
+    # by the HA frontend SPA router (lands on the dashboard); a truthy target
+    # makes the router skip the click so the browser hits the backend view.
+    assert 'target="_blank"' in message
+    assert "](/api/" not in message  # not a markdown link
+
+
+async def test_notification_url_is_origin_relative(hass, capture_setup):
+    """The notification link must be path-only — no scheme/host/origin.
+
+    Embedding HA's internal URL (e.g. via get_url) breaks reverse-proxied
+    installs: the browser sits on the proxy origin while the link points at the
+    internal http:// address, tripping an insecure-connection warning. A
+    path-only signed URL resolves against whatever origin the user is on.
+    """
+    url = build_capture_notification_url(hass, "capture_givenergy_1700000000.txt")
+    assert url.startswith(f"/api/{DOMAIN}/capture/")
+    assert "://" not in url  # origin-relative: no scheme or host
 
 
 # ---------------------------------------------------------------------------

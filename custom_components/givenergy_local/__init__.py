@@ -609,12 +609,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _LOGGER.info(
                     "GivEnergy frame capture saved to %s (%d frames)", filename, len(frames)
                 )
+                # Raw <a target="_blank"> rather than a markdown link: the HA
+                # frontend's SPA router hijacks same-origin markdown-link clicks
+                # into in-app navigation, so an `/api/...` link lands on the
+                # dashboard instead of opening the capture. A truthy `target`
+                # is the one attribute that survives notification markdown
+                # sanitisation *and* makes the router skip the click, letting the
+                # browser navigate to the backend view (resolved against the
+                # user's actual origin, proxy included).
                 async_create_notification(
                     hass,
                     (
                         f"Captured {len(frames)} frames over {duration} s.\n\n"
-                        f"[Open the capture]({landing_url}) to inspect it, download "
-                        "the file, or open a pre-filled GitHub issue."
+                        f'<a href="{landing_url}" target="_blank">Open the capture</a> '
+                        "to inspect it, download the file, or open a pre-filled "
+                        "GitHub issue."
                     ),
                     title="GivEnergy frame capture complete",
                     notification_id=f"givenergy_capture_{inv}",
