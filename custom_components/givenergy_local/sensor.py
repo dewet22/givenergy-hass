@@ -1117,6 +1117,9 @@ async def async_setup_entry(
     # AIO per-module battery devices (#192) — empty on non-AIO plants. A module
     # with a blank/invalid serial can't anchor a device, so skip it; the index
     # still aligns with `aio_battery_modules` for the entities we do create.
+    # Like the battery entities, this set is fixed at setup: a module absent
+    # during the initial probe gets no entities until a reload (tracked in #148,
+    # to be fixed uniformly for all device types).
     for module_index, module in enumerate(coordinator.data.aio_battery_modules):
         if not module.is_valid():
             continue
