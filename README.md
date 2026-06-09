@@ -3,8 +3,8 @@
 <p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/logo.png" alt="GivEnergy" width="320"></p>
 
 [![release](https://img.shields.io/github/v/release/dewet22/givenergy-hass)](https://github.com/dewet22/givenergy-hass/releases)
-[![CI](https://img.shields.io/github/checks-status/dewet22/givenergy-hass/main)](https://github.com/dewet22/givenergy-hass/actions?query=branch%3Amain)
-[![license](https://img.shields.io/github/license/dewet22/givenergy-hass)](LICENSE)
+[![CI](https://github.com/dewet22/givenergy-hass/actions/workflows/validate.yml/badge.svg?branch=main)](https://github.com/dewet22/givenergy-hass/actions?query=branch%3Amain)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/docs/use/repositories/dashboard)
 
