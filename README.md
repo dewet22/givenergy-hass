@@ -1,6 +1,6 @@
 # GivEnergy Home Assistant Integration
 
-<p align="center"><img src="logo.png" alt="GivEnergy" width="320"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/logo.png" alt="GivEnergy" width="320"></p>
 
 [![release](https://img.shields.io/github/v/release/dewet22/givenergy-hass)](https://github.com/dewet22/givenergy-hass/releases)
 [![CI](https://img.shields.io/github/checks-status/dewet22/givenergy-hass/main)](https://github.com/dewet22/givenergy-hass/actions?query=branch%3Amain)
