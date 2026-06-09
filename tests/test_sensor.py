@@ -694,6 +694,28 @@ async def test_aio_module_all_24_voltage_cells(hass, aio_setup):
     assert state.attributes["unit_of_measurement"] == "V"
 
 
+async def test_aio_module_entity_tracks_serial_not_list_index(hass, aio_setup):
+    """If a module drops out and the list reindexes, each entity must keep
+    reporting its own module — never cross-wire to a neighbour, and go
+    unavailable when its module is absent (#192 review)."""
+    coordinator = hass.data[DOMAIN][aio_setup.entry_id]
+    # The first module (HX2414G831) drops out of the poll; only the second
+    # (HX2414G832) remains, now at list index 0 with a distinctive cell value.
+    surviving = _mock_aio_module("HX2414G832", 0x51)
+    surviving.v_cell_01 = 3.500
+    coordinator.data.aio_battery_modules = [surviving]
+    coordinator.async_set_updated_data(coordinator.data)
+    await hass.async_block_till_done()
+
+    # The survivor reports its own value under its own serial — not the dropped
+    # module's (which would be the bug if entities indexed by position).
+    survivor_state = hass.states.get(_entity_id(hass, "sensor", "HX2414G832_v_cell_01"))
+    assert float(survivor_state.state) == 3.500
+    # The dropped module's entity goes unavailable rather than borrowing index 0.
+    dropped_state = hass.states.get(_entity_id(hass, "sensor", "HX2414G831_v_cell_01"))
+    assert dropped_state.state == "unavailable"
+
+
 async def test_aio_module_exposes_only_first_twelve_temps(hass, aio_setup):
     """Cells 1-12 get temperature sensors; 13-24 (zero on hardware) are omitted."""
     registry = er.async_get(hass)

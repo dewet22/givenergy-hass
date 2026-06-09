@@ -1319,9 +1319,12 @@ class GivEnergyAioModuleSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Se
     ) -> None:
         super().__init__(coordinator)
         self.entity_description = description
-        self._module_index = module_index
-        module = coordinator.data.aio_battery_modules[module_index]
-        serial = module.serial_number
+        # Bind to the module's serial, not its list position. aio_battery_modules
+        # is rebuilt every refresh from whichever module caches decoded, so indices
+        # shift when a module drops out — resolving by serial keeps each entity tied
+        # to its own module instead of cross-wiring to a neighbour's cell data.
+        serial = coordinator.data.aio_battery_modules[module_index].serial_number
+        self._module_serial = serial
         self._attr_unique_id = f"{serial}_{description.key}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, serial)},
@@ -1332,12 +1335,27 @@ class GivEnergyAioModuleSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Se
             via_device=(DOMAIN, coordinator.data.inverter_serial_number),
         )
 
+    def _module(self) -> AioBatteryModule | None:
+        """Resolve this entity's module by serial in the latest coordinator data."""
+        data = self.coordinator.data
+        if data is None:
+            return None
+        return next(
+            (m for m in data.aio_battery_modules if m.serial_number == self._module_serial),
+            None,
+        )
+
+    @property
+    def available(self) -> bool:
+        # Unavailable (not cross-wired) when this module is absent from the poll.
+        return super().available and self._module() is not None
+
     @property
     def native_value(self) -> Any:
-        modules = self.coordinator.data.aio_battery_modules
-        if self._module_index >= len(modules):
+        module = self._module()
+        if module is None:
             return None
-        return self.entity_description.value_fn(modules[self._module_index])
+        return self.entity_description.value_fn(module)
 
 
 class GivEnergyCoordinatorSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
