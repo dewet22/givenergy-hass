@@ -19,7 +19,7 @@ Uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) for all i
 
 ## Supported inverters
 
-The integration uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) v2.1, which models the following device families: single-phase hybrid, three-phase hybrid, AC-coupled, EMS, Gateway, and All-in-One. Register maps for all of these shipped in v2.0, but empirical verification is still in progress for most — the mappings were brought in from the GivTCP fork, which ran across a wide range of hardware, so the coverage is broad but not all of it has been confirmed against wire data.
+The integration uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) v2.2, which models the following device families: single-phase hybrid, three-phase hybrid, AC-coupled, EMS, Gateway, and All-in-One. Register maps for all of these shipped in v2.0, but empirical verification is still in progress for most — the mappings were brought in from the GivTCP fork, which ran across a wide range of hardware, so the coverage is broad but not all of it has been confirmed against wire data.
 
 Confirmed working:
 
@@ -187,7 +187,7 @@ When enabled, the integration connects to the inverter but sends no Modbus read 
 
 ### Battery device(s)
 
-Each connected battery pack appears as a separate device linked to the inverter. On All-in-One (AIO) hardware, devices are surfaced at pack level only — the individual module sub-devices that some other tools expose are not yet represented ([#95](https://github.com/dewet22/givenergy-hass/issues/95)).
+Each connected battery pack appears as a separate device linked to the inverter. On All-in-One (AIO) hardware, each removable battery module is also surfaced as its own device (linked to the AIO inverter), exposing its `HX…` serial and per-cell voltages and temperatures — see [AIO battery modules](#aio-battery-modules) below ([#192](https://github.com/dewet22/givenergy-hass/issues/192)).
 
 | Entity | Unit | Notes |
 |---|---|---|
@@ -204,6 +204,10 @@ Each connected battery pack appears as a separate device linked to the inverter.
 | Cells 1-4 / 5-8 / 9-12 / 13-16 Temperature | °C | Diagnostic; the BMS samples one thermistor per 4-cell group |
 
 Cell-level entities are tagged as diagnostic, so they're hidden from the default device view but available for dashboards and pack-health monitoring (cell voltage spread, temperature deltas, etc.).
+
+#### AIO battery modules
+
+All-in-One systems expose each removable battery module separately, so on AIO hardware you'll see one extra device per module (parented to the AIO inverter) alongside the pack-level battery device. Each module device carries its `HX…` serial plus 24 per-cell voltages and 12 per-cell temperatures, all diagnostic. These mirror the LV per-cell entities, so the cell-heatmap card and the same pack-health views work at module granularity. Module data needs `givenergy-modbus` 2.2 or newer.
 
 ### Services
 

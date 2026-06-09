@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
+from givenergy_modbus.model.aio_battery import AioBatteryModule
 from givenergy_modbus.model.battery import Battery, BatteryMaintenance
 from givenergy_modbus.model.inverter import (
     BatteryCalibrationStage,
@@ -74,6 +75,20 @@ def _battery_attr(name: str) -> Callable[[Battery], Any]:
     of the resulting Callable).
     """
     return lambda bat: getattr(bat, name)
+
+
+@dataclass(frozen=True, kw_only=True)
+class GivEnergyAioModuleSensorDescription(SensorEntityDescription):
+    value_fn: Callable[[AioBatteryModule], Any] = field(default=lambda _: None)
+
+
+def _module_attr(name: str) -> Callable[[AioBatteryModule], Any]:
+    """Return a value_fn that reads `name` off an AIO battery module.
+
+    Per-module counterpart of `_battery_attr`; each closure captures its own
+    attribute name so the bulk-defined per-cell entities don't share one.
+    """
+    return lambda module: getattr(module, name)
 
 
 def _battery_hex(name: str, width: int) -> Callable[[Battery], Any]:
@@ -947,6 +962,40 @@ BATTERY_SENSORS: tuple[GivEnergyBatterySensorDescription, ...] = (
 )
 
 
+# All-in-One per-module battery sensors (#192). Each removable module reports
+# its own 24 cell voltages and per-cell temperatures. Mirrors the LV per-cell
+# entities above: DIAGNOSTIC, enabled by default. Cell temps 13-24 read zero on
+# known AIO hardware, so only 01-12 are exposed (matching what the module BMS
+# actually populates); voltages cover all 24 cells.
+AIO_MODULE_SENSORS: tuple[GivEnergyAioModuleSensorDescription, ...] = (
+    *(
+        GivEnergyAioModuleSensorDescription(
+            key=f"v_cell_{i:02d}",
+            name=f"Cell {i} Voltage",
+            native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+            device_class=SensorDeviceClass.VOLTAGE,
+            state_class=SensorStateClass.MEASUREMENT,
+            suggested_display_precision=3,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn=_module_attr(f"v_cell_{i:02d}"),
+        )
+        for i in range(1, 25)
+    ),
+    *(
+        GivEnergyAioModuleSensorDescription(
+            key=f"t_cell_{i:02d}",
+            name=f"Cell {i} Temperature",
+            native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+            device_class=SensorDeviceClass.TEMPERATURE,
+            state_class=SensorStateClass.MEASUREMENT,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn=_module_attr(f"t_cell_{i:02d}"),
+        )
+        for i in range(1, 13)
+    ),
+)
+
+
 def _partial_failure_attributes(
     coordinator: GivEnergyUpdateCoordinator,
 ) -> dict[str, Any] | None:
@@ -1063,6 +1112,17 @@ async def async_setup_entry(
         entities.extend(
             GivEnergyBatterySensor(coordinator, description, battery_index)
             for description in BATTERY_SENSORS
+        )
+
+    # AIO per-module battery devices (#192) — empty on non-AIO plants. A module
+    # with a blank/invalid serial can't anchor a device, so skip it; the index
+    # still aligns with `aio_battery_modules` for the entities we do create.
+    for module_index, module in enumerate(coordinator.data.aio_battery_modules):
+        if not module.is_valid():
+            continue
+        entities.extend(
+            GivEnergyAioModuleSensor(coordinator, description, module_index)
+            for description in AIO_MODULE_SENSORS
         )
 
     entities.extend(
@@ -1239,6 +1299,45 @@ class GivEnergyBatterySensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Sens
         if self._battery_index >= len(batteries):
             return None
         return self.entity_description.value_fn(batteries[self._battery_index])
+
+
+class GivEnergyAioModuleSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
+    """Per-cell sensor for one All-in-One removable battery module (#192).
+
+    Each module is its own HA device, linked to the AIO inverter as parent via
+    `via_device`, identified by the module's `HX…` serial.
+    """
+
+    _attr_has_entity_name = True
+    entity_description: GivEnergyAioModuleSensorDescription
+
+    def __init__(
+        self,
+        coordinator: GivEnergyUpdateCoordinator,
+        description: GivEnergyAioModuleSensorDescription,
+        module_index: int,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._module_index = module_index
+        module = coordinator.data.aio_battery_modules[module_index]
+        serial = module.serial_number
+        self._attr_unique_id = f"{serial}_{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, serial)},
+            name=f"GivEnergy Battery Module {serial}",
+            manufacturer="GivEnergy",
+            model="AIO Battery Module",
+            serial_number=serial,
+            via_device=(DOMAIN, coordinator.data.inverter_serial_number),
+        )
+
+    @property
+    def native_value(self) -> Any:
+        modules = self.coordinator.data.aio_battery_modules
+        if self._module_index >= len(modules):
+            return None
+        return self.entity_description.value_fn(modules[self._module_index])
 
 
 class GivEnergyCoordinatorSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
