@@ -19,7 +19,7 @@ Uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) for all i
 
 ## Supported inverters
 
-The integration uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) v2.0, which models the following device families: single-phase hybrid, three-phase hybrid, AC-coupled, EMS, Gateway, and All-in-One. Register maps for all of these shipped in v2.0, but empirical verification is still in progress for most — the mappings were brought in from the GivTCP fork, which ran across a wide range of hardware, so the coverage is broad but not all of it has been confirmed against wire data.
+The integration uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) v2.1, which models the following device families: single-phase hybrid, three-phase hybrid, AC-coupled, EMS, Gateway, and All-in-One. Register maps for all of these shipped in v2.0, but empirical verification is still in progress for most — the mappings were brought in from the GivTCP fork, which ran across a wide range of hardware, so the coverage is broad but not all of it has been confirmed against wire data.
 
 Confirmed working:
 
@@ -41,7 +41,7 @@ Service: givenergy_local.capture_frames
 Duration: 60
 ```
 
-This records a redacted copy of the raw Modbus traffic (serial numbers zeroed), saves it to `/local/`, and sends a notification with a download link. Attach the file to the issue along with your inverter model and serial prefix.
+This records a redacted copy of the raw Modbus traffic (serial numbers zeroed), saves it to `<config>/givenergy_local_captures/`, and sends a persistent notification with a download link. Attach the file to the issue along with your inverter model and serial prefix.
 
 If you don't yet have the integration installed, [givenergy-cli](https://github.com/dewet22/givenergy-cli) can produce a structured register dump instead:
 
@@ -91,13 +91,15 @@ Add the integration via **Settings → Devices & Services → Add Integration �
 
 To change any of these later, open the integration's **⋮** menu in **Settings → Devices & Services → GivEnergy Local** and choose **Reconfigure**. The integration reloads automatically when you save.
 
+![Integration ⋮ menu — Reconfigure entry](docs/config-reconfigure.png)
+
 ### Running alongside other local polling clients
 
 Both this integration and other local polling solutions (GivTCP, the GivEnergy app, custom scripts) can run in active mode at the same time without issue. The inverter handles concurrent Modbus clients reliably — earlier reports of polling conflicts were largely a consequence of retry and error-recovery behaviour in the older shared library, not an inverter limitation. Running multiple clients in parallel has been solid in practice, even at faster-than-default poll intervals.
 
 #### GivTCP long-term stats migration
 
-Running both integrations in parallel makes it easy to evaluate a switch without committing: you get a live side-by-side comparison and can cut over at your own pace. A script to migrate your long-term recorder statistics from GivTCP entity IDs to the new ones is in progress — see [`docs/migration-from-givtcp.md`](docs/migration-from-givtcp.md) — so there will be a clear path to carrying your energy history across when you're ready.
+Running both integrations in parallel makes it easy to evaluate a switch without committing: you get a live side-by-side comparison and can cut over at your own pace. A migration script (`scripts/migrate_from_givtcp.py`) carries your long-term recorder statistics across — see [`docs/migration-from-givtcp.md`](docs/migration-from-givtcp.md) for usage.
 
 #### Passive mode
 
@@ -131,7 +133,8 @@ When enabled, the integration connects to the inverter but sends no Modbus read 
 | Grid Export / Import Total | kWh | |
 | AC Voltage / Frequency | V / Hz | |
 | Load Power | W | |
-| Load Energy Today | kWh | |
+| AC Charge Today | kWh | Grid energy used to charge the battery |
+| House Consumption Today | kWh | Derived: PV + grid import − grid export − AC charge |
 | Inverter Output Today / Total | kWh | |
 | Inverter Heatsink Temperature | °C | |
 | Charger Temperature | °C | |
@@ -180,8 +183,6 @@ When enabled, the integration connects to the inverter but sends no Modbus read 
 | Discharge Slot 1 & 2 Start / End | Time | |
 | Battery Pause Slot Start / End | Time | Active window for the pause mode above |
 
-![Battery pause mode select control](docs/battery-pause-select.png)
-
 ### Battery device(s)
 
 Each connected battery pack appears as a separate device linked to the inverter. On All-in-One (AIO) hardware, devices are surfaced at pack level only — the individual module sub-devices that some other tools expose are not yet represented ([#95](https://github.com/dewet22/givenergy-hass/issues/95)).
@@ -208,9 +209,10 @@ The integration registers the following services under the `givenergy_local` dom
 
 | Service | Description |
 |---|---|
+| `givenergy_local.set_system_datetime` | Syncs the inverter's RTC clock to Home Assistant's current time. Requires a `device_id`. |
 | `givenergy_local.expose_recommended_entities` | Exposes an opinionated headline set of entities (battery SOC, PV/grid/load power, today's and lifetime energy totals, inverter status) to one or more voice/LLM assistants. Defaults to the `conversation` assistant (Assist, the LLM tools API, MCP-via-conversation); pass `assistants` to override. See **Voice assistants & LLM access** below. |
 | `givenergy_local.redetect_plant` | Clears the cached plant topology for the inverter and reloads the integration, forcing a full hardware-detection sweep. Use after adding or removing a battery. Requires a `device_id`. |
-| `givenergy_local.capture_frames` | Captures raw Modbus wire frames for a configurable duration (10–300 s, default 60 s), writes a redacted copy to `/local/`, and sends a download link via persistent notification. Serial numbers are zeroed before the file is written. Attach the file to a GitHub issue when reporting connectivity problems. |
+| `givenergy_local.capture_frames` | Captures raw Modbus wire frames for a configurable duration (10–300 s, default 60 s), writes a redacted copy to `<config>/givenergy_local_captures/`, and sends a persistent notification with a download link. Serial numbers are zeroed before the file is written. Attach the file to a GitHub issue when reporting connectivity problems. |
 | `givenergy_local.reboot_inverter` | Sends the inverter reboot command. Requires a `device_id`. |
 | `givenergy_local.calibrate_battery_soc` | Triggers a BMS SOC calibration cycle. Requires a `device_id`. |
 
@@ -225,7 +227,7 @@ strategy:
   type: custom:givenergy
   mode: classic        # classic (default) | flow | glance | analyst | all — see below
   max_power_kw: 10     # optional; default 10; Overview 24h chart y-axis envelope (kW)
-  serial: SA2114G047   # optional; pin one inverter on a multi-plant install
+  serial: SA1234G000   # optional; pin one inverter on a multi-plant install
 ```
 
 The strategy and the bundled cell-heatmap card are served by the integration itself, so there's nothing extra to install for them. `power-flow-card-plus` and `apexcharts-card` are still needed for the Overview/Energy charts (install them via **HACS → Frontend**); where they're missing the strategy shows a short placeholder rather than a broken card.
@@ -362,7 +364,7 @@ All cumulative-energy entities (kWh) are exposed with `device_class=energy` and 
 | Home battery — energy going IN | `Battery Charge Today` |
 | Home battery — energy coming OUT | `Battery Discharge Today` |
 
-The dashboard derives household consumption automatically from the above. If you'd like to track it directly as a sanity check, `Load Energy Today` measures the total household demand fed by the inverter and can be added under "Individual devices".
+The dashboard derives household consumption automatically from the above. If you'd like to track it directly as a sanity check, `House Consumption Today` measures the derived household demand and can be added under "Individual devices".
 
 ### Optional: power sensors (W, for the "Now" live view)
 
