@@ -41,7 +41,9 @@ Service: givenergy_local.capture_frames
 Duration: 60
 ```
 
-This records a redacted copy of the raw Modbus traffic (serial numbers zeroed), saves it to `<config>/givenergy_local_captures/`, and sends a persistent notification with a download link. Attach the file to the issue along with your inverter model and serial prefix.
+This records a redacted copy of the raw Modbus traffic (serial numbers zeroed), saves it to `<config>/givenergy_local_captures/`, and sends a persistent notification linking to a landing page where you can inspect the capture, download the file, or open a pre-filled GitHub issue. Attach the file to the issue along with your inverter model and serial prefix.
+
+![Capture landing page — inspect, download, or file an issue](docs/capture-landing.png)
 
 If you don't yet have the integration installed, [givenergy-cli](https://github.com/dewet22/givenergy-cli) can produce a structured register dump instead:
 
