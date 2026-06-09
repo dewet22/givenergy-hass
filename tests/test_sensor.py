@@ -2,10 +2,13 @@
 
 from unittest.mock import MagicMock
 
+import pytest
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.givenergy_local.const import DOMAIN
 from custom_components.givenergy_local.sensor import (
+    AIO_MODULE_SENSORS,
     BATTERY_SENSORS,
     COORDINATOR_SENSORS,
     INVERTER_SENSORS,
@@ -205,7 +208,6 @@ async def test_inverter_device_info(hass, setup_integration):
     registry = er.async_get(hass)
     entry = registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_p_pv")
     entity_entry = registry.async_get(entry)
-    from homeassistant.helpers import device_registry as dr
 
     dev_registry = dr.async_get(hass)
     device = dev_registry.async_get(entity_entry.device_id)
@@ -224,7 +226,6 @@ async def test_battery_device_linked_to_inverter(hass, setup_integration):
     registry = er.async_get(hass)
     entry = registry.async_get_entity_id("sensor", DOMAIN, "BT1234A001_soc")
     entity_entry = registry.async_get(entry)
-    from homeassistant.helpers import device_registry as dr
 
     dev_registry = dr.async_get(hass)
     battery_device = dev_registry.async_get(entity_entry.device_id)
@@ -301,7 +302,6 @@ async def test_bms_status_warning_rendered_as_hex(hass, setup_integration):
 
 async def test_cell_voltages_attached_to_battery_device(hass, setup_integration):
     """Per-cell sensors live on the battery device, not the inverter device."""
-    from homeassistant.helpers import device_registry as dr
 
     registry = er.async_get(hass)
     dev_registry = dr.async_get(hass)
@@ -616,3 +616,153 @@ async def test_entity_id_rename_fires_when_unique_id_already_migrated(
     migrated = registry.async_get(new_entity_id)
     assert migrated is not None, f"entity_id {new_entity_id!r} not found after migration"
     assert migrated.unique_id == "SA1234G123_grid_power"
+
+
+# ---------------------------------------------------------------------------
+# All-in-One per-module battery devices (#192)
+# ---------------------------------------------------------------------------
+
+
+def _mock_aio_module(serial: str, address: int, *, valid: bool = True) -> MagicMock:
+    """A stand-in AioBatteryModule: 24 cell voltages, 12 populated temps."""
+    module = MagicMock()
+    module.serial_number = serial
+    module.module_address = address
+    module.is_valid.return_value = valid
+    for i in range(1, 25):
+        setattr(module, f"v_cell_{i:02d}", 3.30 + i * 0.001)
+    for i in range(1, 13):
+        setattr(module, f"t_cell_{i:02d}", 20.0 + i * 0.1)
+    for i in range(13, 25):
+        setattr(module, f"t_cell_{i:02d}", 0.0)  # unpopulated on real hardware
+    return module
+
+
+def _setup_aio_plant(mock_client, modules: list[MagicMock]) -> None:
+    """Reshape the mock plant into an All-in-One exposing `modules`."""
+    from givenergy_modbus.model.inverter import Model
+    from givenergy_modbus.model.plant import PlantCapabilities
+
+    addresses = [m.module_address for m in modules]
+    mock_client.plant.aio_battery_modules = modules
+    mock_client.plant.capabilities = PlantCapabilities(
+        device_type=Model.ALL_IN_ONE,
+        inverter_address=0x31,
+        meter_addresses=[],
+        lv_battery_addresses=[],
+        bcu_stacks=[],
+        aio_battery_module_addresses=addresses,
+    )
+
+
+@pytest.fixture
+async def aio_setup(hass, mock_client, mock_config_entry):
+    """Set up the integration as an All-in-One with two valid battery modules."""
+    _setup_aio_plant(
+        mock_client,
+        [_mock_aio_module("HX2414G831", 0x50), _mock_aio_module("HX2414G832", 0x51)],
+    )
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    return mock_config_entry
+
+
+async def test_aio_modules_create_one_device_each(hass, aio_setup):
+    """Each module is its own device, keyed by serial and linked to the inverter."""
+    registry = er.async_get(hass)
+    dev_registry = dr.async_get(hass)
+    for serial in ("HX2414G831", "HX2414G832"):
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{serial}_v_cell_01")
+        assert entity_id is not None, f"module {serial} has no cell sensor"
+        device = dev_registry.async_get(registry.async_get(entity_id).device_id)
+        assert device is not None
+        assert (DOMAIN, serial) in device.identifiers
+        assert device.serial_number == serial
+        assert device.model == "AIO Battery Module"
+        assert device.via_device_id is not None  # parented to the AIO inverter
+
+
+async def test_aio_module_all_24_voltage_cells(hass, aio_setup):
+    registry = er.async_get(hass)
+    for i in range(1, 25):
+        assert (
+            registry.async_get_entity_id("sensor", DOMAIN, f"HX2414G831_v_cell_{i:02d}") is not None
+        ), f"v_cell_{i:02d} missing"
+    state = hass.states.get(_entity_id(hass, "sensor", "HX2414G831_v_cell_01"))
+    assert float(state.state) == 3.301  # 3.30 + 1*0.001
+    assert state.attributes["unit_of_measurement"] == "V"
+
+
+async def test_aio_module_entity_tracks_serial_not_list_index(hass, aio_setup):
+    """If a module drops out and the list reindexes, each entity must keep
+    reporting its own module — never cross-wire to a neighbour, and go
+    unavailable when its module is absent (#192 review)."""
+    coordinator = hass.data[DOMAIN][aio_setup.entry_id]
+    # The first module (HX2414G831) drops out of the poll; only the second
+    # (HX2414G832) remains, now at list index 0 with a distinctive cell value.
+    surviving = _mock_aio_module("HX2414G832", 0x51)
+    surviving.v_cell_01 = 3.500
+    coordinator.data.aio_battery_modules = [surviving]
+    coordinator.async_set_updated_data(coordinator.data)
+    await hass.async_block_till_done()
+
+    # The survivor reports its own value under its own serial — not the dropped
+    # module's (which would be the bug if entities indexed by position).
+    survivor_state = hass.states.get(_entity_id(hass, "sensor", "HX2414G832_v_cell_01"))
+    assert float(survivor_state.state) == 3.500
+    # The dropped module's entity goes unavailable rather than borrowing index 0.
+    dropped_state = hass.states.get(_entity_id(hass, "sensor", "HX2414G831_v_cell_01"))
+    assert dropped_state.state == "unavailable"
+
+
+async def test_aio_module_exposes_only_first_twelve_temps(hass, aio_setup):
+    """Cells 1-12 get temperature sensors; 13-24 (zero on hardware) are omitted."""
+    registry = er.async_get(hass)
+    for i in range(1, 13):
+        assert (
+            registry.async_get_entity_id("sensor", DOMAIN, f"HX2414G831_t_cell_{i:02d}") is not None
+        ), f"t_cell_{i:02d} should exist"
+    for i in range(13, 25):
+        assert (
+            registry.async_get_entity_id("sensor", DOMAIN, f"HX2414G831_t_cell_{i:02d}") is None
+        ), f"t_cell_{i:02d} should not be exposed"
+
+
+async def test_aio_module_with_invalid_serial_is_skipped(hass, mock_client, mock_config_entry):
+    """A module with a blank/invalid serial can't anchor a device, so it's skipped."""
+    _setup_aio_plant(
+        mock_client,
+        [_mock_aio_module("HX2414G831", 0x50), _mock_aio_module("", 0x51, valid=False)],
+    )
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    dev_registry = dr.async_get(hass)
+    modules = [
+        d
+        for d in dr.async_entries_for_config_entry(dev_registry, mock_config_entry.entry_id)
+        if d.model == "AIO Battery Module"
+    ]
+    assert len(modules) == 1
+    assert modules[0].serial_number == "HX2414G831"
+
+
+async def test_non_aio_plant_creates_no_module_entities(hass, setup_integration):
+    """The default (non-AIO) fixture must not create any per-module entities."""
+    dev_registry = dr.async_get(hass)
+    modules = [
+        d
+        for d in dr.async_entries_for_config_entry(dev_registry, setup_integration.entry_id)
+        if d.model == "AIO Battery Module"
+    ]
+    assert modules == []
+
+
+def test_aio_module_sensor_descriptions_cover_expected_cells():
+    """24 voltage + 12 temperature descriptions, no duplicate keys."""
+    keys = [d.key for d in AIO_MODULE_SENSORS]
+    assert len([k for k in keys if k.startswith("v_cell_")]) == 24
+    assert len([k for k in keys if k.startswith("t_cell_")]) == 12
+    assert len(keys) == len(set(keys))
