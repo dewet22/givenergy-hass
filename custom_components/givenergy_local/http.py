@@ -178,7 +178,12 @@ def _read_if_present(path: Path) -> str | None:
 
 
 def build_capture_notification_url(hass: HomeAssistant, filename: str) -> str:
-    """Signed landing-page URL for the persistent notification link."""
+    """Signed landing-page URL for the persistent notification link.
+
+    Returns a path-only URL (no origin) so the browser resolves it against
+    whatever origin the user is actually on — works correctly whether HA is
+    accessed directly or via a reverse proxy.
+    """
     return async_sign_path(hass, landing_path(filename), _SIGNED_URL_TTL)
 
 
