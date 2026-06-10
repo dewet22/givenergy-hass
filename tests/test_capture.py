@@ -311,3 +311,17 @@ async def test_signed_link_cannot_enumerate_other_captures(
     resp = await admin.get(f"/api/{DOMAIN}/capture/{captured}")
     text = await resp.text()
     assert captured in text and other in text  # admins keep the switcher
+
+
+def test_write_capture_tightens_existing_file_mode(tmp_path):
+    """O_CREAT's mode applies only on creation: overwriting a pre-existing
+    broader-mode file (same-second epoch collision) must still end up 0600
+    (review on #150)."""
+    from custom_components.givenergy_local.http import write_capture
+
+    path = tmp_path / "capture_givenergy_1700000000.txt"
+    path.write_text("old")
+    path.chmod(0o644)
+    write_capture(path, "new")
+    assert path.read_text() == "new"
+    assert path.stat().st_mode & 0o777 == 0o600

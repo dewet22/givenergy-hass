@@ -112,6 +112,10 @@ def write_capture(path: Path, content: str) -> None:
     """
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as handle:
+        # O_CREAT's mode applies only when the file is created; an overwrite
+        # (same-second epoch collision) would keep the existing file's broader
+        # mode, so enforce it on the open descriptor regardless.
+        os.fchmod(fd, 0o600)
         handle.write(content)
 
 
