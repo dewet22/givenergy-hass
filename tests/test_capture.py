@@ -174,7 +174,7 @@ async def test_landing_view_renders_page(hass, hass_client, captured):
     assert resp.status == 200
     text = await resp.text()
     assert "GivEnergy Local — Modbus wire capture" in text
-    assert captured in text  # dropdown option for this capture
+    assert captured in text  # capture caption names this file
     assert "dead" in text and "beef" in text  # frames embedded inline
     assert "/issues/new" in text  # GitHub link
 
@@ -289,13 +289,13 @@ async def test_authorized_fails_closed_when_token_ids_absent(hass):
     assert _authorized(hass, {KEY_HASS_REFRESH_TOKEN_ID: "some-token"}) is False
 
 
-async def test_signed_link_cannot_enumerate_other_captures(
+async def test_landing_page_shows_only_the_requested_capture(
     hass, hass_client_no_auth, hass_client, captured
 ):
-    """A signed link is a capability for ONE capture: the landing page it opens
-    must not mint links to (or even name) the rest of the capture history —
-    persistent notifications are visible to non-admin users (review on #150).
-    An admin bearer request still gets the full switcher."""
+    """The landing page renders exactly the one capture it was asked for and
+    never names the rest of the history — there's no switcher to enumerate
+    from, whether reached via a signed link or an admin bearer (review on
+    #150). Each capture is reached via its own notification link."""
     other = "capture_givenergy_1700000000.txt"
     (capture_dir(hass) / other).write_text("# GivEnergy\nTX: 99\n")
 
@@ -304,13 +304,14 @@ async def test_signed_link_cannot_enumerate_other_captures(
     resp = await client.get(signed)
     assert resp.status == 200
     text = await resp.text()
-    assert captured in text  # own capture still shown
+    assert captured in text  # the requested capture
     assert other not in text  # no enumeration of history
 
     admin = await hass_client()
     resp = await admin.get(f"/api/{DOMAIN}/capture/{captured}")
     text = await resp.text()
-    assert captured in text and other in text  # admins keep the switcher
+    assert captured in text
+    assert other not in text  # admins don't get a switcher either
 
 
 def test_write_capture_tightens_existing_file_mode(tmp_path):

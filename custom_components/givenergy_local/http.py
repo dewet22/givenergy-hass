@@ -144,21 +144,8 @@ def _split_header(content: str) -> tuple[str, str]:
     return "\n".join(lines[:cut]), "\n".join(lines[cut:])
 
 
-async def _list_captures(hass: HomeAssistant) -> list[str]:
-    """Capture filenames, newest first."""
-    directory = capture_dir(hass)
-
-    def _scan() -> list[str]:
-        if not directory.is_dir():
-            return []
-        names = [p.name for p in directory.iterdir() if CAPTURE_FILENAME_RE.match(p.name)]
-        return sorted(names, key=_epoch_from_filename, reverse=True)
-
-    return await hass.async_add_executor_job(_scan)
-
-
 class CaptureLandingView(HomeAssistantView):
-    """Landing page for a single capture: inspect, switch, download, file issue."""
+    """Landing page for a single capture: inspect, download, file issue."""
 
     url = "/api/" + DOMAIN + "/capture/{filename}"
     name = f"api:{DOMAIN}:capture"
@@ -178,28 +165,12 @@ class CaptureLandingView(HomeAssistantView):
         if content is None:
             return web.Response(status=404)
 
-        # A signed link is a path-bound capability for ONE capture — minting
-        # signed links for the rest of the history here would escalate it into
-        # enumerate-everything (and persistent notifications are visible to
-        # non-admin users). Only admins get the capture switcher; signed-link
-        # viewers see just the capture they were granted.
-        user = request.get(KEY_HASS_USER)
-        if user is not None and user.is_admin:
-            captures = await _list_captures(hass)
-        else:
-            captures = [filename]
+        # The page shows exactly the one capture the caller was granted. A
+        # signed link is a path-bound capability for a single file, so there's
+        # no multi-capture switcher to mint (which would escalate one link into
+        # enumerate-everything) — each capture is reached via its own
+        # notification link.
         header, body = _split_header(content)
-
-        options = []
-        for name in captures:
-            signed = _sign(hass, landing_path(name))
-            selected = " selected" if name == filename else ""
-            options.append(
-                f'<option value="{html.escape(signed, quote=True)}" '
-                f'data-epoch="{_epoch_from_filename(name)}"{selected}>'
-                f"{html.escape(name)}</option>"
-            )
-
         download_url = _sign(hass, download_path(filename))
         github_url = (
             _GITHUB_ISSUE_URL
@@ -208,7 +179,8 @@ class CaptureLandingView(HomeAssistantView):
         )
 
         page = _LANDING_TEMPLATE.format(
-            options="\n".join(options),
+            filename=html.escape(filename),
+            epoch=_epoch_from_filename(filename),
             header=html.escape(header),
             body=html.escape(body),
             download_url=html.escape(download_url, quote=True),
@@ -278,19 +250,13 @@ _LANDING_TEMPLATE = """\
                 background: #03a9f4; color: #fff; text-decoration: none;
                 border-radius: 6px; }}
   .actions a.github {{ background: #24292f; }}
-  select {{ padding: 0.4rem; }}
+  .capture {{ color: #555; }}
 </style>
 </head>
 <body>
 <h1>GivEnergy Local — Modbus wire capture</h1>
 
-<form>
-  <label>Capture:
-    <select id="capture-select" onchange="window.location = this.value;">
-{options}
-    </select>
-  </label>
-</form>
+<p class="capture">Capture: <span id="capture-when" data-epoch="{epoch}">{filename}</span></p>
 
 <pre class="env">{header}</pre>
 
@@ -303,11 +269,10 @@ _LANDING_TEMPLATE = """\
 <pre>{body}</pre>
 
 <script>
-  // Render each capture's epoch in the viewer's locale; the value stays a signed URL.
-  for (const opt of document.querySelectorAll('#capture-select option')) {{
-    const epoch = Number(opt.dataset.epoch);
-    if (epoch) opt.textContent = new Date(epoch * 1000).toLocaleString();
-  }}
+  // Render the capture's epoch in the viewer's locale (falls back to the filename).
+  const when = document.getElementById('capture-when');
+  const epoch = Number(when.dataset.epoch);
+  if (epoch) when.textContent = new Date(epoch * 1000).toLocaleString();
 </script>
 </body>
 </html>
