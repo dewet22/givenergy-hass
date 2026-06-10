@@ -8,6 +8,73 @@ that release. For releases prior to v1.1.0, see the
 
 ---
 
+## v1.2.0
+
+**Per-module All-in-One battery data**
+
+All-in-One systems now surface each removable battery module as its own device, parented
+to the AIO inverter and identified by the module's serial. Each module exposes its 24
+per-cell voltages and per-cell temperatures as diagnostic sensors, mirroring the existing
+LV battery cell entities — so the cell-balance heatmap and pack-health views work at
+module granularity. Validated end-to-end on a real four-module unit
+([#95](https://github.com/dewet22/givenergy-hass/issues/95)).
+
+**All-in-One device identity fixed**
+
+On AIO systems the inverter could collapse into one of the battery module devices: the
+underlying library adopted the inverter's serial from whichever device replied last in
+the poll cycle, and on an AIO that is usually a module. givenergy-modbus 2.2 fixes this
+at the source — only the inverter's own address updates its serial — so the inverter now
+reliably appears as its own device with the modules linked beneath it. If you ran an
+early 1.2.0 pre-release, remove and re-add the integration once to clear any stale
+entities left on a module by the old behaviour.
+
+**Capture access hardened**
+
+A full security review of the integration ([published in the repo](docs/security-review-2026-06-10.md))
+found no exploitable vulnerabilities, and its two defence-in-depth observations are
+implemented here: the wire-capture views now require an admin bearer token or one of the
+integration's own signed links (a signed link is bound to a single capture — the landing
+page no longer offers the capture history), and capture files are written readable by
+the Home Assistant user only. The capture notification also opens its landing page in a
+new tab, fixing a click that previously bounced off Home Assistant's frontend router to
+the dashboard.
+
+**Grid power split for the Energy Dashboard**
+
+New always-positive **Grid Power Import** and **Grid Power Export** sensors suit the
+Energy Dashboard's "Two sensors" grid-power option directly — previously the single
+signed Grid Power sensor needed the dashboard's "Inverted" helper, which started its
+long-term statistics from scratch. The signed sensor still exists (the flow dashboard
+uses it) but is hidden by default on new installs. Grid import/export *energy* totals
+were already separate sensors and are unchanged.
+
+**givenergy-modbus 2.2**
+
+The integration moves to the library's 2.2 line: a typed per-device plant model (the
+foundation for the per-module battery work), a unified inverter-serial accessor, a full
+security audit of the library itself, and commit-time rejection of a known data-corruption
+pattern where the WiFi dongle briefly serves all-zero register blocks — last-good values
+are kept instead of zeros reaching your sensors.
+
+**Highlights if you're coming from v1.1.0 or earlier**
+
+The 1.1.x point releases added more than their patch numbers suggest — most visibly the
+live dashboard. The `custom:givenergy` dashboard strategy (v1.1.3) builds the full
+dashboard from the live entity registry on every render, so it never goes stale when
+devices move areas or entities are renamed, and it gained three full-screen modes: an
+animated energy-flow panel (`mode: flow`, v1.1.4), a calm summary panel (`mode: glance`)
+and a dense diagnostics view (`mode: analyst`) (both v1.1.5), with the cell-balance
+heatmap card bundled — nothing extra to install. The static `generate_dashboard` service
+was deprecated and removed in its favour (v1.1.6). The same span added the debug-capture
+landing page (v1.1.2), an EMS export power limit control and a battery out-of-spec alert
+sensor (v1.1.2), missing-device resilience with fixable repairs (v1.1.6), GivTCP
+migration support for HA 2026.6's area-prefixed entity IDs (v1.1.6), and a fix for
+spurious recorder warnings on House Consumption Today (v1.1.7). Full details in the
+sections below.
+
+---
+
 ## v1.1.7
 
 **House Consumption Today: spurious recorder warnings fixed**
