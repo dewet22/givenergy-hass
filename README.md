@@ -134,7 +134,8 @@ When enabled, the integration connects to the inverter but sends no Modbus read 
 | Battery Charge Today | kWh | |
 | Battery Discharge Today | kWh | |
 | Battery Throughput Total | kWh | |
-| Grid Power | W | Positive = exporting, negative = importing |
+| Grid Power | W | Signed net flow: positive = exporting, negative = importing. Hidden by default (feeds the bundled flow card); for the Energy Dashboard use the split sensors below |
+| Grid Power Import / Export | W | Always-positive single-direction power, for the Energy Dashboard's "Two sensors" grid option — no sign inversion, so long-term statistics aren't lost |
 | Grid Export / Import Today | kWh | |
 | Grid Export / Import Total | kWh | |
 | AC Voltage / Frequency | V / Hz | |
