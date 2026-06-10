@@ -273,3 +273,17 @@ async def test_capture_written_private(hass, mock_client, capture_setup):
     (path,) = list(directory.glob("capture_givenergy_*.txt"))
     assert path.stat().st_mode & 0o777 == 0o600
     assert directory.stat().st_mode & 0o777 == 0o700
+
+
+async def test_authorized_fails_closed_when_token_ids_absent(hass):
+    """None must never satisfy the signer comparison: a request with no resolved
+    token id — and/or no content-user token in hass.data — fails closed rather
+    than matching None == None (review feedback on #150)."""
+    from homeassistant.components.http.const import KEY_HASS_REFRESH_TOKEN_ID
+
+    from custom_components.givenergy_local.http import _authorized
+
+    # Bare hass: http not set up, so no content-user token exists either side.
+    assert _authorized(hass, {}) is False
+    # Token id present but no signer token registered: still rejected.
+    assert _authorized(hass, {KEY_HASS_REFRESH_TOKEN_ID: "some-token"}) is False

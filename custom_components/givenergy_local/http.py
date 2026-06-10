@@ -94,7 +94,13 @@ def _authorized(hass: HomeAssistant, request: web.Request) -> bool:
     user = request.get(KEY_HASS_USER)
     if user is not None and user.is_admin:
         return True
-    return request.get(KEY_HASS_REFRESH_TOKEN_ID) == hass.data.get(STORAGE_KEY)
+    # Guard both sides against None before comparing: HA sets the content-user
+    # token at http setup and token-less auth paths are admin-only today, so
+    # None == None isn't currently reachable — but a future auth path that
+    # leaves either unset must fail closed, not match on None.
+    token_id = request.get(KEY_HASS_REFRESH_TOKEN_ID)
+    signer_token_id = hass.data.get(STORAGE_KEY)
+    return token_id is not None and token_id == signer_token_id
 
 
 def write_capture(path: Path, content: str) -> None:
