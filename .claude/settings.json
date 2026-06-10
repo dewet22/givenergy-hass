@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash $CLAUDE_CONFIG_DIR/scripts/check-inbox.sh",
+            "command": "bash \"$CLAUDE_CONFIG_DIR/scripts/check-inbox.sh\"",
             "statusMessage": "Checking coordination inbox..."
           }
         ]
