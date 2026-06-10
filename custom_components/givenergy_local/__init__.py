@@ -55,6 +55,7 @@ from .http import (
     CaptureLandingView,
     build_capture_notification_url,
     capture_dir,
+    write_capture,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -309,7 +310,7 @@ async def _async_register_capture_http(hass: HomeAssistant) -> None:
     Component-scope (run once from :func:`async_setup`): the views are global and
     the directory is shared across config entries, so neither belongs per-entry.
     """
-    await hass.async_add_executor_job(lambda: capture_dir(hass).mkdir(exist_ok=True))
+    await hass.async_add_executor_job(lambda: capture_dir(hass).mkdir(mode=0o700, exist_ok=True))
     if hass.http is None:
         # No web server (e.g. a minimal test harness) — nothing to serve from.
         return
@@ -602,8 +603,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 epoch = int(dt_util.utcnow().timestamp())
                 filename = f"capture_givenergy_{epoch}.txt"
                 directory = capture_dir(hass)
-                await hass.async_add_executor_job(partial(directory.mkdir, exist_ok=True))
-                await hass.async_add_executor_job((directory / filename).write_text, content)
+                await hass.async_add_executor_job(
+                    partial(directory.mkdir, mode=0o700, exist_ok=True)
+                )
+                await hass.async_add_executor_job(write_capture, directory / filename, content)
 
                 landing_url = build_capture_notification_url(hass, filename)
                 _LOGGER.info(

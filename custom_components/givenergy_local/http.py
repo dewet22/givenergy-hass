@@ -11,11 +11,21 @@ Auth note: HA's HTTP stack authenticates via a bearer header or a signed-request
 navigation from a notification would otherwise 401. Every link the user follows
 (the notification → landing URL, each dropdown entry, the download link) is
 therefore individually signed via :func:`async_sign_path` with a ~1h expiry.
+
+Access model (security review 2026-06-10): ``requires_auth = True`` alone admits
+*any* authenticated HA user, and capture filenames are epoch-guessable, so the
+views additionally require the caller to be an admin OR to have arrived via one
+of our signed links. All links are signed as HA's system "content user"
+(``use_content_user=True``), so a signed request resolves to that user's refresh
+token — :func:`_authorized` compares the request's resolved token id against it,
+which a junk ``authSig`` bolted onto a non-admin bearer request can't satisfy
+(the middleware resolves such a request to the bearer's own token).
 """
 
 from __future__ import annotations
 
 import html
+import os
 import re
 from datetime import timedelta
 from pathlib import Path
@@ -23,7 +33,8 @@ from urllib.parse import urlencode
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView  # type: ignore[attr-defined]
-from homeassistant.components.http.auth import async_sign_path
+from homeassistant.components.http.auth import STORAGE_KEY, async_sign_path
+from homeassistant.components.http.const import KEY_HASS_REFRESH_TOKEN_ID, KEY_HASS_USER
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
@@ -56,6 +67,46 @@ those in by hand.
 def capture_dir(hass: HomeAssistant) -> Path:
     """Directory holding wire captures for this integration."""
     return Path(hass.config.path(CAPTURE_DIR_NAME))
+
+
+def _sign(hass: HomeAssistant, path: str) -> str:
+    """Sign a capture path as the content user, so the signer is deterministic.
+
+    Signing inside a request handler would otherwise bind the link to the
+    *viewing* user's refresh token (whatever the ambient context is), which
+    `_authorized` couldn't distinguish from an arbitrary bearer. The content
+    user is HA's system identity for exactly this serve-signed-content case.
+    """
+    return async_sign_path(hass, path, _SIGNED_URL_TTL, use_content_user=True)
+
+
+def _authorized(hass: HomeAssistant, request: web.Request) -> bool:
+    """Admins, or requests that arrived via one of our signed links.
+
+    `requires_auth = True` already rejected anonymous callers; this tightens
+    the rest (security review 2026-06-10): a non-admin bearer token must not
+    be able to enumerate epoch-named captures. Signed links resolve to the
+    content user's refresh token — comparing the request's resolved token id
+    against it (rather than sniffing for an `authSig` query param) means a
+    junk signature appended to a bearer request still authenticates as the
+    bearer and is rejected here.
+    """
+    user = request.get(KEY_HASS_USER)
+    if user is not None and user.is_admin:
+        return True
+    return request.get(KEY_HASS_REFRESH_TOKEN_ID) == hass.data.get(STORAGE_KEY)
+
+
+def write_capture(path: Path, content: str) -> None:
+    """Write a capture file readable by the HA user only (0600).
+
+    Capture contents are already redacted, but there's no reason to leave them
+    broader than needed on a multi-user host (security review 2026-06-10).
+    Runs in an executor — blocking I/O.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(content)
 
 
 def landing_path(filename: str) -> str:
@@ -107,6 +158,8 @@ class CaptureLandingView(HomeAssistantView):
         self.hass = hass
 
     async def get(self, request: web.Request, filename: str) -> web.StreamResponse:
+        if not _authorized(self.hass, request):
+            return web.Response(status=403)
         if not CAPTURE_FILENAME_RE.match(filename):
             return web.Response(status=404)
         hass = self.hass
@@ -120,7 +173,7 @@ class CaptureLandingView(HomeAssistantView):
 
         options = []
         for name in captures:
-            signed = async_sign_path(hass, landing_path(name), _SIGNED_URL_TTL)
+            signed = _sign(hass, landing_path(name))
             selected = " selected" if name == filename else ""
             options.append(
                 f'<option value="{html.escape(signed, quote=True)}" '
@@ -128,7 +181,7 @@ class CaptureLandingView(HomeAssistantView):
                 f"{html.escape(name)}</option>"
             )
 
-        download_url = async_sign_path(hass, download_path(filename), _SIGNED_URL_TTL)
+        download_url = _sign(hass, download_path(filename))
         github_url = (
             _GITHUB_ISSUE_URL
             + "?"
@@ -156,6 +209,8 @@ class CaptureDownloadView(HomeAssistantView):
         self.hass = hass
 
     async def get(self, request: web.Request, filename: str) -> web.StreamResponse:
+        if not _authorized(self.hass, request):
+            return web.Response(status=403)
         if not CAPTURE_FILENAME_RE.match(filename):
             return web.Response(status=404)
         hass = self.hass
@@ -184,7 +239,7 @@ def build_capture_notification_url(hass: HomeAssistant, filename: str) -> str:
     whatever origin the user is actually on — works correctly whether HA is
     accessed directly or via a reverse proxy.
     """
-    return async_sign_path(hass, landing_path(filename), _SIGNED_URL_TTL)
+    return _sign(hass, landing_path(filename))
 
 
 _LANDING_TEMPLATE = """\
