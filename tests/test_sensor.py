@@ -766,3 +766,43 @@ def test_aio_module_sensor_descriptions_cover_expected_cells():
     assert len([k for k in keys if k.startswith("v_cell_")]) == 24
     assert len([k for k in keys if k.startswith("t_cell_")]) == 12
     assert len(keys) == len(set(keys))
+
+
+# ---------------------------------------------------------------------------
+# Split grid import/export power sensors (Energy Dashboard "Two sensors")
+# ---------------------------------------------------------------------------
+
+
+def test_grid_split_power_helpers_resolve_both_directions():
+    """Each helper is the always-positive magnitude of its own direction, 0 in
+    the other, and None before the first poll."""
+    from custom_components.givenergy_local.sensor import _grid_export_power, _grid_import_power
+
+    exporting = MagicMock(p_grid_out=1500)
+    importing = MagicMock(p_grid_out=-800)
+    unpolled = MagicMock(p_grid_out=None)
+
+    assert _grid_export_power(exporting) == 1500
+    assert _grid_import_power(exporting) == 0
+    assert _grid_import_power(importing) == 800
+    assert _grid_export_power(importing) == 0
+    assert _grid_export_power(unpolled) is None
+    assert _grid_import_power(unpolled) is None
+
+
+async def test_grid_split_power_sensors_created(hass, setup_integration):
+    """Both split power sensors are created; mock p_grid_out=-800 (importing)."""
+    imp = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_grid_power_import"))
+    exp = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_grid_power_export"))
+    assert float(imp.state) == 800
+    assert float(exp.state) == 0
+    assert imp.attributes["unit_of_measurement"] == "W"
+    assert imp.attributes["device_class"] == "power"
+
+
+async def test_grid_power_hidden_by_default(hass, setup_integration):
+    """The signed bidirectional grid_power stays recorded (the bundled flow card
+    keys off it) but is hidden by default in favour of the split sensors."""
+    registry = er.async_get(hass)
+    entry = registry.async_get(_entity_id(hass, "sensor", "SA1234G123_grid_power"))
+    assert entry.hidden_by is not None

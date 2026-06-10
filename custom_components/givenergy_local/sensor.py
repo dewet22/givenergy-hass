@@ -127,6 +127,21 @@ class GivEnergyCoordinatorSensorDescription(SensorEntityDescription):
     attributes_fn: Callable[[GivEnergyUpdateCoordinator], dict[str, Any] | None] | None = None
 
 
+# `grid_power` (p_grid_out) is a single signed value, positive = export. HA's
+# Energy Dashboard wants two always-positive power sensors (its "Two sensors"
+# grid option), so split the direction out — mirroring how grid energy is
+# already exposed as separate import/export totals. None passes through so the
+# sensors read `unknown` rather than 0 before the first poll.
+def _grid_export_power(inv: InverterModel) -> float | None:
+    p = inv.p_grid_out
+    return max(p, 0) if p is not None else None
+
+
+def _grid_import_power(inv: InverterModel) -> float | None:
+    p = inv.p_grid_out
+    return max(-p, 0) if p is not None else None
+
+
 INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     # --- Status ---
     GivEnergyInverterSensorDescription(
@@ -397,6 +412,35 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda inv: inv.p_grid_out,
+        # Signed, positive = export — the right shape for the bundled flow card
+        # (which keys off it), but the opposite of HA's Energy-Dashboard sign and
+        # awkward to read standalone. Hidden by default in favour of the split
+        # import/export power sensors below; still recorded, so the flow card and
+        # any existing user references keep working.
+        entity_registry_visible_default=False,
+    ),
+    # Split, always-positive direction sensors for HA's Energy Dashboard "Two
+    # sensors" grid-power option — no inversion helper (which would start its
+    # long-term statistics from scratch). Named "Grid Power Import/Export" rather
+    # than "Grid Import/Export Power" deliberately: the latter's `grid_export_power`
+    # slug is the legacy entity_id of today's `grid_power` and is actively reclaimed
+    # by the unique_id migration (see _RENAMED_UNIQUE_ID_SUFFIXES), so reusing it
+    # would collide.
+    GivEnergyInverterSensorDescription(
+        key="grid_power_import",
+        name="Grid Power Import",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_grid_import_power,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="grid_power_export",
+        name="Grid Power Export",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_grid_export_power,
     ),
     GivEnergyInverterSensorDescription(
         key="e_grid_out_day",
