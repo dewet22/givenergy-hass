@@ -287,3 +287,27 @@ async def test_authorized_fails_closed_when_token_ids_absent(hass):
     assert _authorized(hass, {}) is False
     # Token id present but no signer token registered: still rejected.
     assert _authorized(hass, {KEY_HASS_REFRESH_TOKEN_ID: "some-token"}) is False
+
+
+async def test_signed_link_cannot_enumerate_other_captures(
+    hass, hass_client_no_auth, hass_client, captured
+):
+    """A signed link is a capability for ONE capture: the landing page it opens
+    must not mint links to (or even name) the rest of the capture history —
+    persistent notifications are visible to non-admin users (review on #150).
+    An admin bearer request still gets the full switcher."""
+    other = "capture_givenergy_1700000000.txt"
+    (capture_dir(hass) / other).write_text("# GivEnergy\nTX: 99\n")
+
+    signed = build_capture_notification_url(hass, captured)
+    client = await hass_client_no_auth()
+    resp = await client.get(signed)
+    assert resp.status == 200
+    text = await resp.text()
+    assert captured in text  # own capture still shown
+    assert other not in text  # no enumeration of history
+
+    admin = await hass_client()
+    resp = await admin.get(f"/api/{DOMAIN}/capture/{captured}")
+    text = await resp.text()
+    assert captured in text and other in text  # admins keep the switcher

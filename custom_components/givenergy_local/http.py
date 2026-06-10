@@ -174,7 +174,16 @@ class CaptureLandingView(HomeAssistantView):
         if content is None:
             return web.Response(status=404)
 
-        captures = await _list_captures(hass)
+        # A signed link is a path-bound capability for ONE capture — minting
+        # signed links for the rest of the history here would escalate it into
+        # enumerate-everything (and persistent notifications are visible to
+        # non-admin users). Only admins get the capture switcher; signed-link
+        # viewers see just the capture they were granted.
+        user = request.get(KEY_HASS_USER)
+        if user is not None and user.is_admin:
+            captures = await _list_captures(hass)
+        else:
+            captures = [filename]
         header, body = _split_header(content)
 
         options = []
