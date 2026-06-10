@@ -19,19 +19,19 @@ Uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) for all i
 
 ## Supported inverters
 
-The integration uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) v2.2, which models the following device families: single-phase hybrid, three-phase hybrid, AC-coupled, EMS, Gateway, and All-in-One. Register maps for all of these shipped in v2.0, but empirical verification is still in progress for most — the mappings were brought in from the GivTCP fork, which ran across a wide range of hardware, so the coverage is broad but not all of it has been confirmed against wire data.
+The integration uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) v2.2, which models the following device families: single-phase hybrid, three-phase hybrid, AC-coupled, EMS, Gateway, and All-in-One. The register maps were originally brought in from the GivTCP fork, and a growing share has since been confirmed against wire captures from real hardware — much of it thanks to owners contributing captures and testing pre-releases ([#52](https://github.com/dewet22/givenergy-hass/issues/52), [#95](https://github.com/dewet22/givenergy-hass/issues/95)).
 
-Confirmed working:
+Confirmed working on real hardware:
 
 - Hybrid single-phase (Gen 1)
 - AC-coupled (Gen 1)
+- All-in-One (AIO) — including per-module battery devices with per-cell data; needs v1.2.0 or later
+- EMS controller — validated on a live two-inverter EMS plant; some polling rough edges on busy shared buses are still being smoothed out in the library
 
-The following have modelled register maps and are expected to work, but would benefit from owner validation — if yours is one of these and you run into sensor values that look wrong, please [open an issue](https://github.com/dewet22/givenergy-hass/issues):
+The following have modelled register maps and are expected to work, but haven't yet been validated end-to-end by an owner — if yours is one of these and you run into sensor values that look wrong, please [open an issue](https://github.com/dewet22/givenergy-hass/issues):
 
 - Hybrid three-phase
-- All-in-One (AIO)
-- EMS controller
-- Gateway (V1 / V2)
+- Gateway (V1 / V2) — register layout decoded from owner probes, but the integration hasn't been run against one directly
 - HV battery stacks (BCU/BMU)
 
 If you'd like to help validate, a wire-frame capture is the most useful thing you can include. If you already have the integration running, use the built-in service from **Developer Tools → Services**:
