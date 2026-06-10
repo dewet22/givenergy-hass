@@ -8,6 +8,8 @@ download; both reject anything outside the strict capture-filename allowlist.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
@@ -172,7 +174,7 @@ async def test_landing_view_renders_page(hass, hass_client, captured):
     assert resp.status == 200
     text = await resp.text()
     assert "GivEnergy Local — Modbus wire capture" in text
-    assert captured in text  # dropdown option for this capture
+    assert captured in text  # capture caption names this file
     assert "dead" in text and "beef" in text  # frames embedded inline
     assert "/issues/new" in text  # GitHub link
 
@@ -214,3 +216,113 @@ async def test_unsigned_download_without_auth_is_rejected(hass, hass_client_no_a
     client = await hass_client_no_auth()
     resp = await client.get(f"/api/{DOMAIN}/capture/{captured}/download")
     assert resp.status == 401
+
+
+# ---------------------------------------------------------------------------
+# Access hardening (security review 2026-06-10, issue #149)
+# ---------------------------------------------------------------------------
+
+
+async def test_non_admin_bearer_is_rejected(
+    hass, hass_client, hass_read_only_access_token, captured
+):
+    """A non-admin bearer token must not be able to read captures directly —
+    epoch-based filenames are guessable, so plain `requires_auth` would let any
+    authenticated user enumerate them."""
+    client = await hass_client(hass_read_only_access_token)
+    resp = await client.get(f"/api/{DOMAIN}/capture/{captured}")
+    assert resp.status == 403
+    resp = await client.get(f"/api/{DOMAIN}/capture/{captured}/download")
+    assert resp.status == 403
+
+
+async def test_non_admin_with_junk_authsig_is_rejected(
+    hass, hass_client, hass_read_only_access_token, captured
+):
+    """A junk authSig appended to a non-admin bearer request must not pass the
+    gate — the middleware authenticates via the bearer header, so the request
+    resolves to the bearer's own token, not the content user's."""
+    client = await hass_client(hass_read_only_access_token)
+    resp = await client.get(f"/api/{DOMAIN}/capture/{captured}?authSig=junk")
+    assert resp.status == 403
+
+
+async def test_notification_link_works_without_auth(
+    hass, hass_client_no_auth, mock_client, capture_setup
+):
+    """End-to-end: the URL in the persistent notification opens the landing page
+    with no bearer token at all (browser navigation) — the signed link is the
+    capability."""
+    mock_client.capture_frames.side_effect = _make_capture_sink(["TX: dead"])
+    await hass.services.async_call(DOMAIN, SERVICE_CAPTURE_FRAMES, {"duration": 10}, blocking=True)
+    notifications = hass.data.get("persistent_notification", {})
+    note = next(n for nid, n in notifications.items() if "givenergy_capture_" in nid)
+    href = re.search(r'href="([^"]+)"', note["message"]).group(1)
+    client = await hass_client_no_auth()
+    resp = await client.get(href)
+    assert resp.status == 200
+    assert "GivEnergy Local — Modbus wire capture" in await resp.text()
+
+
+async def test_capture_written_private(hass, mock_client, capture_setup):
+    """Capture files land 0600 and the capture dir 0700 — no reason to be
+    readable beyond the HA user on a multi-user host."""
+    mock_client.capture_frames.side_effect = _make_capture_sink(["TX: 0102"])
+    await hass.services.async_call(DOMAIN, SERVICE_CAPTURE_FRAMES, {"duration": 10}, blocking=True)
+    directory = capture_dir(hass)
+    (path,) = list(directory.glob("capture_givenergy_*.txt"))
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert directory.stat().st_mode & 0o777 == 0o700
+
+
+async def test_authorized_fails_closed_when_token_ids_absent(hass):
+    """None must never satisfy the signer comparison: a request with no resolved
+    token id — and/or no content-user token in hass.data — fails closed rather
+    than matching None == None (review feedback on #150)."""
+    from homeassistant.components.http.const import KEY_HASS_REFRESH_TOKEN_ID
+
+    from custom_components.givenergy_local.http import _authorized
+
+    # Bare hass: http not set up, so no content-user token exists either side.
+    assert _authorized(hass, {}) is False
+    # Token id present but no signer token registered: still rejected.
+    assert _authorized(hass, {KEY_HASS_REFRESH_TOKEN_ID: "some-token"}) is False
+
+
+async def test_landing_page_shows_only_the_requested_capture(
+    hass, hass_client_no_auth, hass_client, captured
+):
+    """The landing page renders exactly the one capture it was asked for and
+    never names the rest of the history — there's no switcher to enumerate
+    from, whether reached via a signed link or an admin bearer (review on
+    #150). Each capture is reached via its own notification link."""
+    other = "capture_givenergy_1700000000.txt"
+    (capture_dir(hass) / other).write_text("# GivEnergy\nTX: 99\n")
+
+    signed = build_capture_notification_url(hass, captured)
+    client = await hass_client_no_auth()
+    resp = await client.get(signed)
+    assert resp.status == 200
+    text = await resp.text()
+    assert captured in text  # the requested capture
+    assert other not in text  # no enumeration of history
+
+    admin = await hass_client()
+    resp = await admin.get(f"/api/{DOMAIN}/capture/{captured}")
+    text = await resp.text()
+    assert captured in text
+    assert other not in text  # admins don't get a switcher either
+
+
+def test_write_capture_tightens_existing_file_mode(tmp_path):
+    """O_CREAT's mode applies only on creation: overwriting a pre-existing
+    broader-mode file (same-second epoch collision) must still end up 0600
+    (review on #150)."""
+    from custom_components.givenergy_local.http import write_capture
+
+    path = tmp_path / "capture_givenergy_1700000000.txt"
+    path.write_text("old")
+    path.chmod(0o644)
+    write_capture(path, "new")
+    assert path.read_text() == "new"
+    assert path.stat().st_mode & 0o777 == 0o600

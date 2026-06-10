@@ -56,6 +56,8 @@ Pattern scan for committed credentials (API keys, tokens, passwords) found nothi
 
 2. **Capture files are written with default permissions (0644).** Other local OS users on the HA host could read them — the same trust boundary as the rest of the HA config directory, so no worse than the surrounding system.
 
+> **Update (2026-06-10):** both observations have since been addressed (tracked in [#149](https://github.com/dewet22/givenergy-hass/issues/149)): the capture views now require an admin bearer token or one of the integration's signed links, and capture files/directory are written `0600`/`0700`.
+
 ## Conclusion
 
 A clean, security-conscious codebase. Recent commit history (SHA-pinning actions, `persist-credentials: false`, safe notification-link handling) shows active attention to security, and it is reflected consistently throughout the code.
