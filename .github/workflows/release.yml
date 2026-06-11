@@ -24,7 +24,12 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           # Require an annotated tag — the message becomes the release blurb.
-          blurb="$(git tag -l --format='%(contents)' "$TAG" | sed '/^-----BEGIN PGP/,/^-----END PGP/d' | sed 's/[[:space:]]*$//' | sed '/^$/d')"
+          # Keep interior blank lines: they are the markdown paragraph breaks
+          # between the blurb's heading+paragraph blocks. Deleting them (the
+          # old `sed '/^$/d'`) flattened multi-paragraph blurbs into one blob
+          # in the HACS update dialog (v1.3.0). Command substitution already
+          # trims trailing newlines, so the emptiness check below still holds.
+          blurb="$(git tag -l --format='%(contents)' "$TAG" | sed '/^-----BEGIN PGP/,/^-----END PGP/d' | sed 's/[[:space:]]*$//')"
           if [ -z "$blurb" ]; then
             echo "::error::Tag '$TAG' has no message. Use 'git tag -a $TAG -m \"...\"' to add a release blurb."
             exit 1
