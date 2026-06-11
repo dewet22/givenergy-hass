@@ -499,22 +499,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await coordinator.async_config_entry_first_refresh()
 
-    # Seed the cache on cold start (no prior loaded). Warm-hit doesn't need a
-    # write — the prior we just loaded is what's on the wire. Mismatch is
-    # already covered by _on_topology_changed having saved exc.actual.
+    # Seed the cache on cold start (no prior loaded), and FRESHEN it on a warm
+    # hit whose live capabilities drifted from the cache: detect() rebuilds the
+    # capabilities from the wire, so derived fields can legitimately change
+    # under us — givenergy-modbus 2.3.0's 0x31 read-alias retirement (#249) is
+    # the motivating case, where a persisted inverter_address=0x31 works only
+    # via the hardware facade and is expected to self-heal by the consumer
+    # re-persisting after detect(). The matching warm hit stays write-free.
+    # Mismatch is already covered by _on_topology_changed having saved exc.actual.
     #
-    # Only persist a CLEAN seed: if the seed poll was partial (last_partial_failures
+    # Only persist a CLEAN poll: if the seed poll was partial (last_partial_failures
     # non-empty), the integration still loads (coordinator serves the partial), but
     # we don't commit a possibly-degraded topology to disk — flaky kit could
     # otherwise vanish permanently on the next warm start. A permanently-partial
     # plant re-detects fresh each cold start and self-heals to a clean persist once
     # the read succeeds.
-    if (
-        prior_capabilities is None
-        and coordinator.data.capabilities is not None
-        and not coordinator.last_partial_failures
-    ):
-        await _save_capabilities(hass, entry.entry_id, coordinator.data.capabilities)
+    live_capabilities = coordinator.data.capabilities
+    if live_capabilities is not None and not coordinator.last_partial_failures:
+        if prior_capabilities is None:
+            await _save_capabilities(hass, entry.entry_id, live_capabilities)
+        elif live_capabilities != prior_capabilities and not missing_devices(
+            prior_capabilities, live_capabilities
+        ):
+            # Never freshen with a loss-reduced topology: after a persistent
+            # loss the served capabilities are deliberately reduced for the
+            # tick while the full prior stays cached for the next re-probe.
+            await _save_capabilities(hass, entry.entry_id, live_capabilities)
+            # Reconnect detect() hints should follow the wire too, not the
+            # stale cache we loaded at startup.
+            coordinator._prior_capabilities = live_capabilities
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 

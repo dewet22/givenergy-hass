@@ -16,6 +16,7 @@ from givenergy_modbus.model.inverter import (
     Status,
     UsbDevice,
 )
+from givenergy_modbus.model.register import Register
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -42,7 +43,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
-from .coordinator import GivEnergyUpdateCoordinator, InverterModel, ir_register_age
+from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1277,25 +1278,22 @@ _STALE_IR_CEILING_FLOOR = 300.0  # seconds
 _STALE_IR_CEILING_SCANS = 10
 
 
-def _source_ir_registers(model_cls: type, key: str) -> tuple[int, ...]:
-    """The input-register indexes backing ``key`` on ``model_cls``, () if none.
+def _source_ir_registers(model_cls: type, key: str) -> tuple[Register, ...]:
+    """The input registers backing ``key`` on ``model_cls``, () if none.
 
-    Resolved through the model's register LUT, so it tracks whatever layout the
-    concrete model (single/three-phase, …) actually has — never a hardcoded
-    bank list. Computed fields aren't in the LUT and HR-backed fields are
-    filtered out (HR banks are only re-read every few ticks by design, so
-    their age is not a staleness signal); both resolve to () and keep the
-    default coordinator availability. Mock model classes in tests also land
-    here, via the getattr fallbacks.
+    Resolved through the model's public ``registers_of()`` accessor
+    (givenergy-modbus 2.3.0, #248), so it tracks whatever layout the concrete
+    model (single/three-phase, …) actually has — never a hardcoded bank list.
+    Computed fields aren't in the LUT and HR-backed fields are filtered out
+    (HR banks are only re-read every few ticks by design, so their age is not
+    a staleness signal); both resolve to () and keep the default coordinator
+    availability. Mock model classes in tests also land here, via the getattr
+    fallback.
     """
     getter = getattr(model_cls, "REGISTER_GETTER", None)
-    lut = getattr(getter, "REGISTER_LUT", None)
-    defn = lut.get(key) if lut is not None else None
-    if defn is None:
+    if getter is None:
         return ()
-    # Register._idx is the library's storage for the numeric index; there's no
-    # public accessor yet (givenergy-modbus is a sister project, tracked there).
-    return tuple(r._idx for r in defn.registers if type(r).__name__ == "IR")
+    return tuple(r for r in getter.registers_of(key) if r.reg_type == "IR")
 
 
 class GivEnergyInverterSensor(
@@ -1359,7 +1357,8 @@ class GivEnergyInverterSensor(
     def available(self) -> bool:
         """Drop to unavailable when a backing IR bank has stopped committing (#152).
 
-        Keyed off the plant's stamped block windows generically — which banks a
+        Freshness comes from the library's Plant.register_age() (2.3.0, #248),
+        which scans the stamped block windows generically — which banks a
         device serves varies by model and address. Sensors with no resolvable
         IR source (computed fields, HR-backed config) keep the default
         coordinator availability, as does a never-committed bank.
@@ -1372,7 +1371,7 @@ class GivEnergyInverterSensor(
         if capabilities is None:
             return True
         for register in self._source_ir_registers:
-            age = ir_register_age(self.coordinator.data, capabilities.inverter_address, register)
+            age = self.coordinator.data.register_age(capabilities.inverter_address, register)
             if age is not None and age > self._stale_ir_ceiling:
                 return False
         return True
