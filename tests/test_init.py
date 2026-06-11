@@ -520,6 +520,70 @@ async def test_cold_start_skips_capabilities_persist_on_partial_seed(
     save_mock.assert_not_awaited()
 
 
+async def test_warm_start_freshens_persisted_capabilities_on_drift(
+    hass, mock_client, mock_config_entry
+):
+    """A warm start whose live capabilities differ from the loaded cache must
+    re-persist the live ones and update the coordinator's reconnect hint.
+    Motivating case: givenergy-modbus 2.3.0 retired the 0x31 read-alias (#249) —
+    a cache persisted with inverter_address=0x31 keeps working only via the
+    hardware facade and is expected to self-heal via the consumer re-persisting
+    after detect()."""
+    stale_prior = PlantCapabilities(
+        device_type=Model.HYBRID,
+        inverter_address=0x31,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
+    mock_config_entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.givenergy_local._load_capabilities",
+            new=AsyncMock(return_value=stale_prior),
+        ),
+        patch("custom_components.givenergy_local._save_capabilities", new=AsyncMock()) as save_mock,
+    ):
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    # Live capabilities (conftest: inverter_address=0x32) drifted from the
+    # 0x31 cache → re-persisted, and the reconnect hint follows the wire.
+    save_mock.assert_awaited_once_with(
+        hass, mock_config_entry.entry_id, mock_client.plant.capabilities
+    )
+    coordinator = hass.data[DOMAIN][mock_config_entry.entry_id]
+    assert coordinator._prior_capabilities is mock_client.plant.capabilities
+
+
+async def test_warm_start_with_matching_cache_does_not_rewrite(
+    hass, mock_client, mock_config_entry
+):
+    """A warm hit whose cache structurally equals the live capabilities must not
+    write — the historic write-avoidance stays for the steady state."""
+    matching_prior = PlantCapabilities(
+        device_type=Model.HYBRID,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
+    mock_config_entry.add_to_hass(hass)
+
+    with (
+        patch(
+            "custom_components.givenergy_local._load_capabilities",
+            new=AsyncMock(return_value=matching_prior),
+        ),
+        patch("custom_components.givenergy_local._save_capabilities", new=AsyncMock()) as save_mock,
+    ):
+        await hass.config_entries.async_setup(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    save_mock.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # Capabilities Store helper unit tests
 # ---------------------------------------------------------------------------
