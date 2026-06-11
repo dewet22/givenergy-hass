@@ -1003,8 +1003,21 @@ def test_missing_devices_classification():
     assert missing_devices(_caps(bcu_stacks=[(0, 4)]), _caps(bcu_stacks=[(0, 2)])) == [
         "HV stack at 0x70 (2 of 4 modules)"
     ]
+    # AIO battery module dropped (#148).
+    assert missing_devices(
+        _caps(aio_battery_module_addresses=[0x50, 0x51]),
+        _caps(aio_battery_module_addresses=[0x50]),
+    ) == ["AIO battery module at 0x51"]
     # An add is not a loss.
     assert missing_devices(_caps(lv_battery_addresses=[0x32]), base) == []
+    # An AIO module add is not a loss either.
+    assert (
+        missing_devices(
+            _caps(aio_battery_module_addresses=[0x50]),
+            _caps(aio_battery_module_addresses=[0x50, 0x51]),
+        )
+        == []
+    )
     # A device_type change is not a loss (the routine reload path handles it).
     assert missing_devices(_caps(), _caps(device_type=Model.AC)) == []
     # No prior (cold start) is not a loss.

@@ -45,6 +45,7 @@ EXPOSE_RECOMMENDED_ENTITY_KEYS = (
     # Load / Consumption
     "p_load_demand",
     "e_consumption_today",
+    "e_load_total",  # three-phase only — silently skipped elsewhere
     # PV generation total (was e_inverter_out_total / "Inverter Output Total")
     "e_pv_generation_total",
     # Health — entity description's `key` is "status"; `inverter_status` is

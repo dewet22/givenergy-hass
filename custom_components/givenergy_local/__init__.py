@@ -459,11 +459,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             data={"entry_id": entry.entry_id, "devices": devices},
         )
 
-    async def _on_topology_healed() -> None:
+    # Capabilities snapshot the platforms built their entities from — captured
+    # after async_forward_entry_setups below. None until then, so the heal that
+    # fires during the initial connect (before any entities exist) is a no-op.
+    setup_capabilities: PlantCapabilities | None = None
+
+    async def _on_topology_healed(confirmed: PlantCapabilities) -> None:
         # Full expected topology confirmed — clear any standing "device missing"
         # repair the moment the device answers again (idempotent: a no-op when
         # no such issue exists).
         ir.async_delete_issue(hass, DOMAIN, f"expected_devices_missing_{entry.entry_id}")
+        # Entity sets are frozen at platform setup: a device that answered late
+        # (slow BMS during a warm-start detect) got no entities, and nothing
+        # creates them when it recovers. missing_devices(confirmed, setup)
+        # lists exactly those — present in the confirmed topology, absent from
+        # the snapshot entities were built from — so reload to pick them up (#148).
+        if setup_capabilities is None:
+            return
+        appeared = missing_devices(confirmed, setup_capabilities)
+        if appeared:
+            _LOGGER.info(
+                "Recovered device(s) %s had no entities created at setup; "
+                "reloading the entry to create them",
+                ", ".join(appeared),
+            )
+            hass.config_entries.async_schedule_reload(entry.entry_id)
 
     coordinator = GivEnergyUpdateCoordinator(
         hass=hass,
@@ -503,6 +523,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _migrate_unique_ids(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # The platforms have now enumerated their entities from coordinator.data —
+    # snapshot the topology that enumeration saw for the heal-path diff (#148).
+    setup_capabilities = coordinator.data.capabilities
 
     # EMS entity-id realignment prompt. An EMS controller's entities are now named
     # `givenergy_ems_…` (sensor._device_kind); existing installs still carry the old
