@@ -453,6 +453,11 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             )
         except PlantTopologyMismatch as exc:
             topology_confirmed = await self._handle_topology_mismatch(exc)
+        if self._client is None:
+            # The entry was unloaded/reloaded while _handle_topology_mismatch
+            # yielded (retry sleeps) and async_close() discarded the client —
+            # nothing to confirm against, we're shutting down.
+            return
         confirmed = self._client.plant.capabilities
         if topology_confirmed and self._on_topology_healed is not None and confirmed is not None:
             # Full expected topology is present — let the caller clear any
