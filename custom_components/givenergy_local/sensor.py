@@ -42,7 +42,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
-from .coordinator import GivEnergyUpdateCoordinator, InverterModel
+from .coordinator import GivEnergyUpdateCoordinator, InverterModel, ir_register_age
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1235,6 +1235,36 @@ def _derive_display_precision(description: SensorEntityDescription, model: Any) 
 # realistic polling noise while still detecting any meaningful midnight reset.
 _MONOTONIC_RESET_THRESHOLD = 0.5  # kWh (matches e_consumption_today's native unit)
 
+# A backing input-register bank that has stopped committing past this ceiling
+# reads as a fault, not polling jitter (#152): stale-but-plausible values
+# silently masking a dead bank are worse than going unavailable. Expressed as
+# max(floor, scans × scan interval) so longer-interval installs scale the
+# ceiling rather than false-flagging on cadence — at the 30 s default that's
+# ten missed commits.
+_STALE_IR_CEILING_FLOOR = 300.0  # seconds
+_STALE_IR_CEILING_SCANS = 10
+
+
+def _source_ir_registers(model_cls: type, key: str) -> tuple[int, ...]:
+    """The input-register indexes backing ``key`` on ``model_cls``, () if none.
+
+    Resolved through the model's register LUT, so it tracks whatever layout the
+    concrete model (single/three-phase, …) actually has — never a hardcoded
+    bank list. Computed fields aren't in the LUT and HR-backed fields are
+    filtered out (HR banks are only re-read every few ticks by design, so
+    their age is not a staleness signal); both resolve to () and keep the
+    default coordinator availability. Mock model classes in tests also land
+    here, via the getattr fallbacks.
+    """
+    getter = getattr(model_cls, "REGISTER_GETTER", None)
+    lut = getattr(getter, "REGISTER_LUT", None)
+    defn = lut.get(key) if lut is not None else None
+    if defn is None:
+        return ()
+    # Register._idx is the library's storage for the numeric index; there's no
+    # public accessor yet (givenergy-modbus is a sister project, tracked there).
+    return tuple(r._idx for r in defn.registers if type(r).__name__ == "IR")
+
 
 class GivEnergyInverterSensor(
     CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity, RestoreEntity
@@ -1251,6 +1281,14 @@ class GivEnergyInverterSensor(
         self.entity_description = description
         self._monotonic_max: float | None = None
         self._monotonic_date: date | None = None
+        self._source_ir_registers = _source_ir_registers(
+            type(coordinator.data.inverter), description.key
+        )
+        interval = coordinator.update_interval
+        self._stale_ir_ceiling = max(
+            _STALE_IR_CEILING_FLOOR,
+            _STALE_IR_CEILING_SCANS * (interval.total_seconds() if interval else 0.0),
+        )
         precision = _derive_display_precision(description, coordinator.data.inverter)
         if precision is not None:
             self._attr_suggested_display_precision = precision
@@ -1284,6 +1322,28 @@ class GivEnergyInverterSensor(
             # the new baseline while the recorder still holds the higher value.
             self._monotonic_max = restored
             self._monotonic_date = last_date
+
+    @property
+    def available(self) -> bool:
+        """Drop to unavailable when a backing IR bank has stopped committing (#152).
+
+        Keyed off the plant's stamped block windows generically — which banks a
+        device serves varies by model and address. Sensors with no resolvable
+        IR source (computed fields, HR-backed config) keep the default
+        coordinator availability, as does a never-committed bank.
+        """
+        if not super().available:
+            return False
+        if not self._source_ir_registers:
+            return True
+        capabilities = self.coordinator.data.capabilities
+        if capabilities is None:
+            return True
+        for register in self._source_ir_registers:
+            age = ir_register_age(self.coordinator.data, capabilities.inverter_address, register)
+            if age is not None and age > self._stale_ir_ceiling:
+                return False
+        return True
 
     @property
     def native_value(self) -> Any:

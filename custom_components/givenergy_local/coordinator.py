@@ -105,6 +105,27 @@ def missing_devices(prior: PlantCapabilities | None, actual: PlantCapabilities) 
     return missing
 
 
+def ir_register_age(
+    plant: Plant, device_address: int, register: int, *, now: datetime | None = None
+) -> float | None:
+    """Seconds since the freshest stamped IR window containing ``register`` committed.
+
+    Scans the plant's stamped block windows rather than assuming a fixed
+    60-register layout — which banks exist (and at what width) varies by model
+    and device address. Returns None when no stamped window covers the register:
+    a never-committed bank is not a staleness signal — the Pattern B shape is a
+    bank that committed real data and then stopped (#152).
+    """
+    stamps = [
+        stamped
+        for (dev, reg_type, base, count), stamped in plant.register_block_updated_at.items()
+        if dev == device_address and reg_type == "IR" and base <= register < base + count
+    ]
+    if not stamps:
+        return None
+    return ((now or dt_util.utcnow()) - max(stamps)).total_seconds()
+
+
 class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
     """Wraps a long-lived Modbus Client, polling the inverter on a fixed interval.
 
