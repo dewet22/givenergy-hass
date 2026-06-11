@@ -145,8 +145,9 @@ async def test_expected_sensor_count(hass, setup_integration):
     registry = er.async_get(hass)
     entries = er.async_entries_for_config_entry(registry, setup_integration.entry_id)
     sensors = [e for e in entries if e.domain == "sensor"]
-    # 1 battery → inverter sensors + battery sensors + coordinator diagnostics
-    expected = len(INVERTER_SENSORS) + len(BATTERY_SENSORS) + len(COORDINATOR_SENSORS)
+    # 1 battery → inverter sensors + battery sensors + coordinator diagnostics,
+    # minus e_load_total which only exists on three-phase models (#154).
+    expected = len(INVERTER_SENSORS) + len(BATTERY_SENSORS) + len(COORDINATOR_SENSORS) - 1
     assert len(sensors) == expected
 
 
@@ -459,6 +460,45 @@ async def test_house_consumption_today_sensor(hass, setup_integration):
     """The new derived consumption sensor (the dashboard's real 'Consumed')."""
     state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_e_consumption_today"))
     assert state.state == "21.4"
+
+
+async def test_house_consumption_today_uses_native_register_on_three_phase(
+    hass, mock_client, mock_config_entry
+):
+    """Three-phase inverters meter consumption directly (e_load_today, IR 1396-1397),
+    so the same entity key reads the native register there instead of the derived
+    single-phase field — dashboards keyed on e_consumption_today keep working (#154).
+    The native lifetime counter surfaces alongside it as e_load_total."""
+    from givenergy_modbus.model.inverter import Model
+    from givenergy_modbus.model.plant import PlantCapabilities
+
+    inv = mock_client.plant.inverter
+    del inv.e_consumption_today  # derived field exists only on single-phase models
+    inv.e_load_today = 6.2
+    inv.e_load_total = 1234.5
+    mock_client.plant.capabilities = PlantCapabilities(
+        device_type=Model.HYBRID_3PH,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_e_consumption_today"))
+    assert state.state == "6.2"
+    total = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_e_load_total"))
+    assert total.state == "1234.5"
+
+
+async def test_house_consumption_total_absent_on_single_phase(hass, setup_integration):
+    """Single-phase units expose no native lifetime consumption register, so the
+    e_load_total sensor must not be created there."""
+    registry = er.async_get(hass)
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_load_total") is None
 
 
 async def test_ac_charge_today_sensor_replaces_load_energy(hass, setup_integration):

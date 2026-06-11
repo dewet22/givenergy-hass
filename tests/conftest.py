@@ -73,6 +73,12 @@ def mock_inverter() -> MagicMock:
     # are PV generation. Consumption is derived. All entity keys renamed in 2.1.1/2.
     inv.e_ac_charge_today = 3.8
     inv.e_consumption_today = 21.4
+    # Native load registers (IR 1396-1399) exist only on three-phase models —
+    # mirror the real model so the mock can't fabricate fields the sensors
+    # then break on. Three-phase tests set these (and delete the derived
+    # e_consumption_today) explicitly.
+    del inv.e_load_today
+    del inv.e_load_total
     inv.e_pv_generation_today = 11.2
     inv.e_pv_generation_total = 5100.2
     inv.t_inverter_heatsink = 45.3
