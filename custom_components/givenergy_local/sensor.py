@@ -596,6 +596,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
             inv, "e_consumption_today", getattr(inv, "e_load_today", None)
         ),
         skip_if_none=True,
+        # Resolves per-model: e_load_today isn't in the single-phase LUT (the
+        # derived value stays untracked for staleness), but on three-phase it
+        # names the native register the value_fn falls back to (#152/#158).
+        source_field="e_load_today",
     ),
     GivEnergyInverterSensorDescription(
         # Native lifetime consumption counter (IR 1398-1399) — three-phase

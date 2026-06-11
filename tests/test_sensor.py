@@ -878,10 +878,12 @@ def test_renamed_direct_register_sensors_declare_their_source_field():
     """Descriptors whose entity key differs from the model field they read must
     carry source_field, or they'd silently fall outside the stale-bank protection
     (Codex review on #158): grid_power* all read p_grid_out, work_time_total
-    reads work_time_total_hours. Genuinely computed/derived fields (multi-register
-    sums, per-model aliases like the battery charge/discharge canonical names)
-    stay deliberately untracked."""
+    reads work_time_total_hours, and the consumption sensor's three-phase path
+    reads the native e_load_today (#156 follow-up). Genuinely computed/derived
+    fields (multi-register sums, per-model aliases like the battery
+    charge/discharge canonical names) stay deliberately untracked."""
     from givenergy_modbus.model.inverter import SinglePhaseInverter
+    from givenergy_modbus.model.inverter_threephase import ThreePhaseInverter
 
     from custom_components.givenergy_local.sensor import _source_ir_registers
 
@@ -890,15 +892,22 @@ def test_renamed_direct_register_sensors_declare_their_source_field():
         "grid_power_import": "p_grid_out",
         "grid_power_export": "p_grid_out",
         "work_time_total": "work_time_total_hours",
+        "e_consumption_today": "e_load_today",
     }
     declared = {d.key: d.source_field for d in INVERTER_SENSORS if d.source_field is not None}
     assert declared == expected
-    # Every declared override must actually resolve to IR registers — a typo'd
-    # source_field would silently disable the protection it exists to provide.
+    # Every declared override must resolve to IR registers on at least one
+    # model — a typo'd source_field would silently disable the protection it
+    # exists to provide.
     for key, source in expected.items():
-        assert _source_ir_registers(SinglePhaseInverter, source) != (), (
-            f"{key}: source_field {source!r} resolves to no IR registers"
-        )
+        assert _source_ir_registers(SinglePhaseInverter, source) or _source_ir_registers(
+            ThreePhaseInverter, source
+        ), f"{key}: source_field {source!r} resolves to no IR registers on any model"
+    # The consumption source is per-model by construction: on single-phase the
+    # value is the derived field (untracked — e_load_today isn't in that LUT),
+    # on three-phase it's the native register the value_fn falls back to.
+    assert _source_ir_registers(SinglePhaseInverter, "e_load_today") == ()
+    assert _source_ir_registers(ThreePhaseInverter, "e_load_today") == (1396, 1397)
 
 
 def test_ir_register_age_scans_stamped_windows():
