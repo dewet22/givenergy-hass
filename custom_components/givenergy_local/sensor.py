@@ -565,22 +565,40 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: inv.p_load_demand,
     ),
     GivEnergyInverterSensorDescription(
-        # Derived house consumption (single-phase only) — matches the GE app's
-        # "Consumption today". Single-phase inverters expose no consumption
-        # register; givenergy-modbus computes it (PV gen + grid-in - grid-out -
-        # AC-charge). Three-phase has no such field, so skip_if_none drops it
-        # there (and the value_fn getattr keeps it None-safe).
-        # monotonic=True because the value is computed from several registers
-        # polled at slightly different times; a reading can transiently dip by
-        # a few Wh when one component updates before the others, tripping
-        # TOTAL_INCREASING's strictly-increasing guard (#142).
+        # House consumption, sourced per model (#154). Single-phase inverters
+        # expose no consumption register; givenergy-modbus derives it (PV gen +
+        # grid-in - grid-out - AC-charge) to match the GE app's "Consumption
+        # today". Three-phase units meter it natively instead (e_load_today,
+        # IR 1396-1397 — modelled in givenergy-modbus 2.2 but not yet validated
+        # on real 3-phase hardware), so the value_fn falls back to that there.
+        # Same key on both topologies keeps the dashboard strategy and
+        # recommended-entity list working unchanged.
+        # monotonic=True because the derived value is computed from several
+        # registers polled at slightly different times; a reading can
+        # transiently dip by a few Wh when one component updates before the
+        # others, tripping TOTAL_INCREASING's strictly-increasing guard (#142).
         key="e_consumption_today",
         name="House Consumption Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         monotonic=True,
-        value_fn=lambda inv: getattr(inv, "e_consumption_today", None),
+        value_fn=lambda inv: getattr(
+            inv, "e_consumption_today", getattr(inv, "e_load_today", None)
+        ),
+        skip_if_none=True,
+    ),
+    GivEnergyInverterSensorDescription(
+        # Native lifetime consumption counter (IR 1398-1399) — three-phase
+        # only; single-phase models lack the field, so skip_if_none drops it
+        # there. No monotonic clamp: this is a single metered register, not a
+        # multi-register derivation.
+        key="e_load_total",
+        name="House Consumption Total",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda inv: getattr(inv, "e_load_total", None),
         skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
