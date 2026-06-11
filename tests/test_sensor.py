@@ -720,7 +720,10 @@ async def test_aio_modules_create_one_device_each(hass, aio_setup):
         assert (DOMAIN, serial) in device.identifiers
         assert device.serial_number == serial
         assert device.model == "AIO Battery Module"
-        assert device.via_device_id is not None  # parented to the AIO inverter
+        # Parented to the AIO inverter device specifically, not just any parent.
+        inverter_device = dev_registry.async_get_device(identifiers={(DOMAIN, "SA1234G123")})
+        assert inverter_device is not None
+        assert device.via_device_id == inverter_device.id
 
 
 async def test_aio_module_all_24_voltage_cells(hass, aio_setup):
@@ -801,11 +804,12 @@ async def test_non_aio_plant_creates_no_module_entities(hass, setup_integration)
 
 
 def test_aio_module_sensor_descriptions_cover_expected_cells():
-    """24 voltage + 12 temperature descriptions, no duplicate keys."""
+    """Exactly v_cell_01..24 and t_cell_01..12 — exact sets, so a shifted or
+    missing index is caught, not just a matching count."""
     keys = [d.key for d in AIO_MODULE_SENSORS]
-    assert len([k for k in keys if k.startswith("v_cell_")]) == 24
-    assert len([k for k in keys if k.startswith("t_cell_")]) == 12
     assert len(keys) == len(set(keys))
+    assert {k for k in keys if k.startswith("v_cell_")} == {f"v_cell_{i:02d}" for i in range(1, 25)}
+    assert {k for k in keys if k.startswith("t_cell_")} == {f"t_cell_{i:02d}" for i in range(1, 13)}
 
 
 # ---------------------------------------------------------------------------

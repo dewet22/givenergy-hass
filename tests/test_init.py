@@ -341,6 +341,51 @@ async def test_full_topology_detect_clears_stale_missing_repair(
     ) not in ir.async_get(hass).issues
 
 
+async def test_heal_reloads_when_recovered_device_missed_setup(
+    hass, mock_client, mock_config_entry
+):
+    """A device absent when entities were created gets them via an entry reload once
+    the topology heals (#148): the healed callback diffs the confirmed topology
+    against the setup-time snapshot and schedules a reload on any gap."""
+    # Default fixture topology: one battery at 0x32.
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = hass.data[DOMAIN][mock_config_entry.entry_id]
+
+    # Mid-session heal confirms a battery (0x33) that wasn't there at setup.
+    confirmed = PlantCapabilities(
+        device_type=Model.HYBRID,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32, 0x33],
+        bcu_stacks=[],
+    )
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload_mock:
+        await coordinator._on_topology_healed(confirmed)
+    reload_mock.assert_called_once_with(mock_config_entry.entry_id)
+
+
+async def test_heal_matching_setup_topology_does_not_reload(hass, mock_client, mock_config_entry):
+    """The routine heal — confirmed topology identical to what setup instantiated —
+    must not reload (it fires on every clean reconnect)."""
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = hass.data[DOMAIN][mock_config_entry.entry_id]
+
+    confirmed = PlantCapabilities(
+        device_type=Model.HYBRID,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload_mock:
+        await coordinator._on_topology_healed(confirmed)
+    reload_mock.assert_not_called()
+
+
 async def test_missing_device_fix_flow_clears_cache_and_reloads(hass):
     """The repair's Fix step clears the entry's cached topology and reloads it."""
     from custom_components.givenergy_local.repairs import (
