@@ -1101,6 +1101,52 @@ async def test_persistent_loss_invokes_on_devices_missing(hass, mock_plant):
     assert coordinator._schedule_reconnect  # forces a reconnect on the next poll
 
 
+async def test_unload_mid_loss_retry_does_not_crash(hass, mock_plant):
+    """An unload during the loss-retry sleeps discards the client (async_close);
+    when the retry loop resumes it must bail out quietly — no AttributeError on
+    the None client, and no topology callbacks for a resolution that was
+    abandoned mid-flight."""
+    prior = _caps(lv_battery_addresses=[0x32, 0x33])
+    actual = _caps(lv_battery_addresses=[0x32])
+    mismatch = PlantTopologyMismatch("battery missing", prior=prior, actual=actual)
+    on_missing, on_changed, on_healed = AsyncMock(), AsyncMock(), AsyncMock()
+    coordinator = GivEnergyUpdateCoordinator(
+        hass,
+        "192.168.1.1",
+        8899,
+        30,
+        prior_capabilities=prior,
+        on_topology_changed=on_changed,
+        on_devices_missing=on_missing,
+        on_topology_healed=on_healed,
+    )
+
+    async def _unload_during_sleep(_delay):
+        # Simulates async_unload_entry running while this refresh sleeps.
+        await coordinator.async_close()
+
+    with (
+        patch("custom_components.givenergy_local.coordinator.Client") as mock_cls,
+        patch(
+            "custom_components.givenergy_local.coordinator.asyncio.sleep",
+            AsyncMock(side_effect=_unload_during_sleep),
+        ),
+    ):
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.detect = AsyncMock(side_effect=mismatch)  # loss on the initial detect
+        mock_cls.return_value = client
+
+        await coordinator._connect()  # must NOT raise
+
+    assert coordinator._client is None  # closed stays closed
+    on_missing.assert_not_awaited()
+    on_changed.assert_not_awaited()
+    on_healed.assert_not_awaited()
+    assert coordinator._prior_capabilities is prior  # nothing baked in
+
+
 async def test_loss_reconnect_respects_cooldown(hass, mock_plant):
     """_schedule_reconnect within cooldown: no reset, normal poll continues."""
     coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)

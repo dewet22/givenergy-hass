@@ -768,6 +768,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         coordinator: GivEnergyUpdateCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
+        # Shut down before discarding the client: no new scheduled refresh can
+        # race the teardown. HA auto-registers async_shutdown via
+        # config_entry.async_on_unload, but those callbacks fire only after this
+        # function returns — too late, the client would already be gone. An
+        # already-in-flight refresh isn't cancelled by either path; the
+        # coordinator's loss-retry loop guards against the discarded client.
+        await coordinator.async_shutdown()
         await coordinator.async_close()
 
     if not hass.data.get(DOMAIN):

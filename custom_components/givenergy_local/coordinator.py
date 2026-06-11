@@ -515,6 +515,15 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                     DETECT_LOSS_RETRY_DELAY,
                 )
                 await asyncio.sleep(DETECT_LOSS_RETRY_DELAY)
+                if self._client is None:
+                    # The entry was unloaded during the retry sleep and
+                    # async_close() discarded the client — abandon the
+                    # resolution quietly; no callbacks for a dead entry.
+                    _LOGGER.debug(
+                        "Client discarded during loss-retry sleep (entry unloading); "
+                        "abandoning topology resolution"
+                    )
+                    return False
                 try:
                     await self._client.detect(
                         prior=self._prior_capabilities,
@@ -534,6 +543,14 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                     # the full prior. Nothing to bake in, no callback, prior kept.
                     _LOGGER.info("Missing device(s) reappeared on retry; full topology restored")
                     return True
+
+        if self._client is None:
+            # Unloaded while the final detect() retry was in flight — same
+            # bail-out as above, just past the loop rather than inside it.
+            _LOGGER.debug(
+                "Client discarded during topology resolution (entry unloading); abandoning"
+            )
+            return False
 
         if missing:
             # Persistent loss. Do NOT touch self._prior_capabilities — keep the

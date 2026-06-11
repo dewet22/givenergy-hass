@@ -386,6 +386,39 @@ async def test_heal_matching_setup_topology_does_not_reload(hass, mock_client, m
     reload_mock.assert_not_called()
 
 
+async def test_unload_entry_shuts_down_coordinator_before_closing(
+    hass, mock_client, mock_config_entry
+):
+    """Unload must shut the coordinator down (no new scheduled refresh can race
+    teardown) before discarding the client. HA's auto-registered shutdown (via
+    config_entry.async_on_unload) fires only after async_unload_entry returns —
+    too late, the client is already gone by then."""
+    from unittest.mock import Mock
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = hass.data[DOMAIN][mock_config_entry.entry_id]
+
+    order = Mock()
+    with (
+        patch.object(
+            coordinator, "async_shutdown", wraps=coordinator.async_shutdown
+        ) as shutdown_spy,
+        patch.object(coordinator, "async_close", wraps=coordinator.async_close) as close_spy,
+    ):
+        order.attach_mock(shutdown_spy, "shutdown")
+        order.attach_mock(close_spy, "close")
+        assert await hass.config_entries.async_unload(mock_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert mock_config_entry.state is ConfigEntryState.NOT_LOADED
+    shutdown_spy.assert_awaited()
+    close_spy.assert_awaited_once()
+    spy_calls = [c[0] for c in order.mock_calls if c[0] in ("shutdown", "close")]
+    assert spy_calls.index("shutdown") < spy_calls.index("close")
+
+
 async def test_missing_device_fix_flow_clears_cache_and_reloads(hass):
     """The repair's Fix step clears the entry's cached topology and reloads it."""
     from custom_components.givenergy_local.repairs import (
