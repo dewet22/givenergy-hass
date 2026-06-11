@@ -218,6 +218,13 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             reconnecting = self._client is None or not self._client.connected
             if reconnecting:
                 await self._connect()
+            if self._client is None:
+                # The entry was unloaded while _connect() was resolving topology
+                # (async_close() discarded the client mid-flight). Serve the
+                # last-known data for this final tick rather than proceeding to
+                # a poll that would fail loudly — the coordinator is being torn
+                # down, and a routine unload should not log an ERROR.
+                return self.data
 
             plant = (
                 await self._passive_update(reconnecting)

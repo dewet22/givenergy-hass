@@ -1103,9 +1103,11 @@ async def test_persistent_loss_invokes_on_devices_missing(hass, mock_plant):
 
 async def test_unload_mid_loss_retry_does_not_crash(hass, mock_plant):
     """An unload during the loss-retry sleeps discards the client (async_close);
-    when the retry loop resumes it must bail out quietly — no AttributeError on
-    the None client, and no topology callbacks for a resolution that was
-    abandoned mid-flight."""
+    when the retry loop resumes the whole refresh must bail out quietly — no
+    AttributeError on the None client, no topology callbacks for a resolution
+    that was abandoned mid-flight, and no UpdateFailed (a scary ERROR in the HA
+    log) for what is a routine teardown: the tick serves last-known data
+    instead (Gemini review on #159)."""
     prior = _caps(lv_battery_addresses=[0x32, 0x33])
     actual = _caps(lv_battery_addresses=[0x32])
     mismatch = PlantTopologyMismatch("battery missing", prior=prior, actual=actual)
@@ -1138,9 +1140,13 @@ async def test_unload_mid_loss_retry_does_not_crash(hass, mock_plant):
         client.detect = AsyncMock(side_effect=mismatch)  # loss on the initial detect
         mock_cls.return_value = client
 
-        await coordinator._connect()  # must NOT raise
+        # The full refresh path: must neither raise UpdateFailed nor crash —
+        # the post-_connect guard serves last-known data (None here) quietly.
+        result = await coordinator._async_update_data()
 
+    assert result is coordinator.data
     assert coordinator._client is None  # closed stays closed
+    assert coordinator.consecutive_failures == 0  # teardown is not a failure
     on_missing.assert_not_awaited()
     on_changed.assert_not_awaited()
     on_healed.assert_not_awaited()
