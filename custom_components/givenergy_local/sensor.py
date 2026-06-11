@@ -60,6 +60,12 @@ class GivEnergyInverterSensorDescription(SensorEntityDescription):
     # session. Use for computed TOTAL_INCREASING sensors whose source value can
     # transiently dip due to multi-register polling skew.
     monotonic: bool = False
+    # Model field the value_fn actually reads, when it differs from `key` (the
+    # key is pinned by unique_id stability). Without this, renamed direct-register
+    # sensors resolve no IR source and silently miss the stale-bank availability
+    # check (#152, flagged on the #158 review). Leave None for true computed /
+    # derived fields, which are deliberately untracked.
+    source_field: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -407,6 +413,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     # --- Grid ---
     GivEnergyInverterSensorDescription(
         key="grid_power",
+        source_field="p_grid_out",
         name="Grid Power",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
@@ -428,6 +435,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     # would collide.
     GivEnergyInverterSensorDescription(
         key="grid_power_import",
+        source_field="p_grid_out",
         name="Grid Power Import",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
@@ -436,6 +444,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     ),
     GivEnergyInverterSensorDescription(
         key="grid_power_export",
+        source_field="p_grid_out",
         name="Grid Power Export",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
@@ -734,6 +743,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     # --- Diagnostic ---
     GivEnergyInverterSensorDescription(
         key="work_time_total",
+        source_field="work_time_total_hours",
         name="Work Time Total",
         native_unit_of_measurement=UnitOfTime.HOURS,
         device_class=SensorDeviceClass.DURATION,
@@ -1282,7 +1292,7 @@ class GivEnergyInverterSensor(
         self._monotonic_max: float | None = None
         self._monotonic_date: date | None = None
         self._source_ir_registers = _source_ir_registers(
-            type(coordinator.data.inverter), description.key
+            type(coordinator.data.inverter), description.source_field or description.key
         )
         interval = coordinator.update_interval
         self._stale_ir_ceiling = max(

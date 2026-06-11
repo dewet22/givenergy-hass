@@ -830,6 +830,33 @@ def test_source_ir_registers_resolves_via_model_lut():
     assert _source_ir_registers(MagicMock, "e_grid_out_day") == ()
 
 
+def test_renamed_direct_register_sensors_declare_their_source_field():
+    """Descriptors whose entity key differs from the model field they read must
+    carry source_field, or they'd silently fall outside the stale-bank protection
+    (Codex review on #158): grid_power* all read p_grid_out, work_time_total
+    reads work_time_total_hours. Genuinely computed/derived fields (multi-register
+    sums, per-model aliases like the battery charge/discharge canonical names)
+    stay deliberately untracked."""
+    from givenergy_modbus.model.inverter import SinglePhaseInverter
+
+    from custom_components.givenergy_local.sensor import _source_ir_registers
+
+    expected = {
+        "grid_power": "p_grid_out",
+        "grid_power_import": "p_grid_out",
+        "grid_power_export": "p_grid_out",
+        "work_time_total": "work_time_total_hours",
+    }
+    declared = {d.key: d.source_field for d in INVERTER_SENSORS if d.source_field is not None}
+    assert declared == expected
+    # Every declared override must actually resolve to IR registers — a typo'd
+    # source_field would silently disable the protection it exists to provide.
+    for key, source in expected.items():
+        assert _source_ir_registers(SinglePhaseInverter, source) != (), (
+            f"{key}: source_field {source!r} resolves to no IR registers"
+        )
+
+
 def test_ir_register_age_scans_stamped_windows():
     """Age comes from the freshest stamped IR window containing the register —
     no assumed bank layout; other devices, HR stamps and uncovered registers
