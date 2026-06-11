@@ -36,9 +36,12 @@ TopologyChangedCallback = Callable[[PlantCapabilities], Awaitable[None]]
 DevicesMissingCallback = Callable[[PlantCapabilities, PlantCapabilities], Awaitable[None]]
 
 # Invoked whenever a (re)connect confirms the full expected topology (detect
-# succeeded with no mismatch, or a loss healed on retry). Lets the caller clear
-# a stale "device missing" repair the moment the device answers again.
-TopologyHealedCallback = Callable[[], Awaitable[None]]
+# succeeded with no mismatch, or a loss healed on retry), with the confirmed
+# capabilities. Lets the caller clear a stale "device missing" repair the
+# moment the device answers again, and reconcile entities against what is now
+# confirmed — a device that answered late never got entities at platform
+# setup, so the caller reloads the entry when the heal reveals one (#148).
+TopologyHealedCallback = Callable[[PlantCapabilities], Awaitable[None]]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -92,6 +95,9 @@ def missing_devices(prior: PlantCapabilities | None, actual: PlantCapabilities) 
     for addr in prior.meter_addresses:
         if addr not in actual.meter_addresses:
             missing.append(f"meter at 0x{addr:02x}")
+    for addr in prior.aio_battery_module_addresses:
+        if addr not in actual.aio_battery_module_addresses:
+            missing.append(f"AIO battery module at 0x{addr:02x}")
     # bcu_stacks entries are (bcu_offset, num_modules); device addr = 0x70+offset.
     actual_modules_by_offset = {off: mods for off, mods in actual.bcu_stacks}
     for off, mods in prior.bcu_stacks:
@@ -447,10 +453,12 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             )
         except PlantTopologyMismatch as exc:
             topology_confirmed = await self._handle_topology_mismatch(exc)
-        if topology_confirmed and self._on_topology_healed is not None:
-            # Full expected topology is present — clear any stale "device
-            # missing" repair (covers both restart and mid-session recovery).
-            await self._on_topology_healed()
+        confirmed = self._client.plant.capabilities
+        if topology_confirmed and self._on_topology_healed is not None and confirmed is not None:
+            # Full expected topology is present — let the caller clear any
+            # stale "device missing" repair and reconcile entities against the
+            # confirmed topology (covers both restart and mid-session recovery).
+            await self._on_topology_healed(confirmed)
         self._last_inverter_time = None
         self._unchanged_ticks = 0
         self._active_tick = 0
