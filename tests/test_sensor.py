@@ -857,17 +857,28 @@ async def test_grid_power_hidden_by_default(hass, setup_integration):
 # ---------------------------------------------------------------------------
 
 
+def _register_shape(registers):
+    """(reg_type, index) view of a Register tuple, for order-pinned assertions."""
+    return [(r.reg_type, r.index) for r in registers]
+
+
 def test_source_ir_registers_resolves_via_model_lut():
-    """Register-backed keys map to their IR indexes through the model's LUT;
-    computed fields (not in the LUT) and HR-backed config resolve to nothing —
-    HR banks legitimately age between full refreshes, so they're no signal."""
+    """Register-backed keys map to their IR registers through the model's public
+    registers_of() accessor (givenergy-modbus 2.3.0, #248); computed fields (not
+    in the LUT) and HR-backed config resolve to nothing — HR banks legitimately
+    age between full refreshes, so they're no signal."""
     from givenergy_modbus.model.inverter import SinglePhaseInverter
     from givenergy_modbus.model.inverter_threephase import ThreePhaseInverter
 
     from custom_components.givenergy_local.sensor import _source_ir_registers
 
-    assert _source_ir_registers(SinglePhaseInverter, "e_grid_out_day") == (25,)
-    assert _source_ir_registers(ThreePhaseInverter, "e_load_today") == (1396, 1397)
+    assert _register_shape(_source_ir_registers(SinglePhaseInverter, "e_grid_out_day")) == [
+        ("IR", 25)
+    ]
+    assert _register_shape(_source_ir_registers(ThreePhaseInverter, "e_load_today")) == [
+        ("IR", 1396),
+        ("IR", 1397),
+    ]
     assert _source_ir_registers(SinglePhaseInverter, "e_consumption_today") == ()
     assert _source_ir_registers(SinglePhaseInverter, "charge_target_soc") == ()
     # Mock model classes (as used across these tests) resolve to nothing.
@@ -907,39 +918,20 @@ def test_renamed_direct_register_sensors_declare_their_source_field():
     # value is the derived field (untracked — e_load_today isn't in that LUT),
     # on three-phase it's the native register the value_fn falls back to.
     assert _source_ir_registers(SinglePhaseInverter, "e_load_today") == ()
-    assert _source_ir_registers(ThreePhaseInverter, "e_load_today") == (1396, 1397)
-
-
-def test_ir_register_age_scans_stamped_windows():
-    """Age comes from the freshest stamped IR window containing the register —
-    no assumed bank layout; other devices, HR stamps and uncovered registers
-    don't count."""
-    from datetime import UTC, datetime, timedelta
-
-    from custom_components.givenergy_local.coordinator import ir_register_age
-
-    now = datetime.now(UTC)
-    plant = MagicMock()
-    plant.register_block_updated_at = {
-        (0x32, "IR", 0, 60): now - timedelta(seconds=40),
-        (0x32, "IR", 0, 1): now - timedelta(seconds=5),  # overlapping narrow window
-        (0x32, "IR", 180, 60): now - timedelta(seconds=700),
-        (0x32, "HR", 0, 60): now - timedelta(seconds=9999),
-        (0x31, "IR", 240, 60): now - timedelta(seconds=10),
-    }
-    # Freshest covering window wins: IR(0,1) covers register 0, IR(0,60) covers 25.
-    assert ir_register_age(plant, 0x32, 0, now=now) == pytest.approx(5)
-    assert ir_register_age(plant, 0x32, 25, now=now) == pytest.approx(40)
-    assert ir_register_age(plant, 0x32, 200, now=now) == pytest.approx(700)
-    # 0x32's IR(240) bank was never stamped — 0x31's doesn't count for it.
-    assert ir_register_age(plant, 0x32, 247, now=now) is None
+    assert _register_shape(_source_ir_registers(ThreePhaseInverter, "e_load_today")) == [
+        ("IR", 1396),
+        ("IR", 1397),
+    ]
 
 
 def test_sensor_unavailable_when_backing_ir_block_stale(mock_plant):
     """A backing IR bank that stopped committing past the ceiling drops the
     sensor to unavailable; a never-committed bank is no signal (the Pattern B
-    shape is 'committed real data, then stopped' — #152)."""
-    from datetime import UTC, datetime, timedelta
+    shape is 'committed real data, then stopped' — #152). Freshness comes from
+    the library's Plant.register_age() (2.3.0, #248)."""
+    from datetime import timedelta
+
+    from givenergy_modbus.model.register import IR
 
     from custom_components.givenergy_local.sensor import GivEnergyInverterSensor
 
@@ -950,20 +942,24 @@ def test_sensor_unavailable_when_backing_ir_block_stale(mock_plant):
     entity = GivEnergyInverterSensor(coordinator, _inverter_desc("e_grid_out_day"))
     # The conftest inverter is a MagicMock with no register LUT, so inject the
     # source registers the resolver would derive from the real model.
-    entity._source_ir_registers = (25,)
+    entity._source_ir_registers = (IR(25),)
+    mock_plant.register_age = MagicMock()
 
-    now = datetime.now(UTC)
     # Fresh bank: available.
-    mock_plant.register_block_updated_at = {(0x32, "IR", 0, 60): now - timedelta(seconds=35)}
+    mock_plant.register_age.return_value = 35.0
     assert entity.available is True
+    # Asked the plant about the right device and register.
+    (addr, reg) = mock_plant.register_age.call_args.args
+    assert addr == 0x32  # conftest capabilities.inverter_address
+    assert (reg.reg_type, reg.index) == ("IR", 25)
     # Bank stopped committing 10 minutes ago (ceiling at 30 s interval = 300 s).
-    mock_plant.register_block_updated_at = {(0x32, "IR", 0, 60): now - timedelta(seconds=600)}
+    mock_plant.register_age.return_value = 600.0
     assert entity.available is False
     # Never committed: stays available (its value reads None/unknown anyway).
-    mock_plant.register_block_updated_at = {}
+    mock_plant.register_age.return_value = None
     assert entity.available is True
     # Coordinator-level failure still wins regardless of bank ages.
-    mock_plant.register_block_updated_at = {(0x32, "IR", 0, 60): now - timedelta(seconds=35)}
+    mock_plant.register_age.return_value = 35.0
     coordinator.last_update_success = False
     assert entity.available is False
 
@@ -981,6 +977,7 @@ def test_sensor_without_ir_source_keeps_default_availability(mock_plant):
     entity = GivEnergyInverterSensor(coordinator, _inverter_desc("e_consumption_today"))
 
     assert entity._source_ir_registers == ()
-    # No stamp data at all — must not even be consulted.
-    mock_plant.register_block_updated_at = {}
+    # Freshness must not even be consulted.
+    mock_plant.register_age = MagicMock()
     assert entity.available is True
+    mock_plant.register_age.assert_not_called()
