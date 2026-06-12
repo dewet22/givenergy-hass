@@ -1,7 +1,7 @@
 # DRAFT — upstream issue for home-assistant/developers.home-assistant
 
 > Repo: home-assistant/developers.home-assistant · Type: docs gap
-> Status: draft for review, not filed
+> Status: FILED as https://github.com/home-assistant/developers.home-assistant/issues/3143 (2026-06-12)
 
 ---
 
