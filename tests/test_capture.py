@@ -86,13 +86,20 @@ async def test_build_capture_header_version_lookup_off_loop(hass):
     """The package-metadata lookup does blocking filesystem I/O and must run
     in the executor, not on the event loop — HA's blocking-call detector
     flags it (three warnings per capture) and asks users to file a bug."""
+    import importlib.metadata
     import threading
     from unittest.mock import patch
 
     loop_thread = threading.get_ident()
     seen: dict[str, int] = {}
+    orig_version = importlib.metadata.version
 
-    def _fake_version(_name: str) -> str:
+    def _fake_version(name: str) -> str:
+        # Delegate other packages to the real lookup — the patch is global
+        # for the duration of the block, and unrelated metadata lookups
+        # (e.g. from the integration loader) must not see the fake.
+        if name != "givenergy-modbus":
+            return orig_version(name)
         seen["thread"] = threading.get_ident()
         return "9.9.9"
 
