@@ -97,6 +97,8 @@ Add the integration via **Settings → Devices & Services → Add Integration �
 
 To change any of these later, open the integration's **⋮** menu in **Settings → Devices & Services → GivEnergy Local** and choose **Reconfigure**. The integration reloads automatically when you save.
 
+Separately, the integration's **Configure** option (gear icon on the same card) holds optional **tariff rate entities** — an import rate and an export rate from another integration (Octopus Energy's current-rate entities, or any sensor carrying a £/kWh or p/kWh price). Naming them creates four **money sensors** per inverter: grid import cost today, export earnings today, net energy cost today, and a modelled "cost without the system" counterfactual (with a `savings_today` attribute). They price each poll's energy delta at the rate in force, reset at midnight, and go unavailable rather than guessing while a rate entity is unavailable. Left blank, none of this is created. These sensors also power the `mission` dashboard's Ledger tab — see below.
+
 ![Integration ⋮ menu — Reconfigure entry](docs/config-reconfigure.png)
 
 ### Running alongside other local polling clients
@@ -236,7 +238,7 @@ To use it, create a new dashboard, open the **raw configuration editor**, and se
 ```yaml
 strategy:
   type: custom:givenergy
-  mode: classic        # classic (default) | flow | glance | analyst | all — see below
+  mode: classic        # classic (default) | flow | glance | analyst | mission | all — see below
   max_power_kw: 10     # optional; default 10; Overview 24h chart y-axis envelope (kW)
   serial: SA1234G000   # optional; pin one inverter on a multi-plant install
 ```
@@ -258,8 +260,6 @@ strategy:
 ```
 
 The Flow view is rendered as a `panel: true` view. If you have the **kiosk-mode** custom integration installed (HACS), the strategy adds hints to hide the header and sidebar for a true full-screen display; without it, the view simply renders inside the normal HA chrome. The card is responsive (container-query based), so it works as a wall-tablet kiosk and reflows for a phone webview.
-
-The tariff-aware `coach` direction from [the redesign brief](docs/design/dashboard-redesign-brief.md) is still to come.
 
 #### `mode: glance`
 
@@ -288,6 +288,21 @@ strategy:
 ```
 
 The Analyst view is a standard (non-panel) multi-card view, so the full classic tab set still follows it.
+
+#### `mode: mission`
+
+`mode: mission` is the most ambitious mode, merging the Story and Coach directions from [the redesign brief](docs/design/dashboard-redesign-brief.md) into a tape-centred hub (the full design is written up in [the mission design spec](docs/superpowers/specs/2026-06-12-dashboard-mission-design.md)). It leads with **Mission Control**: a glance strip of headline numbers, then the **tape** — a rolling −12 h → +12 h timeline with "now" pinned centre. Behind the cursor sits the day so far (solar generation, SOC, annotated events like "export began" or "100% SOC"); ahead of it the solar forecast, tariff bands, the inverter's charge/discharge plan windows, and a modelled SOC projection. A docked panel at the cursor shows the live power flow with the current rate. Deep tabs follow: **Tape** (full-height, layer notes), **Ledger** (today's priced flows, the "what today would have cost without the system" counterfactual, tariff-band splits, and month-to-date from long-term statistics) and **Observatory** (cell heatmap plus balance-drift, cycle-count, capacity and temperature trends). The classic tab set still follows behind.
+
+```yaml
+strategy:
+  type: custom:givenergy
+  mode: mission
+  tariff_import: sensor.octopus_electricity_current_rate      # optional
+  tariff_export: sensor.octopus_electricity_export_rate       # optional
+  solar_forecast: sensor.solcast_pv_forecast_forecast_today   # optional
+```
+
+The three extra options name entities from other integrations — tariff rates (the Octopus Energy integration's current-rate entities work; anything carrying a forward `rates` attribute should too) and an hourly solar forecast (Solcast's today entity). All three are optional: each missing feed drops its tape layer with a small legend note rather than breaking anything. The Ledger tab additionally needs the **money sensors**, enabled by naming the same tariff entities in the integration's options (Settings → Devices & services → GivEnergy Local → Configure); without them the tab simply isn't emitted. The tariff-band classification (cheap / standard / peak relative to the day's median) and the SOC projection are heuristics — useful for orientation, not billing-grade. This mode is newer than the others and has had less real-world soak time.
 
 #### `mode: all`
 
