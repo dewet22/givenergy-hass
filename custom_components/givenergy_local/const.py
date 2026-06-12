@@ -5,6 +5,10 @@ DEFAULT_SCAN_INTERVAL = 30
 
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_PASSIVE = "passive"
+# Options: tariff rate entities for the money sensors (mission dashboard).
+# Blank/absent -> the money sensors are not created.
+CONF_TARIFF_IMPORT_ENTITY = "tariff_import_entity"
+CONF_TARIFF_EXPORT_ENTITY = "tariff_export_entity"
 # Retained only for migrating older config entries — see async_migrate_entry.
 # The current defaults live as constructor defaults on GivEnergyUpdateCoordinator.
 CONF_TIMEOUT_TOLERANCE = "timeout_tolerance"

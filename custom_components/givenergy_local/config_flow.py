@@ -6,12 +6,21 @@ from typing import Any
 import voluptuous as vol
 from givenergy_modbus.client.client import Client
 from givenergy_modbus.exceptions import RefreshPartiallySucceeded
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_HOST, CONF_PORT
+from homeassistant.core import callback
+from homeassistant.helpers.selector import selector
 
 from .const import (
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
+    CONF_TARIFF_EXPORT_ENTITY,
+    CONF_TARIFF_IMPORT_ENTITY,
     DEFAULT_PASSIVE,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
@@ -30,8 +39,41 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 )
 
 
+class GivEnergyLocalOptionsFlow(OptionsFlow):
+    """Optional tariff rate entities powering the money sensors.
+
+    Both fields are optional: left blank, the money sensors are simply not
+    created. EntitySelector requires an explicit empty-handling dance --
+    omitting a field in user_input means "unset", so the stored options carry
+    only the fields the user actually picked.
+    """
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(
+                data={key: value for key, value in user_input.items() if value}
+            )
+
+        entity_picker = selector({"entity": {"domain": "sensor"}})
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_TARIFF_IMPORT_ENTITY): entity_picker,
+                vol.Optional(CONF_TARIFF_EXPORT_ENTITY): entity_picker,
+            }
+        )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(schema, self.config_entry.options),
+        )
+
+
 class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 2
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> GivEnergyLocalOptionsFlow:
+        return GivEnergyLocalOptionsFlow()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
