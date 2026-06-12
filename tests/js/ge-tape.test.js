@@ -95,34 +95,87 @@ describe("classifyRates", () => {
 });
 
 describe("detectEvents", () => {
-  it("marks export start/stop transitions with hysteresis", () => {
+  const M = 60000;
+
+  it("needs >250W to start an export, <50W to stop it", () => {
     const grid = [
-      [1000, 0],
-      [2000, 30],    // below the 50W floor: not an export start
-      [3000, 400],   // export began
-      [4000, 600],
-      [5000, 10],    // export stopped
+      [0, 0],
+      [5 * M, 150],   // above the stop floor but below the start threshold
+      [10 * M, 400],  // export began
+      [40 * M, 400],
+      [45 * M, 10],   // export stopped
     ];
     const events = TAPE.detectEvents({ grid: grid });
     expect(events).toEqual([
-      { tMs: 3000, kind: "export_started" },
-      { tMs: 5000, kind: "export_stopped" },
+      { tMs: 10 * M, kind: "export_started" },
+      { tMs: 45 * M, kind: "export_stopped" },
     ]);
   });
 
-  it("marks the battery reaching full", () => {
+  it("drops export episodes shorter than the debounce window", () => {
+    const grid = [
+      [0, 0],
+      [10 * M, 400], // 3-minute blip: meter noise, not an export session
+      [13 * M, 0],
+      [60 * M, 0],
+    ];
+    expect(TAPE.detectEvents({ grid: grid })).toEqual([]);
+  });
+
+  it("bridges short dips inside a long export episode", () => {
+    const grid = [
+      [0, 300],       // already exporting at the window edge: no start event
+      [20 * M, 0],    // 2-minute dip...
+      [22 * M, 300],  // ...resumes: bridged, no stop/start pair
+      [40 * M, 300],
+      [41 * M, 0],    // the real stop
+    ];
+    expect(TAPE.detectEvents({ grid: grid })).toEqual([
+      { tMs: 41 * M, kind: "export_stopped" },
+    ]);
+  });
+
+  it("keeps a trailing open episode even when younger than the window", () => {
+    const grid = [
+      [0, 0],
+      [55 * M, 400], // export began 5 minutes ago and is still running
+      [60 * M, 400],
+    ];
+    expect(TAPE.detectEvents({ grid: grid })).toEqual([
+      { tMs: 55 * M, kind: "export_started" },
+    ]);
+  });
+
+  it("marks the battery reaching full once, re-arming only below 95%", () => {
     const soc = [
-      [1000, 97],
-      [2000, 99],
-      [3000, 100],
-      [4000, 100], // stays full: only one event
+      [1 * M, 97],
+      [2 * M, 99],
+      [3 * M, 100],
+      [4 * M, 100],  // stays full: only one event
+      [5 * M, 99],   // shallow dip: not re-armed
+      [6 * M, 100],  // no second event
     ];
     const events = TAPE.detectEvents({ soc: soc });
-    expect(events).toEqual([{ tMs: 3000, kind: "soc_full" }]);
+    expect(events).toEqual([{ tMs: 3 * M, kind: "soc_full" }]);
   });
 
   it("returns [] for empty input", () => {
     expect(TAPE.detectEvents({})).toEqual([]);
+  });
+});
+
+describe("flowLines", () => {
+  it("formats the live flow summary, pricing the grid leg", () => {
+    expect(
+      TAPE.flowLines({ pvW: 800, loadW: 700, battW: 0, gridW: -100, ratePence: 30 })
+    ).toEqual(["solar 0.8 kW", "house 0.7 kW", "battery +0.0 kW", "import 0.1 kW @ 30p"]);
+  });
+
+  it("labels an exporting grid leg and omits missing slots", () => {
+    expect(TAPE.flowLines({ gridW: 1500, ratePence: 15 })).toEqual([
+      "export 1.5 kW @ 15p",
+    ]);
+    expect(TAPE.flowLines({ pvW: 2000 })).toEqual(["solar 2.0 kW"]);
   });
 });
 
