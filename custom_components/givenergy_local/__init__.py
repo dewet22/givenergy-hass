@@ -271,6 +271,17 @@ async def _async_register_frontend_card(hass: HomeAssistant) -> None:
         _LOGGER.warning("Could not register the bundled frontend module: %s", exc)
 
 
+def _givenergy_modbus_version() -> str:
+    """Installed givenergy-modbus version, "unknown" if unresolvable.
+
+    Blocking (reads dist-info from disk) — call via the executor.
+    """
+    try:
+        return importlib.metadata.version("givenergy-modbus")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
 async def _build_capture_header(
     hass: HomeAssistant, *, generated: datetime, duration: float, frame_count: int
 ) -> str:
@@ -282,10 +293,9 @@ async def _build_capture_header(
     shared diagnostics (those are recoverable from the wire frames by anyone with
     a parser anyway).
     """
-    try:
-        library_version = importlib.metadata.version("givenergy-modbus")
-    except importlib.metadata.PackageNotFoundError:
-        library_version = "unknown"
+    # Package-metadata lookup reads dist-info off disk — executor, not loop
+    # (HA's blocking-call detector flags it otherwise).
+    library_version = await hass.async_add_executor_job(_givenergy_modbus_version)
     integration = await async_get_integration(hass, DOMAIN)
     python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     lines = [

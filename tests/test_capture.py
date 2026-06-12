@@ -82,6 +82,36 @@ async def test_build_capture_header_contains_env_and_no_serial(hass):
     assert "SA1234G123" not in header
 
 
+async def test_build_capture_header_version_lookup_off_loop(hass):
+    """The package-metadata lookup does blocking filesystem I/O and must run
+    in the executor, not on the event loop — HA's blocking-call detector
+    flags it (three warnings per capture) and asks users to file a bug."""
+    import importlib.metadata
+    import threading
+    from unittest.mock import patch
+
+    loop_thread = threading.get_ident()
+    seen: dict[str, int] = {}
+    orig_version = importlib.metadata.version
+
+    def _fake_version(name: str) -> str:
+        # Delegate other packages to the real lookup — the patch is global
+        # for the duration of the block, and unrelated metadata lookups
+        # (e.g. from the integration loader) must not see the fake.
+        if name != "givenergy-modbus":
+            return orig_version(name)
+        seen["thread"] = threading.get_ident()
+        return "9.9.9"
+
+    with patch("importlib.metadata.version", _fake_version):
+        header = await _build_capture_header(
+            hass, generated=dt_util.now(), duration=1.0, frame_count=0
+        )
+
+    assert "givenergy-modbus 9.9.9" in header
+    assert seen["thread"] != loop_thread
+
+
 def test_split_header_separates_env_block_from_body():
     content = "# GivEnergy\n# Generated: x\n#\nTX: 0102\nRX: 0304\n"
     header, body = _split_header(content)
