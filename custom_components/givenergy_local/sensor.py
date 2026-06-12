@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from givenergy_modbus.model.aio_battery import AioBatteryModule
@@ -1259,18 +1259,30 @@ def _derive_display_precision(description: SensorEntityDescription, model: Any) 
     return model.precision_of(description.key)
 
 
-# Dual-role bound (in the sensor's native unit) for same-day reset detection:
+# Dual-role floor (in the sensor's native unit) for same-day reset detection:
 # a drop must be larger than this to be considered a reset at all, AND the
-# post-drop value must land within [0, this] to be accepted as one. Covers the
-# case where the inverter clock lags HA's local midnight by one scan interval,
-# so the actual counter reset arrives on a subsequent read after the day
-# boundary has already been committed — a real reset observed within a poll or
-# two has accumulated at most a few Wh, so it lands well inside the band. A
-# drop to anything outside it (a negative excursion, a sag to a still-large
-# value) is transient register skew — e.g. a one-poll zeroed register read
-# sinking the derived consumption (#142) — and must be held at the previous
-# max, or the recorder books a fake reset and double-counts the recovery.
+# post-drop value must land within [0, ceiling] to be accepted as one. Covers
+# the case where the inverter clock lags HA's local midnight by one scan
+# interval, so the actual counter reset arrives on a subsequent read after the
+# day boundary has already been committed. A drop to anything outside the band
+# (a negative excursion, a sag to a still-large value) is transient register
+# skew — e.g. a one-poll zeroed register read sinking the derived consumption
+# (#142) — and must be held at the previous max, or the recorder books a fake
+# reset and double-counts the recovery.
+#
+# The acceptance ceiling scales with time since the previous reading:
+# max(floor, max-load × elapsed). At the default 30 s cadence that stays at
+# the 0.5 kWh floor (tight against skew), while a long scan interval or a
+# polling outage spanning the reset widens it to what a genuine post-reset
+# reading can have legitimately accumulated — otherwise yesterday's max stays
+# clamped and the day's statistics are lost. The trade-off is a wider
+# corruptible band on the first poll after an outage; that is the price of
+# not freezing the sensor for hours.
 _MONOTONIC_RESET_THRESHOLD = 0.5  # kWh (matches e_consumption_today's native unit)
+# Conservative continuous-load bound for the elapsed-scaled ceiling — covers
+# three-phase EV-charging/heat-pump households without admitting daytime
+# totals as "resets".
+_MONOTONIC_RESET_MAX_LOAD_KW = 15.0
 
 # A backing input-register bank that has stopped committing past this ceiling
 # reads as a fault, not polling jitter (#152): stale-but-plausible values
@@ -1315,6 +1327,7 @@ class GivEnergyInverterSensor(
         self.entity_description = description
         self._monotonic_max: float | None = None
         self._monotonic_date: date | None = None
+        self._monotonic_last_read: datetime | None = None
         self._source_ir_registers = _source_ir_registers(
             type(coordinator.data.inverter), description.source_field or description.key
         )
@@ -1386,7 +1399,10 @@ class GivEnergyInverterSensor(
     def native_value(self) -> Any:
         value = self.entity_description.value_fn(self.coordinator.data.inverter)
         if self.entity_description.monotonic and isinstance(value, (int, float)):
-            today = dt_util.now().date()
+            now = dt_util.now()
+            today = now.date()
+            last_read = self._monotonic_last_read
+            self._monotonic_last_read = now
             if self._monotonic_date != today:
                 # New calendar day in HA's timezone: start fresh so the
                 # midnight reset passes through as a real decrease. Floored
@@ -1408,8 +1424,16 @@ class GivEnergyInverterSensor(
                 # threshold's comment). Anything else is transient register
                 # skew: hold the clamp until the source recovers, so the
                 # recorder never sees a fake reset followed by a
-                # sum-corrupting recovery jump (#142).
-                if 0.0 <= value <= _MONOTONIC_RESET_THRESHOLD:
+                # sum-corrupting recovery jump (#142). The ceiling scales
+                # with time since the previous reading so a reset observed
+                # late — long scan interval, or a polling outage spanning
+                # midnight — is not rejected for having accumulated more
+                # than the floor.
+                ceiling = _MONOTONIC_RESET_THRESHOLD
+                if last_read is not None:
+                    elapsed_hours = (now - last_read).total_seconds() / 3600.0
+                    ceiling = max(ceiling, _MONOTONIC_RESET_MAX_LOAD_KW * elapsed_hours)
+                if 0.0 <= value <= ceiling:
                     self._monotonic_max = value
             else:
                 self._monotonic_max = max(value, self._monotonic_max)

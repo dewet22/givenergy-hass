@@ -1054,6 +1054,49 @@ def test_monotonic_midnight_reset_passes(mock_plant, freezer):
     assert _read(entity, mock_plant, 0.1) == 0.1
 
 
+def test_monotonic_reset_accepted_after_poll_gap(mock_plant, freezer):
+    """The post-reset plausibility ceiling scales with time since the previous
+    reading: after a polling outage spanning the counter reset, or on a long
+    scan interval under heavy load, the first reading has legitimately
+    accumulated more than the 0.5 kWh floor and must still be accepted."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # HA's date flips; the lagging counter still reads yesterday's total.
+    freezer.tick(12 * 3600)
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # Two hours of failed polls; the counter reset during the gap and has
+    # since accumulated 1.8 kWh — far over the floor, well under 15 kW × 2 h.
+    freezer.tick(2 * 3600)
+    assert _read(entity, mock_plant, 1.8) == 1.8
+    assert _read(entity, mock_plant, 2.0) == 2.0
+
+
+def test_monotonic_reset_accepted_on_long_scan_interval(mock_plant, freezer):
+    """A 5-minute scan interval at high load: the first post-reset reading can
+    exceed the 0.5 kWh floor (e.g. 0.9 kWh at ~11 kW); the elapsed-scaled
+    ceiling (15 kW × 300 s = 1.25 kWh) accepts it."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(12 * 3600)
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(300)
+    assert _read(entity, mock_plant, 0.9) == 0.9
+
+
+def test_monotonic_negative_still_rejected_after_poll_gap(mock_plant, freezer):
+    """A widened ceiling never admits a negative excursion."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(3600)
+    assert _read(entity, mock_plant, -2.2) == 14.3
+
+
 def test_monotonic_clock_lag_reset_after_date_flip(mock_plant, freezer):
     """An inverter clock lagging HA's midnight: the pre-reset value carries over
     as the new-day baseline, and the real reset lands a poll later via the
