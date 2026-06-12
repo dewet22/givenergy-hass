@@ -634,6 +634,28 @@
     return { title: "Observatory", path: "observatory", icon: "mdi:telescope", cards: cards };
   }
 
+  // Wait (bounded) for custom elements from the sibling ge-tape.js module.
+  // Panel views build their card directly - no hui-card wrapper that
+  // tolerates late-defined elements - so emitting a panel view before the
+  // module evaluates renders a permanent "Configuration error". The two
+  // modules load in parallel, so by the time the strategy generates, the
+  // cards are at worst still in flight; awaiting here closes the race.
+  function awaitCards(names, timeoutMs) {
+    if (typeof customElements === "undefined" || !customElements.whenDefined) {
+      return Promise.resolve();
+    }
+    var waits = names.map(function (name) {
+      return customElements.get(name) ? null : customElements.whenDefined(name);
+    });
+    if (!waits.some(Boolean)) return Promise.resolve();
+    return Promise.race([
+      Promise.all(waits.filter(Boolean)),
+      new Promise(function (resolve) {
+        setTimeout(resolve, timeoutMs);
+      }),
+    ]);
+  }
+
   // mode: mission -- the tape-centred hub (Mission Control) plus the Tape deep
   // view, then the classic tab set. Inverter-centric like flow/glance; EMS
   // plants fall back to classic. See docs/superpowers/specs/
@@ -1438,6 +1460,14 @@
           },
         ],
       };
+    }
+    // Mission's panel views need the ge-tape.js cards defined before they
+    // render; wait (bounded) for the sibling module.
+    if (opts.mode === "mission") {
+      await awaitCards(
+        ["givenergy-mission", "givenergy-tape", "givenergy-ledger"],
+        config.card_wait_ms != null ? config.card_wait_ms : 5000
+      );
     }
     // Mode dispatch. Unknown/absent mode falls back to classic.
     var views =

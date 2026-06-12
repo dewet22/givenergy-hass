@@ -245,7 +245,7 @@ strategy:
 
 The strategy and the bundled cell-heatmap card are served by the integration itself, so there's nothing extra to install for them. `power-flow-card-plus` and `apexcharts-card` are still needed for the Overview/Energy charts (install them via **HACS → Frontend**); where they're missing the strategy shows a short placeholder rather than a broken card.
 
-One caveat worth knowing: on a **hard refresh** (Ctrl/Cmd+Shift+R, which bypasses the browser cache) the dashboard may occasionally show "Error loading the dashboard strategy: Timeout waiting for strategy element …". This is a Home Assistant limitation common to all network-loaded dashboard strategies — HA gives the strategy module a fixed 5-second window to register, and a cold re-fetch can lose that race when it's queued behind other custom-card resources. A normal reload serves the module from cache and isn't affected, so it doesn't bite in day-to-day use; if you do hit it, reload again.
+The integration registers its two JS modules as **Lovelace resources** (the same mechanism HACS cards use), which Home Assistant awaits before rendering any dashboard — so the strategy and cards load deterministically, even on a hard refresh or a cold cache. Earlier builds relied solely on the fire-and-forget extra-module mechanism, which could lose HA's 5-second strategy registration window on a cold load (and could leave a panel view stuck on "Configuration error" if a card's module was still in flight). The resource entries are created and version-bumped automatically on storage-mode installs; if you manage your Lovelace resources in YAML, add `/givenergy_local/ge-strategy.js` and `/givenergy_local/ge-tape.js` as `module` resources yourself.
 
 #### `mode: flow`
 

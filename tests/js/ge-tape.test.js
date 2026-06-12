@@ -395,3 +395,25 @@ describe("forecastPoints", () => {
     expect(pts[0][1]).toBe(3000);
   });
 });
+
+describe("pickRatePence", () => {
+  const imp = { state: "0.30", attributes: {} };
+  const exp = { state: "0.15", attributes: {} };
+
+  it("prices an exporting grid leg at the export rate", () => {
+    expect(TAPE.pickRatePence(1500, imp, exp)).toBeCloseTo(15);
+  });
+
+  it("prices an importing grid leg at the import rate", () => {
+    expect(TAPE.pickRatePence(-800, imp, exp)).toBeCloseTo(30);
+  });
+
+  it("falls back to the import rate when no export tariff exists", () => {
+    expect(TAPE.pickRatePence(1500, imp, null)).toBeCloseTo(30);
+  });
+
+  it("returns null with no usable rate", () => {
+    expect(TAPE.pickRatePence(0, null, null)).toBeNull();
+    expect(TAPE.pickRatePence(0, { state: "unknown", attributes: {} }, null)).toBeNull();
+  });
+});

@@ -792,3 +792,45 @@ describe("mission mode - solar forecast tomorrow derivation", () => {
     ]);
   });
 });
+
+describe("mission mode - card readiness await", () => {
+  it("waits for the ge-tape module cards before emitting views", async () => {
+    let defined = false;
+    global.customElements = {
+      get: (n) => undefined,
+      whenDefined: (n) =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            defined = true;
+            resolve();
+          }, 20);
+        }),
+    };
+    try {
+      const hass = makeHass({ batterySerials: ["BAT1"] });
+      const dash = await GE.generateDashboard({ mode: "mission" }, hass);
+      expect(defined).toBe(true); // generate resolved only after whenDefined
+      expect(view(dash, "Mission Control")).toBeTruthy();
+    } finally {
+      delete global.customElements;
+    }
+  });
+
+  it("degrades after the timeout when the module never arrives", async () => {
+    global.customElements = {
+      get: (n) => undefined,
+      whenDefined: (n) => new Promise(() => {}), // never resolves
+    };
+    try {
+      const hass = makeHass({ batterySerials: ["BAT1"] });
+      const dash = await GE.generateDashboard(
+        { mode: "mission", card_wait_ms: 30 },
+        hass
+      );
+      // Still emits the dashboard rather than hanging forever.
+      expect(view(dash, "Mission Control")).toBeTruthy();
+    } finally {
+      delete global.customElements;
+    }
+  });
+});

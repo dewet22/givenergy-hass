@@ -1,5 +1,6 @@
 """Tests for integration setup, unload, and config-entry migration."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from givenergy_modbus.exceptions import PlantTopologyMismatch
@@ -16,6 +17,7 @@ from custom_components.givenergy_local import (
     _STRATEGY_URL,
     _STRATEGY_VERSION,
     _TAPE_URL,
+    _async_register_lovelace_resources,
     async_setup,
 )
 from custom_components.givenergy_local.const import (
@@ -732,3 +734,76 @@ async def test_expose_recommended_entities_honours_custom_assistants_list(
     # Two assistants × N entities → 2N total exposure calls.
     assistants_called = {call.args[1] for call in expose_mock.call_args_list}
     assert assistants_called == {"conversation", "cloud.alexa"}
+
+
+class _FakeResources:
+    """Mimics lovelace's ResourceStorageCollection surface."""
+
+    def __init__(self, items=None, loaded=True):
+        self.loaded = loaded
+        self.load_calls = 0
+        self.created: list[dict] = []
+        self.updated: list[tuple[str, dict]] = []
+        self._items = items or []
+
+    async def async_load(self):
+        self.load_calls += 1
+        self.loaded = True
+
+    def async_items(self):
+        return list(self._items)
+
+    async def async_create_item(self, data):
+        self.created.append(data)
+
+    async def async_update_item(self, item_id, data):
+        self.updated.append((item_id, data))
+
+
+async def test_lovelace_resources_created(hass):
+    """Both bundled modules are registered as awaited Lovelace resources."""
+    resources = _FakeResources()
+    hass.data["lovelace"] = SimpleNamespace(resources=resources)
+    await _async_register_lovelace_resources(hass)
+    urls = sorted(item["url"] for item in resources.created)
+    assert urls == [
+        f"{_STRATEGY_URL}?v={_STRATEGY_VERSION}",
+        f"{_TAPE_URL}?v={_STRATEGY_VERSION}",
+    ]
+    assert all(item["res_type"] == "module" for item in resources.created)
+
+
+async def test_lovelace_resources_update_stale_versions(hass):
+    """Existing entries for our URLs are version-bumped, not duplicated."""
+    resources = _FakeResources(
+        items=[
+            {"id": "aaa", "url": f"{_STRATEGY_URL}?v=1"},
+            {"id": "bbb", "url": f"{_TAPE_URL}?v={_STRATEGY_VERSION}"},
+            {"id": "ccc", "url": "/hacsfiles/some-card/card.js"},
+        ]
+    )
+    hass.data["lovelace"] = SimpleNamespace(resources=resources)
+    await _async_register_lovelace_resources(hass)
+    assert resources.created == []  # nothing duplicated
+    assert resources.updated == [
+        ("aaa", {"res_type": "module", "url": f"{_STRATEGY_URL}?v={_STRATEGY_VERSION}"})
+    ]
+
+
+async def test_lovelace_resources_loads_store_first(hass):
+    resources = _FakeResources(loaded=False)
+    hass.data["lovelace"] = SimpleNamespace(resources=resources)
+    await _async_register_lovelace_resources(hass)
+    assert resources.load_calls == 1
+    assert len(resources.created) == 2
+
+
+async def test_lovelace_resources_skip_yaml_mode(hass):
+    """YAML-mode resource collections (no create API) are left alone."""
+    hass.data["lovelace"] = SimpleNamespace(resources=object())
+    await _async_register_lovelace_resources(hass)  # must not raise
+
+
+async def test_lovelace_resources_skip_when_lovelace_missing(hass):
+    hass.data.pop("lovelace", None)
+    await _async_register_lovelace_resources(hass)  # must not raise
