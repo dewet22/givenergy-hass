@@ -77,7 +77,7 @@ _TAPE_URL = f"/{DOMAIN}/{_TAPE_FILENAME}"
 _FONTS_DIRNAME = "fonts"
 _FONTS_URL = f"/{DOMAIN}/{_FONTS_DIRNAME}"
 # Shared cache-bust version for both JS modules; bump on any JS change.
-_STRATEGY_VERSION = "13"
+_STRATEGY_VERSION = "14"
 
 # Per-config-entry topology cache. PlantCapabilities is persisted as
 # `to_dict()` directly (no envelope) following HA Core's Store convention —
