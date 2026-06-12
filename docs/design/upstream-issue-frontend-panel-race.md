@@ -1,7 +1,7 @@
 # DRAFT — upstream issue for home-assistant/frontend
 
 > Repo: home-assistant/frontend · Type: bug report
-> Status: draft for review, not filed
+> Status: FILED as https://github.com/home-assistant/frontend/issues/52570 (2026-06-12)
 
 ---
 
