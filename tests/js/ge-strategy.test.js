@@ -495,7 +495,6 @@ describe("analyst mode", () => {
 
 describe("mission mode", () => {
   const missionCard = (dash) => view(dash, "Mission Control").cards[0];
-  const tapeCard = (dash) => view(dash, "Tape").cards[0];
   const MISSION_CFG = {
     mode: "mission",
     tariff_import: "sensor.octopus_import_rate",
@@ -508,7 +507,6 @@ describe("mission mode", () => {
     const dash = await GE.generateDashboard(MISSION_CFG, hass);
     expect(titles(dash)).toEqual([
       "Mission Control",
-      "Tape",
       "Ledger",
       "Observatory",
       "Generation",
@@ -523,20 +521,18 @@ describe("mission mode", () => {
     expect(mission.panel).toBe(true);
     expect(mission.cards.length).toBe(1);
     expect(mission.cards[0].type).toBe("custom:givenergy-mission");
-    const tape = view(dash, "Tape");
-    expect(tape.panel).toBe(true);
-    expect(tape.cards[0].type).toBe("custom:givenergy-tape");
-    expect(tape.cards[0].variant).toBe("full");
+    // The Tape deep view is deprecated: the hub carries the tape already,
+    // and the full variant added nothing meaningfully new.
+    expect(view(dash, "Tape")).toBeUndefined();
   });
 
-  it("passes the tariff/forecast entity ids through to both cards", async () => {
+  it("passes the tariff/forecast entity ids through to the mission card", async () => {
     const hass = makeHass({ batterySerials: ["BAT1"] });
     const dash = await GE.generateDashboard(MISSION_CFG, hass);
-    for (const c of [missionCard(dash), tapeCard(dash)]) {
-      expect(c.tariff_import).toBe("sensor.octopus_import_rate");
-      expect(c.tariff_export).toBe("sensor.octopus_export_rate");
-      expect(c.solar_forecast).toBe("sensor.solcast_today");
-    }
+    const c = missionCard(dash);
+    expect(c.tariff_import).toBe("sensor.octopus_import_rate");
+    expect(c.tariff_export).toBe("sensor.octopus_export_rate");
+    expect(c.solar_forecast).toBe("sensor.solcast_today");
   });
 
   it("omits tariff/forecast fields when not configured", async () => {
@@ -597,7 +593,7 @@ describe("mission mode", () => {
         hide_header: true,
         hide_sidebar: true,
       });
-      expect(view(dash, "Tape").kiosk_mode).toBeUndefined();
+      expect(view(dash, "Ledger").kiosk_mode).toBeUndefined();
     });
   });
 
@@ -618,7 +614,7 @@ describe("mission mode - ledger view", () => {
   it("emits a Ledger view after Tape when the money sensors exist", async () => {
     const hass = makeHass({ batterySerials: ["BAT1"] });
     const dash = await GE.generateDashboard(MISSION_CFG, hass);
-    expect(titles(dash).slice(0, 3)).toEqual(["Mission Control", "Tape", "Ledger"]);
+    expect(titles(dash).slice(0, 2)).toEqual(["Mission Control", "Ledger"]);
     const ledger = view(dash, "Ledger");
     expect(ledger.panel).toBe(true);
     const c = ledger.cards[0];
@@ -642,9 +638,8 @@ describe("mission mode - ledger view", () => {
     });
     const dash = await GE.generateDashboard(MISSION_CFG, hass);
     expect(view(dash, "Ledger")).toBeUndefined();
-    expect(titles(dash).slice(0, 5)).toEqual([
+    expect(titles(dash).slice(0, 4)).toEqual([
       "Mission Control",
-      "Tape",
       "Observatory",
       "Generation",
       "Overview",
@@ -687,9 +682,9 @@ describe("mission mode - observatory view", () => {
     const dash = await GE.generateDashboard(MISSION_CFG, hass);
     expect(titles(dash).slice(0, 4)).toEqual([
       "Mission Control",
-      "Tape",
       "Ledger",
       "Observatory",
+      "Generation",
     ]);
   });
 
@@ -729,8 +724,6 @@ describe("mission mode - tariff rates event derivation", () => {
     expect(c.tariff_export_rates).toEqual([
       "event.octopus_energy_electricity_x_1700060083404_export_current_day_rates",
     ]);
-    const tape = view(dash, "Tape").cards[0];
-    expect(tape.tariff_import_rates).toEqual(c.tariff_import_rates);
   });
 
   it("omits the rates fields when no matching event entities exist", async () => {
@@ -869,9 +862,8 @@ describe("mission mode - generation view", () => {
   it("orders Generation after Observatory", async () => {
     const hass = makeHass({ batterySerials: ["BAT1"] });
     const dash = await GE.generateDashboard({ mode: "mission" }, hass);
-    expect(titles(dash).slice(0, 5)).toEqual([
+    expect(titles(dash).slice(0, 4)).toEqual([
       "Mission Control",
-      "Tape",
       "Ledger",
       "Observatory",
       "Generation",

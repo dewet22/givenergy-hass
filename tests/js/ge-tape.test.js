@@ -530,3 +530,33 @@ describe("weeklySeries", () => {
     expect(series.every((v) => v === 0)).toBe(true);
   });
 });
+
+describe("rejectSpikes", () => {
+  it("drops isolated samples that disagree with both neighbours", () => {
+    const soc = [
+      [1000, 91],
+      [2000, 0],  // inverter glitch: 91 -> 0 -> 91 in seconds
+      [3000, 91],
+      [4000, 90],
+    ];
+    expect(TAPE.rejectSpikes(soc, 25)).toEqual([
+      [1000, 91],
+      [3000, 91],
+      [4000, 90],
+    ]);
+  });
+
+  it("keeps genuine fast-but-sustained drops", () => {
+    const soc = [
+      [1000, 90],
+      [2000, 60], // big drop...
+      [3000, 58], // ...but the next sample agrees: keep it
+    ];
+    expect(TAPE.rejectSpikes(soc, 25)).toEqual(soc);
+  });
+
+  it("passes short series through untouched", () => {
+    expect(TAPE.rejectSpikes([[1, 50]], 25)).toEqual([[1, 50]]);
+    expect(TAPE.rejectSpikes([], 25)).toEqual([]);
+  });
+});
