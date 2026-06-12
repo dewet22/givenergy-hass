@@ -493,3 +493,40 @@ describe("calendarGrid", () => {
     expect(grid.maxW).toBe(0);
   });
 });
+
+describe("weeklySeries", () => {
+  const NOON = Date.UTC(2026, 5, 12, 12, 0, 0);
+  const row = (daysAgo, hour, meanW) => ({
+    start: NOON - daysAgo * 24 * H + (hour - 12) * H,
+    mean: meanW,
+  });
+
+  it("sums hourly means into weekly kWh, week 0 = current week", () => {
+    const series = TAPE.weeklySeries(
+      [
+        row(1, 11, 2000), // this week: 2 kWh
+        row(2, 12, 1000), // this week: 1 kWh
+        row(8, 12, 3000), // last week: 3 kWh
+      ],
+      { nowMs: NOON, weeks: 52 }
+    );
+    expect(series.length).toBe(52);
+    expect(series[0]).toBeCloseTo(3.0);
+    expect(series[1]).toBeCloseTo(3.0);
+    expect(series[2]).toBe(0);
+  });
+
+  it("is immune to negative artefacts by construction (means, not counter sums)", () => {
+    const series = TAPE.weeklySeries(
+      [row(1, 12, 1500), { start: NOON - 24 * H, mean: null }],
+      { nowMs: NOON, weeks: 4 }
+    );
+    expect(series[0]).toBeCloseTo(1.5);
+    expect(series.every((v) => v >= 0)).toBe(true);
+  });
+
+  it("drops rows outside the window", () => {
+    const series = TAPE.weeklySeries([row(400, 12, 5000)], { nowMs: NOON, weeks: 52 });
+    expect(series.every((v) => v === 0)).toBe(true);
+  });
+});

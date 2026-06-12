@@ -631,7 +631,14 @@
       if (c) cards.push(c);
     });
 
-    return { title: "Observatory", path: "observatory", icon: "mdi:telescope", cards: cards };
+    // Full-width panel + vertical-stack, same reasoning as Generation.
+    return {
+      title: "Observatory",
+      path: "observatory",
+      icon: "mdi:telescope",
+      panel: true,
+      cards: [{ type: "vertical-stack", cards: cards }],
+    };
   }
 
   // Generation: a year of PV history. Two heatmaps from the bundled
@@ -648,22 +655,20 @@
       if (opts.maxPvKw) cfg.max_pv_kw = opts.maxPvKw;
       return cfg;
     };
+    // Full-width panel + vertical-stack: masonry's three columns squash
+    // year-wide charts into unusable slivers. The weekly chart is the
+    // bundled card too (variant: weekly, from hourly means) rather than a
+    // statistics-graph of the energy counter, whose weekly `change` shows
+    // huge negative artefacts across statistics-backport seams.
     return {
       title: "Generation",
       path: "generation",
       icon: "mdi:solar-power-variant",
+      panel: true,
       cards: [
-        heatmap("density"),
-        heatmap("calendar"),
         {
-          type: "statistics-graph",
-          title: "PV energy by week - 365d",
-          entities: [energy],
-          period: "week",
-          days_to_show: 365,
-          stat_types: ["change"],
-          chart_type: "line",
-          hide_legend: true,
+          type: "vertical-stack",
+          cards: [heatmap("density"), heatmap("calendar"), heatmap("weekly")],
         },
       ],
     };
@@ -1504,7 +1509,7 @@
     // render; wait (bounded) for the sibling module.
     if (opts.mode === "mission") {
       await awaitCards(
-        ["givenergy-mission", "givenergy-tape", "givenergy-ledger"],
+        ["givenergy-mission", "givenergy-tape", "givenergy-ledger", "givenergy-gen-heatmap"],
         config.card_wait_ms != null ? config.card_wait_ms : 5000
       );
     }

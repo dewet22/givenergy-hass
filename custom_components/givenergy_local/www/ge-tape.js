@@ -406,6 +406,25 @@
     return { cells: cells, days: days, maxW: maxW };
   }
 
+  // Weekly kWh totals from hourly mean-power statistics (mean W x 1h summed
+  // per week, week 0 = current). Built from means rather than the energy
+  // counter's sum statistics on purpose: a statistics backport that rewrites
+  // the counter produces huge negative weekly "change" artefacts, while
+  // hourly means are seam-immune.
+  function weeklySeries(rows, opts) {
+    var out = new Array(opts.weeks).fill(0);
+    for (var i = 0; i < (rows || []).length; i++) {
+      var mean = rows[i] && rows[i].mean;
+      if (typeof mean !== "number" || mean <= 0) continue;
+      var t = typeof rows[i].start === "number" ? rows[i].start : Date.parse(rows[i].start);
+      if (isNaN(t)) continue;
+      var week = Math.floor((opts.nowMs - t) / (7 * 24 * H_MS));
+      if (week < 0 || week >= opts.weeks) continue;
+      out[week] += mean / 1000;
+    }
+    return out;
+  }
+
   // "HH:MM[:SS]" (a time-entity state) -> minutes past local midnight, or null.
   function parseTimeOfDay(state) {
     if (typeof state !== "string") return null;
@@ -453,6 +472,7 @@
     hourUtcPlus1: hourUtcPlus1,
     densityGrid: densityGrid,
     calendarGrid: calendarGrid,
+    weeklySeries: weeklySeries,
   };
 
   // ----- browser-only from here ----------------------------------------------
@@ -1347,6 +1367,56 @@
           var plotH = bottom - top;
           var svg = [];
           var title;
+
+          if (cfg.variant === "weekly") {
+            var weeks = 52;
+            var series = weeklySeries(this._rows, { nowMs: Date.now(), weeks: weeks });
+            var maxKwh = Math.max.apply(null, series.concat([1]));
+            title = "PV energy by week - " + weeks + "w";
+            var bw = plotW / weeks;
+            for (var w = 0; w < weeks; w++) {
+              var v2 = series[weeks - 1 - w]; // oldest on the left
+              if (!v2) continue;
+              var bh = (v2 / maxKwh) * plotH;
+              svg.push(
+                '<rect x="' + (left + w * bw + 1).toFixed(1) + '" y="' + (bottom - bh).toFixed(1) +
+                '" width="' + (bw - 2).toFixed(1) + '" height="' + bh.toFixed(1) +
+                '" fill="#ffd33d" opacity="0.85" shape-rendering="crispEdges"/>'
+              );
+            }
+            for (var yk = 0; yk <= 4; yk++) {
+              var kwh = (maxKwh * yk) / 4;
+              svg.push(
+                '<text x="' + (left - 8) + '" y="' + (bottom - (yk / 4) * plotH + 4).toFixed(1) +
+                '" text-anchor="end" style="fill:#8b949e;font-size:11px">' +
+                kwh.toFixed(0) + "</text>"
+              );
+            }
+            var MONTHS_W = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            var seenM = {};
+            for (var wx = 0; wx < weeks; wx += 2) {
+              var when2 = new Date(Date.now() - (weeks - 1 - wx) * 7 * 24 * H_MS);
+              var lbl = MONTHS_W[when2.getUTCMonth()];
+              if (seenM[lbl]) continue;
+              seenM[lbl] = true;
+              svg.push(
+                '<text x="' + (left + wx * bw).toFixed(1) + '" y="' + (HEIGHT - 8) +
+                '" style="fill:#484f58;font-size:11px">' + lbl + "</text>"
+              );
+            }
+            svg.push(
+              '<text x="' + left + '" y="20" style="fill:#8b949e;font-size:13px">' +
+              esc(title) + " (kWh)</text>"
+            );
+            this.innerHTML =
+              '<ha-card style="background:#161a20;overflow:hidden">' +
+              '<svg viewBox="0 0 ' + W + " " + HEIGHT +
+              '" style="display:block;width:100%" preserveAspectRatio="xMidYMid meet">' +
+              svg.join("") +
+              "</svg></ha-card>";
+            return;
+          }
 
           if (cfg.variant === "calendar") {
             var days = cfg.days || 365;
