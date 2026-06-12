@@ -230,3 +230,38 @@ describe("sumChange", () => {
     expect(TAPE.sumChange([{ change: null }])).toBeNull();
   });
 });
+
+describe("nextActionHint", () => {
+  const rates = {
+    rates: [
+      { start: "2026-06-12T14:00:00Z", end: "2026-06-12T16:00:00Z", value_inc_vat: 0.15 },
+      { start: "2026-06-12T16:00:00Z", end: "2026-06-12T19:00:00Z", value_inc_vat: 0.55 },
+      { start: "2026-06-12T19:00:00Z", end: "2026-06-12T23:00:00Z", value_inc_vat: 0.15 },
+    ],
+  };
+
+  it("shows the import rate and the next band change when importing", () => {
+    const hint = TAPE.nextActionHint({
+      nowMs: NOW, // 14:00Z
+      gridW: -800, // importing
+      importState: { state: "0.15", attributes: rates },
+      exportState: null,
+    });
+    expect(hint).toContain("import 15p/kWh");
+    expect(hint).toContain("peak");
+  });
+
+  it("shows the export rate while exporting", () => {
+    const hint = TAPE.nextActionHint({
+      nowMs: NOW,
+      gridW: 1200, // exporting
+      importState: { state: "0.15", attributes: rates },
+      exportState: { state: "0.18", attributes: {} },
+    });
+    expect(hint).toContain("exporting at 18p/kWh");
+  });
+
+  it("returns empty without tariff data", () => {
+    expect(TAPE.nextActionHint({ nowMs: NOW, gridW: 0, importState: null })).toBe("");
+  });
+});

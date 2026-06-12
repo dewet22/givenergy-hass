@@ -199,6 +199,35 @@
     return seen ? total : null;
   }
 
+  function asPence(rate) {
+    return rate > 2.5 ? rate : rate * 100; // tolerate pence- or pound-valued states
+  }
+
+  // Next-action hint for the mission tile: deliberately heuristics-only (the
+  // spec's v1) - current rate, next band change, and "exporting at Xp" while
+  // the export meter is running. No recommendations engine.
+  function nextActionHint(o) {
+    var exporting = (o.gridW || 0) > EXPORT_FLOOR_W;
+    if (exporting && o.exportState) {
+      var ex = parseFloat(o.exportState.state);
+      if (!isNaN(ex)) return "exporting at " + asPence(ex).toFixed(0) + "p/kWh";
+    }
+    if (!o.importState) return "";
+    var rate = parseFloat(o.importState.state);
+    if (isNaN(rate)) return "";
+    var hint = "import " + asPence(rate).toFixed(0) + "p/kWh now";
+    var bands = classifyRates(parseForwardRates(o.importState.attributes));
+    for (var b = 0; b < bands.length; b++) {
+      if (bands[b].startMs > o.nowMs) {
+        hint +=
+          " - " + bands[b].band + " from " +
+          new Date(bands[b].startMs).toTimeString().slice(0, 5);
+        break;
+      }
+    }
+    return hint;
+  }
+
   // "HH:MM[:SS]" (a time-entity state) -> minutes past local midnight, or null.
   function parseTimeOfDay(state) {
     if (typeof state !== "string") return null;
@@ -238,6 +267,7 @@
     slotOccurrences: slotOccurrences,
     bandSplit: bandSplit,
     sumChange: sumChange,
+    nextActionHint: nextActionHint,
   };
 
   // ----- browser-only from here ----------------------------------------------
@@ -771,25 +801,12 @@
             "observatory",
           ]);
 
-          // Next-action hint: current rate + next band change (heuristics only).
-          var hint = "";
-          var rs = cfg.tariff_import && hass.states[cfg.tariff_import];
-          if (rs) {
-            var rate = parseFloat(rs.state);
-            if (!isNaN(rate)) {
-              var pence = rate > 2.5 ? rate : rate * 100;
-              hint = "import " + pence.toFixed(0) + "p/kWh now";
-              var bands = classifyRates(parseForwardRates(rs.attributes));
-              for (var b = 0; b < bands.length; b++) {
-                if (bands[b].startMs > Date.now()) {
-                  hint +=
-                    " - " + bands[b].band + " from " +
-                    new Date(bands[b].startMs).toTimeString().slice(0, 5);
-                  break;
-                }
-              }
-            }
-          }
+          var hint = nextActionHint({
+            nowMs: Date.now(),
+            gridW: num(hass, cfg.grid),
+            importState: cfg.tariff_import ? hass.states[cfg.tariff_import] : null,
+            exportState: cfg.tariff_export ? hass.states[cfg.tariff_export] : null,
+          });
           tiles.push(["NEXT", hint || "no tariff data", "tape"]);
 
           var html = '<div style="display:flex;gap:8px;margin-top:8px">';

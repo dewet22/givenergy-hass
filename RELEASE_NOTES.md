@@ -8,6 +8,36 @@ that release. For releases prior to v1.1.0, see the
 
 ---
 
+## Unreleased
+
+**Mission dashboard: `mode: mission`, money sensors, Ledger and Observatory**
+
+A new dashboard strategy mode merging the Story and Coach directions from the
+redesign brief into a tape-centred hub (design write-up:
+[`docs/superpowers/specs/2026-06-12-dashboard-mission-design.md`](docs/superpowers/specs/2026-06-12-dashboard-mission-design.md)):
+
+- **Mission Control** — glance strip plus the **tape**, a rolling −12 h → +12 h
+  timeline with "now" pinned centre: the day so far (solar, SOC, annotated
+  events) behind the cursor; solar forecast, tariff bands, the inverter's
+  charge/discharge plan and a modelled SOC projection ahead of it. A docked
+  panel at the cursor shows the live flow with the current rate.
+- **Money sensors** (optional) — name import/export tariff rate entities in the
+  integration's new options flow and four sensors appear: import cost, export
+  earnings, net cost today, and a modelled "cost without the system"
+  counterfactual. Priced incrementally at the rate in force; midnight resets,
+  restart restore, and rate outages handled honestly (unavailable, never
+  priced-at-zero).
+- **Ledger** — today's priced flows with tariff-band splits and month-to-date /
+  last-30-days from long-term statistics. Emitted only when the money sensors
+  exist.
+- **Observatory** — cell heatmap plus balance-drift, cycle-count, calibrated
+  capacity and temperature-spread trends from long-term statistics.
+
+Every optional feed (tariff entities, solar forecast) degrades by dropping its
+layer with a legend note. Existing modes are untouched.
+
+---
+
 ## v1.2.0
 
 **Per-module All-in-One battery data**
