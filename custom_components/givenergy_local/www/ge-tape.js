@@ -312,6 +312,22 @@
     return rate > 2.5 ? rate : rate * 100; // tolerate pence- or pound-valued states
   }
 
+  // The rate the grid leg is actually trading at: export rate while
+  // exporting (falling back to import when no export tariff is configured),
+  // import rate otherwise. Returns pence/kWh or null.
+  function pickRatePence(gridW, importState, exportState) {
+    function rate(state) {
+      if (!state) return null;
+      var v = parseFloat(state.state);
+      return isNaN(v) ? null : asPence(v);
+    }
+    if ((gridW || 0) > EXPORT_STOP_W) {
+      var ex = rate(exportState);
+      if (ex != null) return ex;
+    }
+    return rate(importState);
+  }
+
   // Next-action hint for the mission tile: deliberately heuristics-only (the
   // spec's v1) - current rate, next band change, and "exporting at Xp" while
   // the export meter is running. No recommendations engine.
@@ -382,6 +398,7 @@
     sumChange: sumChange,
     nextActionHint: nextActionHint,
     flowLines: flowLines,
+    pickRatePence: pickRatePence,
   };
 
   // ----- browser-only from here ----------------------------------------------
@@ -738,17 +755,26 @@
             }
           }
 
-          // -- event diamonds (two staggered rows so neighbours don't collide)
+          // -- event diamonds (two staggered rows; a label too close to the
+          // previous one on its row degrades to a bare diamond so dense
+          // clusters stay readable)
           var events = detectEvents({ grid: data.grid, soc: data.soc });
           var evRow = 0;
+          var lastLabelX = [-1000, -1000];
           for (var ev = 0; ev < events.length; ev++) {
             var exx = timeToX(events[ev].tMs, win, W);
             if (exx < 0 || exx > W) continue;
+            var row = evRow % 2;
+            var labelled = exx - lastLabelX[row] > 110;
             svg.push(
-              '<text x="' + exx.toFixed(1) + '" y="' + (evRow % 2 ? 40 : 20) +
-              '" text-anchor="middle" style="fill:#c9d1d9;font-size:14px">&#9670; ' +
-              esc(EVENT_LABELS[events[ev].kind] || events[ev].kind) + "</text>"
+              '<text x="' + exx.toFixed(1) + '" y="' + (row ? 40 : 20) +
+              '" text-anchor="middle" style="fill:#c9d1d9;font-size:14px">&#9670;' +
+              (labelled
+                ? " " + esc(EVENT_LABELS[events[ev].kind] || events[ev].kind)
+                : "") +
+              "</text>"
             );
+            if (labelled) lastLabelX[row] = exx;
             evRow++;
           }
 
@@ -776,13 +802,17 @@
             '" stroke="' + COLOURS.now + '" stroke-width="2"/>'
           );
           if (cfg.variant === "full") {
-            var rate = rateState ? parseFloat(rateState.state) : null;
+            var gridNow = num(hass, cfg.grid);
             var lines = flowLines({
               pvW: num(hass, cfg.solar),
               loadW: num(hass, cfg.load),
               battW: num(hass, cfg.battery_power),
-              gridW: num(hass, cfg.grid),
-              ratePence: rate != null && !isNaN(rate) ? asPence(rate) : null,
+              gridW: gridNow,
+              ratePence: pickRatePence(
+                gridNow,
+                rateState,
+                cfg.tariff_export ? hass.states[cfg.tariff_export] : null
+              ),
             });
             var boxW = 190;
             var boxX = Math.max(4, nx - boxW - 10);
@@ -918,14 +948,17 @@
 
           // Live-flow readout: chip instead of a box floating on the tape,
           // which sat right on top of the next few hours of forecast.
-          var rs = cfg.tariff_import ? hass.states[cfg.tariff_import] : null;
-          var rate = rs ? parseFloat(rs.state) : null;
+          var gridNow = num(hass, cfg.grid);
           var nowLines = flowLines({
             pvW: num(hass, cfg.solar),
             loadW: num(hass, cfg.load),
             battW: num(hass, cfg.battery_power),
-            gridW: num(hass, cfg.grid),
-            ratePence: rate != null && !isNaN(rate) ? asPence(rate) : null,
+            gridW: gridNow,
+            ratePence: pickRatePence(
+              gridNow,
+              cfg.tariff_import ? hass.states[cfg.tariff_import] : null,
+              cfg.tariff_export ? hass.states[cfg.tariff_export] : null
+            ),
           });
           if (nowLines.length) tiles.push(["NOW", nowLines.join("  |  "), "tape"]);
 

@@ -19,9 +19,9 @@ from homeassistant.components.persistent_notification import (
     async_create as async_create_notification,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_HOST, CONF_PORT
+from homeassistant.const import CONF_HOST, CONF_PORT, EVENT_HOMEASSISTANT_STARTED
 from homeassistant.const import __version__ as HA_VERSION
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import CoreState, HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -77,7 +77,7 @@ _TAPE_URL = f"/{DOMAIN}/{_TAPE_FILENAME}"
 _FONTS_DIRNAME = "fonts"
 _FONTS_URL = f"/{DOMAIN}/{_FONTS_DIRNAME}"
 # Shared cache-bust version for both JS modules; bump on any JS change.
-_STRATEGY_VERSION = "12"
+_STRATEGY_VERSION = "13"
 
 # Per-config-entry topology cache. PlantCapabilities is persisted as
 # `to_dict()` directly (no envelope) following HA Core's Store convention —
@@ -310,6 +310,42 @@ async def _build_capture_header(
     return "\n".join(lines) + "\n"
 
 
+async def _async_register_lovelace_resources(hass: HomeAssistant) -> None:
+    """Ensure the bundled modules are registered as Lovelace *resources*.
+
+    ``add_extra_js_url`` modules are fire-and-forget: the frontend renders
+    dashboards without awaiting them. A panel view referencing a card from a
+    module still in flight renders a permanent "Configuration error", and the
+    strategy itself can lose HA's 5s registration window on a cold cache.
+    Lovelace resources, by contrast, are awaited before any dashboard renders
+    (which is why HACS cards never race). Storage mode only — a YAML-mode
+    resource list is user-managed, so it is left alone.
+    """
+    try:
+        lovelace = hass.data.get("lovelace")
+        resources = getattr(lovelace, "resources", None)
+        if resources is None or not hasattr(resources, "async_create_item"):
+            return  # lovelace absent, or YAML mode: nothing to manage here
+        if not resources.loaded:
+            await resources.async_load()
+
+        wanted = {
+            url: {"res_type": "module", "url": f"{url}?v={_STRATEGY_VERSION}"}
+            for url in (_STRATEGY_URL, _TAPE_URL)
+        }
+        for item in list(resources.async_items()):
+            base = str(item.get("url", "")).split("?", 1)[0]
+            target = wanted.pop(base, None)
+            if target is None:
+                continue
+            if item.get("url") != target["url"]:
+                await resources.async_update_item(item["id"], target)
+        for target in wanted.values():
+            await resources.async_create_item(target)
+    except Exception as exc:  # noqa: BLE001 - cosmetic; must never break setup
+        _LOGGER.warning("Could not register Lovelace resources: %s", exc)
+
+
 async def _async_register_capture_http(hass: HomeAssistant) -> None:
     """Register the capture landing/download views and ensure the capture dir.
 
@@ -334,6 +370,16 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """
     await _async_register_frontend_card(hass)
     await _async_register_capture_http(hass)
+
+    # Lovelace sets up its resource store during bootstrap; register ours once
+    # HA has fully started (immediately when this is a reload of a running HA).
+    async def _register_resources(_event: object = None) -> None:
+        await _async_register_lovelace_resources(hass)
+
+    if hass.state is CoreState.running:
+        await _register_resources()
+    else:
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_resources)
     return True
 
 
