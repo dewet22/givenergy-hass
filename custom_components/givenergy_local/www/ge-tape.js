@@ -25,7 +25,14 @@
   "use strict";
 
   var H_MS = 3600 * 1000;
-  var EXPORT_FLOOR_W = 50; // hysteresis floor for export start/stop events
+  // Export-episode detection: needs >START to begin, <STOP to end, and an
+  // episode (or a dip inside one) shorter than DEBOUNCE_MS is meter noise,
+  // not a session. Without the debounce, overnight flicker around the floor
+  // smears hundreds of start/stop labels across the tape.
+  var EXPORT_START_W = 250;
+  var EXPORT_STOP_W = 50;
+  var EVENT_DEBOUNCE_MS = 10 * 60 * 1000;
+  var SOC_REARM_PCT = 95; // soc_full re-arms only after dropping below this
 
   // ----- pure helpers (Node-exported for vitest) -----------------------------
 
@@ -101,20 +108,62 @@
 
   // Event diamonds from already-fetched history. `series` carries optional
   // [[tMs, value], ...] arrays: grid (W, positive = export) and soc (%).
+  //
+  // Export events are episode-based: raw start/stop transitions (asymmetric
+  // hysteresis) are folded into episodes, dips inside an episode shorter than
+  // the debounce window are bridged, then episodes themselves shorter than
+  // the window are dropped. An episode still open at the end of the data is
+  // always kept - "export began five minutes ago" is exactly the event the
+  // cursor-side of the tape should show.
   function detectEvents(series) {
     var events = [];
     var grid = (series && series.grid) || [];
     if (grid.length) {
-      var exporting = grid[0][1] > EXPORT_FLOOR_W;
+      // Raw episodes: [startMs|null, endMs|null] (null start = already
+      // exporting at the window edge; null end = still exporting).
+      var episodes = [];
+      var exporting = grid[0][1] > EXPORT_START_W;
+      var current = exporting ? { startMs: null, endMs: null } : null;
       for (var i = 1; i < grid.length; i++) {
         var w = grid[i][1];
-        if (w > EXPORT_FLOOR_W && !exporting) {
-          events.push({ tMs: grid[i][0], kind: "export_started" });
-          exporting = true;
-        } else if (w <= EXPORT_FLOOR_W && exporting) {
-          events.push({ tMs: grid[i][0], kind: "export_stopped" });
-          exporting = false;
+        if (w > EXPORT_START_W && !current) {
+          current = { startMs: grid[i][0], endMs: null };
+        } else if (w < EXPORT_STOP_W && current) {
+          current.endMs = grid[i][0];
+          episodes.push(current);
+          current = null;
         }
+      }
+      if (current) episodes.push(current);
+
+      // Bridge short gaps between consecutive episodes.
+      var merged = [];
+      for (var m = 0; m < episodes.length; m++) {
+        var prev = merged[merged.length - 1];
+        if (
+          prev &&
+          prev.endMs != null &&
+          episodes[m].startMs != null &&
+          episodes[m].startMs - prev.endMs < EVENT_DEBOUNCE_MS
+        ) {
+          prev.endMs = episodes[m].endMs;
+        } else {
+          merged.push(episodes[m]);
+        }
+      }
+
+      for (var e = 0; e < merged.length; e++) {
+        var ep = merged[e];
+        // Closed episodes shorter than the window are noise; open ones stay.
+        if (
+          ep.startMs != null &&
+          ep.endMs != null &&
+          ep.endMs - ep.startMs < EVENT_DEBOUNCE_MS
+        ) {
+          continue;
+        }
+        if (ep.startMs != null) events.push({ tMs: ep.startMs, kind: "export_started" });
+        if (ep.endMs != null) events.push({ tMs: ep.endMs, kind: "export_stopped" });
       }
     }
     var soc = (series && series.soc) || [];
@@ -125,7 +174,7 @@
         if (pct >= 100 && !full) {
           events.push({ tMs: soc[j][0], kind: "soc_full" });
           full = true;
-        } else if (pct < 100) {
+        } else if (pct < SOC_REARM_PCT) {
           full = false;
         }
       }
@@ -134,6 +183,25 @@
       return a.tMs - b.tMs;
     });
     return events;
+  }
+
+  // Live power-flow summary lines, shared by the tape's NOW panel and the
+  // mission hub's NOW chip. Inputs in watts; ratePence already normalised.
+  function flowLines(o) {
+    var lines = [];
+    function kw(w) {
+      return (w / 1000).toFixed(1) + " kW";
+    }
+    if (o.pvW != null) lines.push("solar " + kw(o.pvW));
+    if (o.loadW != null) lines.push("house " + kw(o.loadW));
+    if (o.battW != null) lines.push("battery " + (o.battW >= 0 ? "+" : "") + kw(o.battW));
+    if (o.gridW != null) {
+      lines.push(
+        (o.gridW >= 0 ? "export " : "import ") + kw(Math.abs(o.gridW)) +
+        (o.ratePence != null ? " @ " + o.ratePence.toFixed(0) + "p" : "")
+      );
+    }
+    return lines;
   }
 
   // Honest-but-simple forward SOC projection: inside a charge (discharge)
@@ -207,7 +275,7 @@
   // spec's v1) - current rate, next band change, and "exporting at Xp" while
   // the export meter is running. No recommendations engine.
   function nextActionHint(o) {
-    var exporting = (o.gridW || 0) > EXPORT_FLOOR_W;
+    var exporting = (o.gridW || 0) > EXPORT_STOP_W;
     if (exporting && o.exportState) {
       var ex = parseFloat(o.exportState.state);
       if (!isNaN(ex)) return "exporting at " + asPence(ex).toFixed(0) + "p/kWh";
@@ -268,6 +336,7 @@
     bandSplit: bandSplit,
     sumChange: sumChange,
     nextActionHint: nextActionHint,
+    flowLines: flowLines,
   };
 
   // ----- browser-only from here ----------------------------------------------
@@ -616,16 +685,18 @@
             }
           }
 
-          // -- event diamonds
+          // -- event diamonds (two staggered rows so neighbours don't collide)
           var events = detectEvents({ grid: data.grid, soc: data.soc });
+          var evRow = 0;
           for (var ev = 0; ev < events.length; ev++) {
             var exx = timeToX(events[ev].tMs, win, W);
             if (exx < 0 || exx > W) continue;
             svg.push(
-              '<text x="' + exx.toFixed(1) + '" y="30" text-anchor="middle" style="fill:' +
-              COLOURS.text + ';font-size:11px">&#9670; ' +
+              '<text x="' + exx.toFixed(1) + '" y="' + (evRow % 2 ? 40 : 20) +
+              '" text-anchor="middle" style="fill:#c9d1d9;font-size:14px">&#9670; ' +
               esc(EVENT_LABELS[events[ev].kind] || events[ev].kind) + "</text>"
             );
+            evRow++;
           }
 
           // -- time axis: a label every 3h
@@ -643,58 +714,49 @@
             );
           }
 
-          // -- now cursor + docked mini-flow
+          // -- now cursor; the live-flow readout lives in the mission hub's
+          // NOW chip (strip variant) or a panel docked over the already-seen
+          // past (full variant) so it never obscures what's coming up.
           var nx = timeToX(now, win, W);
           svg.push(
             '<line x1="' + nx + '" y1="0" x2="' + nx + '" y2="' + TAPE_H +
             '" stroke="' + COLOURS.now + '" stroke-width="2"/>'
           );
-          var pv = num(hass, cfg.solar);
-          var load = num(hass, cfg.load);
-          var grid = num(hass, cfg.grid);
-          var batt = num(hass, cfg.battery_power);
-          var rate = rateState ? parseFloat(rateState.state) : null;
-          var lines = [];
-          if (pv != null) lines.push("solar " + (pv / 1000).toFixed(1) + " kW");
-          if (load != null) lines.push("house " + (load / 1000).toFixed(1) + " kW");
-          if (batt != null) {
-            lines.push(
-              "battery " + (batt >= 0 ? "+" : "") + (batt / 1000).toFixed(1) + " kW"
-            );
-          }
-          if (grid != null) {
-            lines.push(
-              (grid >= 0 ? "export " : "import ") + Math.abs(grid / 1000).toFixed(1) + " kW" +
-              (rate != null && !isNaN(rate)
-                ? " @ " + (rate > 2.5 ? rate.toFixed(0) + "p" : (rate * 100).toFixed(0) + "p")
-                : "")
-            );
-          }
-          var boxW = 168;
-          var boxX = Math.min(W - boxW - 4, nx + 8);
-          var boxY = 50;
-          svg.push(
-            '<rect x="' + boxX + '" y="' + boxY + '" width="' + boxW + '" height="' +
-            (18 + lines.length * 16) + '" rx="4" fill="#1f242c" stroke="' + COLOURS.now +
-            '" stroke-width="1" opacity="0.95"/>'
-          );
-          svg.push(
-            '<text x="' + (boxX + 8) + '" y="' + (boxY + 14) + '" style="fill:' + COLOURS.now +
-            ';font-size:10px">NOW</text>'
-          );
-          for (var ln = 0; ln < lines.length; ln++) {
+          if (cfg.variant === "full") {
+            var rate = rateState ? parseFloat(rateState.state) : null;
+            var lines = flowLines({
+              pvW: num(hass, cfg.solar),
+              loadW: num(hass, cfg.load),
+              battW: num(hass, cfg.battery_power),
+              gridW: num(hass, cfg.grid),
+              ratePence: rate != null && !isNaN(rate) ? asPence(rate) : null,
+            });
+            var boxW = 190;
+            var boxX = Math.max(4, nx - boxW - 10);
+            var boxY = 56;
             svg.push(
-              '<text x="' + (boxX + 8) + '" y="' + (boxY + 30 + ln * 16) +
-              '" style="fill:#e6edf3;font-size:11px">' + esc(lines[ln]) + "</text>"
+              '<rect x="' + boxX + '" y="' + boxY + '" width="' + boxW + '" height="' +
+              (20 + lines.length * 18) + '" rx="4" fill="#1f242c" stroke="' + COLOURS.now +
+              '" stroke-width="1" opacity="0.92"/>'
             );
+            svg.push(
+              '<text x="' + (boxX + 8) + '" y="' + (boxY + 15) + '" style="fill:' + COLOURS.now +
+              ';font-size:11px">NOW</text>'
+            );
+            for (var ln = 0; ln < lines.length; ln++) {
+              svg.push(
+                '<text x="' + (boxX + 8) + '" y="' + (boxY + 33 + ln * 18) +
+                '" style="fill:#e6edf3;font-size:13px">' + esc(lines[ln]) + "</text>"
+              );
+            }
           }
 
           // -- legend notes (full variant only; the strip stays clean)
           if (cfg.variant === "full" && notes.length) {
             for (var n = 0; n < notes.length; n++) {
               svg.push(
-                '<text x="8" y="' + (16 + n * 14) + '" style="fill:' + COLOURS.axis +
-                ';font-size:10px">' + esc(notes[n]) + "</text>"
+                '<text x="8" y="' + (18 + n * 17) + '" style="fill:' + COLOURS.text +
+                ';font-size:12px">' + esc(notes[n]) + "</text>"
               );
             }
           }
@@ -800,6 +862,19 @@
             socs.length ? socs.join(" / ") : "battery detail",
             "observatory",
           ]);
+
+          // Live-flow readout: chip instead of a box floating on the tape,
+          // which sat right on top of the next few hours of forecast.
+          var rs = cfg.tariff_import ? hass.states[cfg.tariff_import] : null;
+          var rate = rs ? parseFloat(rs.state) : null;
+          var nowLines = flowLines({
+            pvW: num(hass, cfg.solar),
+            loadW: num(hass, cfg.load),
+            battW: num(hass, cfg.battery_power),
+            gridW: num(hass, cfg.grid),
+            ratePence: rate != null && !isNaN(rate) ? asPence(rate) : null,
+          });
+          if (nowLines.length) tiles.push(["NOW", nowLines.join("  |  "), "tape"]);
 
           var hint = nextActionHint({
             nowMs: Date.now(),
