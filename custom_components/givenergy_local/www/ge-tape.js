@@ -1340,6 +1340,13 @@
 
         set hass(hass) {
           this._hass = hass;
+          // A year of hourly statistics takes a moment; show something
+          // rather than an empty card while the fetch is in flight.
+          if (!this._rows && !this.innerHTML) {
+            this.innerHTML =
+              '<ha-card style="background:#161a20;padding:16px;color:#484f58;font-size:12px">' +
+              "loading a year of statistics...</ha-card>";
+          }
           this._maybeFetch();
         }
 
