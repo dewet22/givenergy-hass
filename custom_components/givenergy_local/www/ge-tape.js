@@ -161,6 +161,44 @@
     return pts;
   }
 
+  // Allocate a cumulative day-counter's deltas (kWh) to the tariff band in
+  // force at each sample. Negative deltas (midnight reset) are skipped;
+  // samples outside every band count as standard.
+  function bandSplit(series, bands) {
+    var out = { cheap: 0, standard: 0, peak: 0 };
+    if (!Array.isArray(series)) return out;
+    for (var i = 1; i < series.length; i++) {
+      var delta = series[i][1] - series[i - 1][1];
+      if (delta <= 0) continue;
+      var t = series[i][0];
+      var band = "standard";
+      for (var b = 0; b < bands.length; b++) {
+        if (t >= bands[b].startMs && t < bands[b].endMs) {
+          band = bands[b].band || "standard";
+          break;
+        }
+      }
+      out[band] += delta;
+    }
+    return out;
+  }
+
+  // Total of LTS statistics `change` rows (statistics_during_period with
+  // types:["change"]); null when no row carries one, so callers can tell
+  // "no statistics" from a genuine zero.
+  function sumChange(rows) {
+    var total = 0;
+    var seen = false;
+    for (var i = 0; i < (rows || []).length; i++) {
+      var c = rows[i] && rows[i].change;
+      if (typeof c === "number") {
+        total += c;
+        seen = true;
+      }
+    }
+    return seen ? total : null;
+  }
+
   // "HH:MM[:SS]" (a time-entity state) -> minutes past local midnight, or null.
   function parseTimeOfDay(state) {
     if (typeof state !== "string") return null;
@@ -198,6 +236,8 @@
     projectSoc: projectSoc,
     parseTimeOfDay: parseTimeOfDay,
     slotOccurrences: slotOccurrences,
+    bandSplit: bandSplit,
+    sumChange: sumChange,
   };
 
   // ----- browser-only from here ----------------------------------------------
@@ -783,6 +823,191 @@
           }
           this.querySelector("#ge-mission-strip").innerHTML = this._glanceStrip();
           this.querySelector("#ge-mission-tiles").innerHTML = this._tiles();
+        }
+      }
+    );
+  }
+
+  // ----- custom:givenergy-ledger -----------------------------------------------
+
+  if (!customElements.get("givenergy-ledger")) {
+    customElements.define(
+      "givenergy-ledger",
+      class GivEnergyLedger extends HTMLElement {
+        setConfig(cfg) {
+          if (!cfg || !cfg.money) {
+            throw new Error("givenergy-ledger: 'money' entity map is required");
+          }
+          this._cfg = cfg;
+          this._data = null;
+          this._fetchedAt = 0;
+          this._fetching = false;
+        }
+
+        set hass(hass) {
+          this._hass = hass;
+          this._maybeFetch();
+          this._render();
+        }
+
+        getCardSize() {
+          return 6;
+        }
+
+        _maybeFetch() {
+          var self = this;
+          if (this._fetching || Date.now() - this._fetchedAt < REFRESH_MS) return;
+          this._fetching = true;
+          var hass = this._hass;
+          var cfg = this._cfg;
+          var now = Date.now();
+          var dayStart = new Date(now);
+          dayStart.setHours(0, 0, 0, 0);
+
+          function series(eid) {
+            if (!eid) return Promise.resolve(null);
+            return fetchSeries(hass, eid, dayStart.getTime(), now).catch(function () {
+              return null;
+            });
+          }
+
+          // Month-to-date and trailing-30d sums of the net-cost sensor's LTS.
+          var monthStart = new Date(now);
+          monthStart.setDate(1);
+          monthStart.setHours(0, 0, 0, 0);
+          function ltsSum(startMs) {
+            if (!cfg.money.net) return Promise.resolve(null);
+            return hass
+              .callWS({
+                type: "recorder/statistics_during_period",
+                start_time: new Date(startMs).toISOString(),
+                end_time: new Date(now).toISOString(),
+                statistic_ids: [cfg.money.net],
+                period: "day",
+                types: ["change"],
+              })
+              .then(function (res) {
+                return sumChange((res && res[cfg.money.net]) || []);
+              })
+              .catch(function () {
+                return null;
+              });
+          }
+
+          Promise.all([
+            series(cfg.totals && cfg.totals.import_today),
+            series(cfg.totals && cfg.totals.export_today),
+            ltsSum(monthStart.getTime()),
+            ltsSum(now - 30 * 24 * H_MS),
+          ]).then(function (res) {
+            self._data = {
+              importSeries: res[0],
+              exportSeries: res[1],
+              monthToDate: res[2],
+              last30: res[3],
+            };
+            self._fetchedAt = now;
+            self._fetching = false;
+            self._render();
+          });
+        }
+
+        _money(slot) {
+          return this._cfg.money[slot] ? num(this._hass, this._cfg.money[slot]) : null;
+        }
+
+        _bandRows(label, series, rateEid) {
+          var hass = this._hass;
+          var state = rateEid && hass.states[rateEid];
+          if (!series || !series.length || !state) return "";
+          var bands = classifyRates(parseForwardRates(state.attributes));
+          if (!bands.length) return "";
+          var split = bandSplit(series, bands);
+          var rows = "";
+          var names = ["cheap", "standard", "peak"];
+          for (var i = 0; i < names.length; i++) {
+            if (split[names[i]] < 0.005) continue;
+            rows +=
+              '<div style="display:flex;justify-content:space-between;color:#8b949e;font-size:12px;line-height:1.9">' +
+              "<span>" + esc(label + " - " + names[i]) + "</span><span>" +
+              split[names[i]].toFixed(1) + " kWh</span></div>";
+          }
+          return rows;
+        }
+
+        _render() {
+          var hass = this._hass;
+          var cfg = this._cfg;
+          if (!hass || !cfg) return;
+          var data = this._data || {};
+
+          var net = this._money("net");
+          var imp = this._money("import_cost");
+          var exp = this._money("export_earnings");
+          var cfState = cfg.money.counterfactual && hass.states[cfg.money.counterfactual];
+          var cf = cfState ? parseFloat(cfState.state) : NaN;
+          var saved =
+            cfState && cfState.attributes
+              ? parseFloat(cfState.attributes.savings_today)
+              : NaN;
+
+          function gbp(v) {
+            if (v == null || isNaN(v)) return "-";
+            return (v < 0 ? "-" : "") + "GBP " + Math.abs(v).toFixed(2);
+          }
+
+          var html =
+            '<ha-card style="background:#161a20;padding:16px">' +
+            '<div style="display:flex;gap:12px;align-items:baseline">' +
+            '<div><div style="color:#79c0ff;font-size:34px;font-weight:600">' + gbp(net) +
+            '</div><div style="color:#8b949e;font-size:11px">net energy cost today</div></div>';
+          if (!isNaN(cf)) {
+            html +=
+              '<div style="margin-left:auto;text-align:right">' +
+              '<div style="color:#e6edf3;font-size:16px">' + gbp(cf) +
+              ' without the system</div>' +
+              '<div style="color:#7ee787;font-size:13px">' +
+              (!isNaN(saved) ? "saved " + gbp(saved) + " (modelled)" : "") +
+              "</div></div>";
+          }
+          html += "</div>";
+
+          html += '<div style="display:flex;gap:24px;margin-top:14px">';
+          html +=
+            '<div style="flex:1"><div style="color:#8b949e;font-size:10px;letter-spacing:1px;margin-bottom:4px">TODAY</div>';
+          if (imp != null) {
+            html +=
+              '<div style="display:flex;justify-content:space-between;color:#e6edf3;font-size:13px;line-height:1.9"><span>grid import</span><span>' +
+              gbp(imp) + "</span></div>";
+          }
+          if (exp != null) {
+            html +=
+              '<div style="display:flex;justify-content:space-between;color:#e6edf3;font-size:13px;line-height:1.9"><span>export earnings</span><span>' +
+              gbp(exp) + "</span></div>";
+          }
+          html += this._bandRows("import", data.importSeries, cfg.tariff_import);
+          html += this._bandRows("export", data.exportSeries, cfg.tariff_export);
+          html += "</div>";
+
+          html +=
+            '<div style="flex:1"><div style="color:#8b949e;font-size:10px;letter-spacing:1px;margin-bottom:4px">LONGER RUN</div>';
+          if (data.monthToDate != null) {
+            html +=
+              '<div style="display:flex;justify-content:space-between;color:#e6edf3;font-size:13px;line-height:1.9"><span>month to date</span><span>' +
+              gbp(data.monthToDate) + "</span></div>";
+          }
+          if (data.last30 != null) {
+            html +=
+              '<div style="display:flex;justify-content:space-between;color:#e6edf3;font-size:13px;line-height:1.9"><span>last 30 days</span><span>' +
+              gbp(data.last30) + "</span></div>";
+          }
+          if (data.monthToDate == null && data.last30 == null) {
+            html +=
+              '<div style="color:#484f58;font-size:12px">accumulating - needs a few days of statistics</div>';
+          }
+          html += "</div></div></ha-card>";
+
+          this.innerHTML = html;
         }
       }
     );

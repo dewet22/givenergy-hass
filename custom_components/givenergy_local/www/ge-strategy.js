@@ -437,18 +437,8 @@
 
     // Money tiles resolve only when the money sensors exist (tariff options
     // configured on the integration); absent, the ledger tile is dropped.
-    var moneyKeys = {
-      net: "net_energy_cost_today",
-      import_cost: "grid_import_cost_today",
-      export_earnings: "grid_export_earnings_today",
-      counterfactual: "counterfactual_cost_today",
-    };
-    var money = {};
-    Object.keys(moneyKeys).forEach(function (slot) {
-      var eid = a.inv(moneyKeys[slot]);
-      if (eid) money[slot] = eid;
-    });
-    if (Object.keys(money).length) cfg.money = money;
+    var money = moneyMap(a);
+    if (money) cfg.money = money;
 
     var packs = plant.batteries
       .map(function (b) {
@@ -472,6 +462,42 @@
     return view;
   }
 
+  // Money entity map for the mission and ledger cards; null when none of the
+  // money sensors are registered (tariff options unset on the integration).
+  function moneyMap(a) {
+    var moneyKeys = {
+      net: "net_energy_cost_today",
+      import_cost: "grid_import_cost_today",
+      export_earnings: "grid_export_earnings_today",
+      counterfactual: "counterfactual_cost_today",
+    };
+    var money = {};
+    Object.keys(moneyKeys).forEach(function (slot) {
+      var eid = a.inv(moneyKeys[slot]);
+      if (eid) money[slot] = eid;
+    });
+    return Object.keys(money).length ? money : null;
+  }
+
+  function ledgerView(plant, a, opts) {
+    var money = moneyMap(a);
+    if (!money) return null; // nothing to account without the money sensors
+    var cfg = { type: "custom:givenergy-ledger", money: money };
+    var totals = {};
+    if (a.inv("e_grid_in_day")) totals.import_today = a.inv("e_grid_in_day");
+    if (a.inv("e_grid_out_day")) totals.export_today = a.inv("e_grid_out_day");
+    if (Object.keys(totals).length) cfg.totals = totals;
+    if (opts.tariffImport) cfg.tariff_import = opts.tariffImport;
+    if (opts.tariffExport) cfg.tariff_export = opts.tariffExport;
+    return {
+      title: "Ledger",
+      path: "ledger",
+      icon: "mdi:cash-multiple",
+      panel: true,
+      cards: [cfg],
+    };
+  }
+
   function tapeView(plant, a, opts) {
     var cfg = tapeSlotConfig(plant, a, opts);
     cfg.type = "custom:givenergy-tape";
@@ -492,9 +518,10 @@
   function missionViews(plant, opts) {
     var a = makeAccessors(plant);
     if (plant.target && plant.target.isEms) return classicViews(plant, opts);
-    return [missionView(plant, a, opts), tapeView(plant, a, opts)].concat(
-      classicViews(plant, opts)
-    );
+    var views = [missionView(plant, a, opts), tapeView(plant, a, opts)];
+    var ledger = ledgerView(plant, a, opts);
+    if (ledger) views.push(ledger);
+    return views.concat(classicViews(plant, opts));
   }
 
   // mode: all -- Glance + Flow + Analyst panels followed by the classic tab set.
