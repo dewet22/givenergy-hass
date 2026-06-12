@@ -1139,6 +1139,40 @@ def test_monotonic_pending_survives_negative_boundary_reading(mock_plant, freeze
     assert _read(entity, mock_plant, 1.8) == 1.8
 
 
+def test_monotonic_deferred_decision_skips_ambiguous_sag(mock_plant, freezer):
+    """While the owed-reset question is deferred past a skewed boundary
+    reading, an ambiguous still-large sag (neither carry-over nor a plausible
+    reset) must not settle it — nor be exposed. A later plausible poll makes
+    the call (review on #163)."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, -1.0) == 0.0  # boundary skew: undecided
+    assert _read(entity, mock_plant, 12.1) == 0.0  # ambiguous sag: held, still undecided
+    assert _read(entity, mock_plant, 14.3) == 14.3  # carry-over: reset owed
+    freezer.tick(2 * 3600)
+    assert _read(entity, mock_plant, 1.8) == 1.8  # owed reset admitted
+
+
+def test_monotonic_deferred_decision_settles_on_plausible_reset(mock_plant, freezer):
+    """The other arm of the deferred call: after boundary skew, a reading in
+    the (elapsed-scaled) reset band means the reset happened during the skew
+    window — decided as seen, counting resumes."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, -1.0) == 0.0
+    assert _read(entity, mock_plant, 0.2) == 0.2  # plausible post-reset: decided
+    # The band is now back at the floor: a later still-large sag stays held.
+    freezer.tick(2 * 3600)
+    assert _read(entity, mock_plant, 5.0) == 5.0  # normal accumulation
+    assert _read(entity, mock_plant, 3.0) == 5.0  # still-large sag clamped
+
+
 def test_monotonic_negative_still_rejected_after_poll_gap(mock_plant, freezer):
     """A widened ceiling never admits a negative excursion."""
     freezer.move_to("2026-06-12 12:00:00+00:00")

@@ -1442,17 +1442,29 @@ class GivEnergyInverterSensor(
                 self._monotonic_max = max(value, 0.0)
                 self._monotonic_date = today
             elif self._monotonic_reset_pending is None and value >= 0.0:
-                # First plausible reading of a day whose boundary poll was
-                # skew: make the deferred owed-reset call now, then fall
-                # through to the normal same-day handling on the next poll.
+                # Deferred owed-reset call (the boundary poll was skew).
+                # Three outcomes: the carry-over reappearing means the reset
+                # is still owed; a reading inside the (elapsed-scaled) reset
+                # band means it happened during the skew window; anything in
+                # between is an ambiguous still-large sag — exactly the
+                # shape this clamp rejects — so it neither settles the
+                # question nor gets exposed, and a later plausible poll
+                # decides.
                 prior_ref = self._monotonic_prior_day_value
-                self._monotonic_reset_pending = (
-                    prior_ref is not None and value >= prior_ref - _MONOTONIC_RESET_THRESHOLD
-                )
-                self._monotonic_prior_day_value = None
-                self._monotonic_max = max(
-                    value, self._monotonic_max if self._monotonic_max is not None else 0.0
-                )
+                ceiling = _MONOTONIC_RESET_THRESHOLD
+                if last_read is not None:
+                    elapsed_hours = (now - last_read).total_seconds() / 3600.0
+                    ceiling = max(ceiling, _MONOTONIC_RESET_MAX_LOAD_KW * elapsed_hours)
+                held_max = self._monotonic_max if self._monotonic_max is not None else 0.0
+                if prior_ref is not None and value >= prior_ref - _MONOTONIC_RESET_THRESHOLD:
+                    self._monotonic_reset_pending = True
+                    self._monotonic_prior_day_value = None
+                    self._monotonic_max = max(value, held_max)
+                elif prior_ref is None or value <= ceiling:
+                    self._monotonic_reset_pending = False
+                    self._monotonic_prior_day_value = None
+                    self._monotonic_max = max(value, held_max)
+                # else: ambiguous — hold the current max, stay undecided.
             elif self._monotonic_max is None:
                 # Unreachable in practice (date and max are set together),
                 # but keeps the invariant explicit and lets the branches
