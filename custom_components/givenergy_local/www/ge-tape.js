@@ -355,6 +355,57 @@
     return hint;
   }
 
+  // Hour-of-day in fixed UTC+1, regardless of local timezone or DST - keeps
+  // the generation heatmaps astronomically true (solar noon stays put when
+  // the clocks change).
+  function hourUtcPlus1(tMs) {
+    return Math.floor(((tMs + H_MS) % (24 * H_MS)) / H_MS);
+  }
+
+  // Density grid for the generation heatmap: hourly mean-power statistics
+  // rows binned into hour-of-day x power-band cells. Night/noise samples
+  // below minW are skipped (the zero band would otherwise swamp the colour
+  // scale); samples above maxW clamp into the top band.
+  function densityGrid(rows, opts) {
+    var bands = Math.ceil(opts.maxW / opts.bucketW);
+    var counts = [];
+    for (var h = 0; h < 24; h++) counts.push(new Array(bands).fill(0));
+    var maxCount = 0;
+    var maxSeenW = 0;
+    for (var i = 0; i < (rows || []).length; i++) {
+      var mean = rows[i] && rows[i].mean;
+      if (typeof mean !== "number" || mean < opts.minW) continue;
+      var t = typeof rows[i].start === "number" ? rows[i].start : Date.parse(rows[i].start);
+      if (isNaN(t)) continue;
+      var band = Math.min(bands - 1, Math.floor(mean / opts.bucketW));
+      var hour = hourUtcPlus1(t);
+      counts[hour][band]++;
+      if (counts[hour][band] > maxCount) maxCount = counts[hour][band];
+      if (mean > maxSeenW) maxSeenW = mean;
+    }
+    return { counts: counts, bands: bands, maxCount: maxCount, maxSeenW: maxSeenW };
+  }
+
+  // Calendar grid: hourly mean power per [day][hour], day 0 = most recent.
+  function calendarGrid(rows, opts) {
+    var days = opts.days;
+    var cells = [];
+    for (var d = 0; d < days; d++) cells.push(new Array(24).fill(null));
+    var maxW = 0;
+    for (var i = 0; i < (rows || []).length; i++) {
+      var mean = rows[i] && rows[i].mean;
+      if (typeof mean !== "number") continue;
+      var t = typeof rows[i].start === "number" ? rows[i].start : Date.parse(rows[i].start);
+      if (isNaN(t)) continue;
+      // Day index in the same fixed UTC+1 frame as the hour bucket.
+      var dayIdx = Math.floor((opts.nowMs + H_MS) / (24 * H_MS)) - Math.floor((t + H_MS) / (24 * H_MS));
+      if (dayIdx < 0 || dayIdx >= days) continue;
+      cells[dayIdx][hourUtcPlus1(t)] = mean;
+      if (mean > maxW) maxW = mean;
+    }
+    return { cells: cells, days: days, maxW: maxW };
+  }
+
   // "HH:MM[:SS]" (a time-entity state) -> minutes past local midnight, or null.
   function parseTimeOfDay(state) {
     if (typeof state !== "string") return null;
@@ -399,6 +450,9 @@
     nextActionHint: nextActionHint,
     flowLines: flowLines,
     pickRatePence: pickRatePence,
+    hourUtcPlus1: hourUtcPlus1,
+    densityGrid: densityGrid,
+    calendarGrid: calendarGrid,
   };
 
   // ----- browser-only from here ----------------------------------------------
@@ -1203,6 +1257,175 @@
           html += "</div></div></ha-card>";
 
           this.innerHTML = html;
+        }
+      }
+    );
+  }
+
+  // ----- custom:givenergy-gen-heatmap -------------------------------------------
+
+  // Year-of-generation heatmaps. variant: "density" (hour x power band,
+  // colour = frequency - the system's envelope) or "calendar" (hour x date,
+  // colour = power - the seasonal bulge). Both axes use fixed UTC+1.
+  if (!customElements.get("givenergy-gen-heatmap")) {
+    var GEN_REFRESH_MS = 6 * 3600 * 1000; // hourly LTS moves slowly
+
+    var heatColour = function (frac) {
+      // sqrt ramp dark -> solar yellow so sparse cells stay visible
+      var f = Math.sqrt(Math.max(0, Math.min(1, frac)));
+      var lerp = function (a, b) {
+        return Math.round(a + (b - a) * f);
+      };
+      return "rgb(" + lerp(22, 255) + "," + lerp(26, 211) + "," + lerp(32, 61) + ")";
+    };
+
+    customElements.define(
+      "givenergy-gen-heatmap",
+      class GivEnergyGenHeatmap extends HTMLElement {
+        setConfig(cfg) {
+          if (!cfg || !cfg.source) {
+            throw new Error("givenergy-gen-heatmap: 'source' entity is required");
+          }
+          this._cfg = cfg;
+          this._rows = null;
+          this._fetchedAt = 0;
+          this._fetching = false;
+        }
+
+        set hass(hass) {
+          this._hass = hass;
+          this._maybeFetch();
+        }
+
+        getCardSize() {
+          return 6;
+        }
+
+        _maybeFetch() {
+          var self = this;
+          if (this._fetching || Date.now() - this._fetchedAt < GEN_REFRESH_MS) return;
+          this._fetching = true;
+          var days = this._cfg.days || 365;
+          var now = Date.now();
+          this._hass
+            .callWS({
+              type: "recorder/statistics_during_period",
+              start_time: new Date(now - days * 24 * H_MS).toISOString(),
+              end_time: new Date(now).toISOString(),
+              statistic_ids: [this._cfg.source],
+              period: "hour",
+              types: ["mean"],
+            })
+            .then(function (res) {
+              self._rows = (res && res[self._cfg.source]) || [];
+              self._fetchedAt = now;
+              self._fetching = false;
+              self._render();
+            })
+            .catch(function () {
+              self._rows = null;
+              self._fetchedAt = now;
+              self._fetching = false;
+              self._render();
+            });
+        }
+
+        _render() {
+          var cfg = this._cfg;
+          if (!this._rows || !this._rows.length) {
+            this.innerHTML =
+              '<ha-card style="background:#161a20;padding:16px;color:#8b949e;font-size:12px">' +
+              "no hourly statistics for " + esc(cfg.source) + " yet</ha-card>";
+            return;
+          }
+          var W = 1200;
+          var HEIGHT = 420;
+          var left = 56;
+          var bottom = HEIGHT - 26;
+          var top = 34;
+          var plotW = W - left - 10;
+          var plotH = bottom - top;
+          var svg = [];
+          var title;
+
+          if (cfg.variant === "calendar") {
+            var days = cfg.days || 365;
+            var cal = calendarGrid(this._rows, { nowMs: Date.now(), days: days });
+            title = "Generation by hour and date - " + days + "d (UTC+1)";
+            var cw = plotW / 24;
+            var ch = plotH / days;
+            for (var d = 0; d < days; d++) {
+              for (var h = 0; h < 24; h++) {
+                var v = cal.cells[d][h];
+                if (v == null || v <= 0 || !cal.maxW) continue;
+                svg.push(
+                  '<rect x="' + (left + h * cw).toFixed(1) + '" y="' + (top + d * ch).toFixed(2) +
+                  '" width="' + (cw + 0.5).toFixed(1) + '" height="' + (ch + 0.4).toFixed(2) +
+                  '" fill="' + heatColour(v / cal.maxW) + '" shape-rendering="crispEdges"/>'
+                );
+              }
+            }
+            // month labels down the left edge
+            var seen = {};
+            var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            for (var dd = 0; dd < days; dd += 7) {
+              var when = new Date(Date.now() - dd * 24 * H_MS);
+              var label = MONTHS[when.getUTCMonth()];
+              if (seen[label]) continue;
+              seen[label] = true;
+              svg.push(
+                '<text x="' + (left - 8) + '" y="' + (top + dd * ch + 4).toFixed(1) +
+                '" text-anchor="end" style="fill:#8b949e;font-size:11px">' + label + "</text>"
+              );
+            }
+          } else {
+            var maxW =
+              (cfg.max_pv_kw ? cfg.max_pv_kw * 1000 : 0) ||
+              Math.ceil((densityGrid(this._rows, { bucketW: 250, maxW: 1e9, minW: 50 }).maxSeenW || 1000) / 1000) * 1000;
+            var grid = densityGrid(this._rows, { bucketW: 250, maxW: maxW, minW: 50 });
+            title = "Generation envelope - hour vs power, " + (cfg.days || 365) + "d (UTC+1)";
+            var cw2 = plotW / 24;
+            var ch2 = plotH / grid.bands;
+            for (var h2 = 0; h2 < 24; h2++) {
+              for (var b = 0; b < grid.bands; b++) {
+                var c = grid.counts[h2][b];
+                if (!c || !grid.maxCount) continue;
+                svg.push(
+                  '<rect x="' + (left + h2 * cw2).toFixed(1) +
+                  '" y="' + (bottom - (b + 1) * ch2).toFixed(1) +
+                  '" width="' + (cw2 - 1).toFixed(1) + '" height="' + (ch2 - 0.5).toFixed(1) +
+                  '" fill="' + heatColour(c / grid.maxCount) + '" shape-rendering="crispEdges"/>'
+                );
+              }
+            }
+            // kW labels up the left edge
+            for (var kw = 0; kw <= maxW / 1000; kw++) {
+              svg.push(
+                '<text x="' + (left - 8) + '" y="' + (bottom - (kw * 1000 / maxW) * plotH + 4).toFixed(1) +
+                '" text-anchor="end" style="fill:#8b949e;font-size:11px">' + kw + " kW</text>"
+              );
+            }
+          }
+
+          for (var hl = 0; hl <= 24; hl += 3) {
+            svg.push(
+              '<text x="' + (left + (hl / 24) * plotW).toFixed(1) + '" y="' + (HEIGHT - 8) +
+              '" text-anchor="middle" style="fill:#484f58;font-size:11px">' +
+              (hl < 10 ? "0" : "") + hl + ":00</text>"
+            );
+          }
+          svg.push(
+            '<text x="' + left + '" y="20" style="fill:#8b949e;font-size:13px">' +
+            esc(title) + "</text>"
+          );
+
+          this.innerHTML =
+            '<ha-card style="background:#161a20;overflow:hidden">' +
+            '<svg viewBox="0 0 ' + W + " " + HEIGHT +
+            '" style="display:block;width:100%" preserveAspectRatio="xMidYMid meet">' +
+            svg.join("") +
+            "</svg></ha-card>";
         }
       }
     );

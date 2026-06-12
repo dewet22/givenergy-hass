@@ -634,6 +634,41 @@
     return { title: "Observatory", path: "observatory", icon: "mdi:telescope", cards: cards };
   }
 
+  // Generation: a year of PV history. Two heatmaps from the bundled
+  // givenergy-gen-heatmap card (density: hour x power envelope; calendar:
+  // hour x date seasonal bulge - both on a fixed UTC+1 hour axis) plus a
+  // stock statistics-graph of weekly kWh (e_pv_day is TOTAL_INCREASING with
+  // a daily reset, so weekly `change` sums are exactly weekly energy).
+  function generationView(plant, a, opts) {
+    var source = a.inv("p_pv");
+    var energy = a.inv("e_pv_day");
+    if (!source || !energy) return null;
+    var heatmap = function (variant) {
+      var cfg = { type: "custom:givenergy-gen-heatmap", variant: variant, source: source };
+      if (opts.maxPvKw) cfg.max_pv_kw = opts.maxPvKw;
+      return cfg;
+    };
+    return {
+      title: "Generation",
+      path: "generation",
+      icon: "mdi:solar-power-variant",
+      cards: [
+        heatmap("density"),
+        heatmap("calendar"),
+        {
+          type: "statistics-graph",
+          title: "PV energy by week - 365d",
+          entities: [energy],
+          period: "week",
+          days_to_show: 365,
+          stat_types: ["change"],
+          chart_type: "line",
+          hide_legend: true,
+        },
+      ],
+    };
+  }
+
   // Wait (bounded) for custom elements from the sibling ge-tape.js module.
   // Panel views build their card directly - no hui-card wrapper that
   // tolerates late-defined elements - so emitting a panel view before the
@@ -668,6 +703,8 @@
     if (ledger) views.push(ledger);
     var observatory = observatoryView(plant, a);
     if (observatory) views.push(observatory);
+    var generation = generationView(plant, a, opts);
+    if (generation) views.push(generation);
     return views.concat(classicViews(plant, opts));
   }
 
@@ -1433,6 +1470,8 @@
       tariffImportRates: config.tariff_import_rates || null,
       tariffExportRates: config.tariff_export_rates || null,
       solarForecast: config.solar_forecast || null,
+      // optional y-axis cap (kW) for the Generation density heatmap
+      maxPvKw: config.max_pv_kw || null,
     };
     var plant = await buildPlant(hass, opts);
     if (!plant.target) {

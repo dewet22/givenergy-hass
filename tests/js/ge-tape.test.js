@@ -417,3 +417,79 @@ describe("pickRatePence", () => {
     expect(TAPE.pickRatePence(0, { state: "unknown", attributes: {} }, null)).toBeNull();
   });
 });
+
+describe("hourUtcPlus1", () => {
+  it("buckets epoch times into fixed UTC+1 hours, ignoring local timezone", () => {
+    expect(TAPE.hourUtcPlus1(Date.UTC(2026, 0, 5, 10, 0, 0))).toBe(11); // winter: still +1
+    expect(TAPE.hourUtcPlus1(Date.UTC(2026, 5, 12, 10, 0, 0))).toBe(11); // summer: same
+    expect(TAPE.hourUtcPlus1(Date.UTC(2026, 5, 12, 23, 30, 0))).toBe(0); // wraps midnight
+  });
+});
+
+describe("densityGrid", () => {
+  const row = (iso, meanW) => ({ start: iso, mean: meanW });
+
+  it("counts hourly samples into hour x power-band cells", () => {
+    const grid = TAPE.densityGrid(
+      [
+        row("2026-06-01T11:00:00Z", 3100), // hour 12, band 3.0-3.5 kW
+        row("2026-06-02T11:00:00Z", 3400), // same cell
+        row("2026-06-02T05:00:00Z", 600),  // hour 6, band 0.5-1.0 kW
+      ],
+      { bucketW: 500, maxW: 7000, minW: 50 }
+    );
+    expect(grid.counts[12][6]).toBe(2);
+    expect(grid.counts[6][1]).toBe(1);
+    expect(grid.maxCount).toBe(2);
+  });
+
+  it("skips below-threshold samples and clamps above-max to the top band", () => {
+    const grid = TAPE.densityGrid(
+      [
+        row("2026-06-01T00:00:00Z", 0),    // night: skipped
+        row("2026-06-01T01:00:00Z", 20),   // below minW: skipped
+        row("2026-06-01T11:00:00Z", 9999), // clamped to top band
+      ],
+      { bucketW: 500, maxW: 7000, minW: 50 }
+    );
+    expect(grid.counts[1][0]).toBe(0);
+    expect(grid.counts[2][0]).toBe(0);
+    expect(grid.counts[12][13]).toBe(1); // 7000/500 - 1 = top band index
+    expect(grid.bands).toBe(14);
+  });
+
+  it("ignores rows without a numeric mean", () => {
+    const grid = TAPE.densityGrid([{ start: "2026-06-01T11:00:00Z", mean: null }], {
+      bucketW: 500,
+      maxW: 7000,
+      minW: 50,
+    });
+    expect(grid.maxCount).toBe(0);
+  });
+});
+
+describe("calendarGrid", () => {
+  const NOON = Date.UTC(2026, 5, 12, 12, 0, 0);
+
+  it("places hourly means on day rows (0 = most recent) and UTC+1 hour columns", () => {
+    const grid = TAPE.calendarGrid(
+      [
+        { start: "2026-06-12T10:00:00Z", mean: 2500 }, // today, hour 11
+        { start: "2026-06-10T10:00:00Z", mean: 1200 }, // two days back
+      ],
+      { nowMs: NOON, days: 365 }
+    );
+    expect(grid.cells[0][11]).toBe(2500);
+    expect(grid.cells[2][11]).toBe(1200);
+    expect(grid.days).toBe(365);
+    expect(grid.maxW).toBe(2500);
+  });
+
+  it("drops rows outside the window", () => {
+    const grid = TAPE.calendarGrid(
+      [{ start: "2024-01-01T10:00:00Z", mean: 999 }],
+      { nowMs: NOON, days: 365 }
+    );
+    expect(grid.maxW).toBe(0);
+  });
+});

@@ -503,7 +503,7 @@ describe("mission mode", () => {
     solar_forecast: "sensor.solcast_today",
   };
 
-  it("leads with panel Mission Control + Tape + Ledger + Observatory, then the classic set", async () => {
+  it("leads with panel Mission Control + deep tabs, then the classic set", async () => {
     const hass = makeHass({ batterySerials: ["BAT1"] });
     const dash = await GE.generateDashboard(MISSION_CFG, hass);
     expect(titles(dash)).toEqual([
@@ -511,6 +511,7 @@ describe("mission mode", () => {
       "Tape",
       "Ledger",
       "Observatory",
+      "Generation",
       "Overview",
       "Energy",
       "Batteries",
@@ -641,10 +642,11 @@ describe("mission mode - ledger view", () => {
     });
     const dash = await GE.generateDashboard(MISSION_CFG, hass);
     expect(view(dash, "Ledger")).toBeUndefined();
-    expect(titles(dash).slice(0, 4)).toEqual([
+    expect(titles(dash).slice(0, 5)).toEqual([
       "Mission Control",
       "Tape",
       "Observatory",
+      "Generation",
       "Overview",
     ]);
   });
@@ -832,5 +834,48 @@ describe("mission mode - card readiness await", () => {
     } finally {
       delete global.customElements;
     }
+  });
+});
+
+describe("mission mode - generation view", () => {
+  it("emits a Generation view with both heatmaps and the weekly line", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"] });
+    const dash = await GE.generateDashboard({ mode: "mission" }, hass);
+    const gen = view(dash, "Generation");
+    expect(gen).toBeTruthy();
+    expect(gen.path).toBe("generation");
+    const registry = await regSet(hass);
+
+    const heatmaps = gen.cards.filter((c) => c.type === "custom:givenergy-gen-heatmap");
+    expect(heatmaps.map((c) => c.variant).sort()).toEqual(["calendar", "density"]);
+    for (const c of heatmaps) expect(registry.has(c.source)).toBe(true);
+
+    const weekly = gen.cards.find((c) => c.type === "statistics-graph");
+    expect(weekly.period).toBe("week");
+    expect(weekly.days_to_show).toBe(365);
+    for (const eid of weekly.entities) expect(registry.has(eid)).toBe(true);
+    expect(hasNullEntity(gen)).toBe(false);
+  });
+
+  it("orders Generation after Observatory", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"] });
+    const dash = await GE.generateDashboard({ mode: "mission" }, hass);
+    expect(titles(dash).slice(0, 5)).toEqual([
+      "Mission Control",
+      "Tape",
+      "Ledger",
+      "Observatory",
+      "Generation",
+    ]);
+  });
+
+  it("omits the Generation view when no PV entities exist", async () => {
+    const hass = makeHass({
+      batterySerials: ["BAT1"],
+      omitKeys: ["e_pv_day"],
+      disabledKeys: [],
+    });
+    const dash = await GE.generateDashboard({ mode: "mission" }, hass);
+    expect(view(dash, "Generation")).toBeUndefined();
   });
 });
