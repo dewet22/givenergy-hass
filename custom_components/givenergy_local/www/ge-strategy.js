@@ -552,19 +552,6 @@
     };
   }
 
-  function tapeView(plant, a, opts) {
-    var cfg = tapeSlotConfig(plant, a, opts);
-    cfg.type = "custom:givenergy-tape";
-    cfg.variant = "full";
-    return {
-      title: "Tape",
-      path: "tape",
-      icon: "mdi:chart-timeline-variant",
-      panel: true,
-      cards: [cfg],
-    };
-  }
-
   // Observatory: longevity made legible. The cell heatmap as centrepiece plus
   // stock statistics-graph cards over long-term statistics: per-pack cell
   // envelope (balance drift), cycle count, calibrated capacity (the honest
@@ -703,7 +690,9 @@
   function missionViews(plant, opts) {
     var a = makeAccessors(plant);
     if (plant.target && plant.target.isEms) return classicViews(plant, opts);
-    var views = [missionView(plant, a, opts), tapeView(plant, a, opts)];
+    // The Tape deep view was deprecated after real use: the hub carries the
+    // tape already, and the full variant added nothing meaningfully new.
+    var views = [missionView(plant, a, opts)];
     var ledger = ledgerView(plant, a, opts);
     if (ledger) views.push(ledger);
     var observatory = observatoryView(plant, a);

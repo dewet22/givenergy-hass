@@ -425,6 +425,24 @@
     return out;
   }
 
+  // Drop isolated samples that disagree with BOTH neighbours by more than
+  // maxJump - transient garbage reads (e.g. an inverter briefly reporting
+  // SOC 0 between two 91s). Sustained changes keep both samples because the
+  // following point agrees.
+  function rejectSpikes(points, maxJump) {
+    if (!Array.isArray(points) || points.length < 3) return points;
+    var out = [points[0]];
+    for (var i = 1; i < points.length - 1; i++) {
+      var prev = points[i - 1][1];
+      var next = points[i + 1][1];
+      var v = points[i][1];
+      if (Math.abs(v - prev) > maxJump && Math.abs(v - next) > maxJump) continue;
+      out.push(points[i]);
+    }
+    out.push(points[points.length - 1]);
+    return out;
+  }
+
   // "HH:MM[:SS]" (a time-entity state) -> minutes past local midnight, or null.
   function parseTimeOfDay(state) {
     if (typeof state !== "string") return null;
@@ -469,6 +487,7 @@
     nextActionHint: nextActionHint,
     flowLines: flowLines,
     pickRatePence: pickRatePence,
+    rejectSpikes: rejectSpikes,
     hourUtcPlus1: hourUtcPlus1,
     densityGrid: densityGrid,
     calendarGrid: calendarGrid,
@@ -637,7 +656,8 @@
               solar: res[0],
               load: res[1],
               grid: res[2],
-              soc: res[3],
+              // SOC: reject transient garbage reads (91 -> 0 -> 91 spikes)
+              soc: rejectSpikes(res[3] || [], 25),
               rateHistory: res[4],
               loadBaselineW: res[5],
               notes: notes,
@@ -995,6 +1015,9 @@
           var cfg = this._cfg;
           var tiles = [];
 
+          // Tile targets: a path navigates on click; null renders a plain
+          // (non-link) tile - NOW/NEXT have no deep view behind them since
+          // the Tape tab's deprecation.
           if (cfg.money) {
             var net = num(hass, cfg.money.net);
             var cf = cfg.money.counterfactual && hass.states[cfg.money.counterfactual];
@@ -1034,7 +1057,7 @@
               cfg.tariff_export ? hass.states[cfg.tariff_export] : null
             ),
           });
-          if (nowLines.length) tiles.push(["NOW", nowLines.join("  |  "), "tape"]);
+          if (nowLines.length) tiles.push(["NOW", nowLines.join("  |  "), null]);
 
           var importForward = collectRates(
             (cfg.tariff_import_rates || []).map(function (id) {
@@ -1048,16 +1071,19 @@
             exportState: cfg.tariff_export ? hass.states[cfg.tariff_export] : null,
             forwardRates: importForward.length ? classifyRates(importForward) : null,
           });
-          tiles.push(["NEXT", hint || "no tariff data", "tape"]);
+          tiles.push(["NEXT", hint || "no tariff data", null]);
 
           var html = '<div style="display:flex;gap:8px;margin-top:8px">';
+          var tileStyle =
+            'style="flex:1;background:#1f242c;border-radius:6px;padding:10px;text-decoration:none"';
           for (var i = 0; i < tiles.length; i++) {
-            html +=
-              '<a href="' + tiles[i][2] +
-              '" style="flex:1;background:#1f242c;border-radius:6px;padding:10px;text-decoration:none">' +
+            var body2 =
               '<span style="color:#8b949e;font-size:10px;letter-spacing:1px">' +
               esc(tiles[i][0]) + "</span> " +
-              '<span style="color:#e6edf3;font-size:12px">' + esc(tiles[i][1]) + "</span></a>";
+              '<span style="color:#e6edf3;font-size:12px">' + esc(tiles[i][1]) + "</span>";
+            html += tiles[i][2]
+              ? '<a href="' + tiles[i][2] + '" ' + tileStyle + ">" + body2 + "</a>"
+              : "<div " + tileStyle + ">" + body2 + "</div>";
           }
           return html + "</div>";
         }
