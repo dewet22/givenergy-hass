@@ -33,6 +33,10 @@ const INVERTER_KEYS = [
   "dsp_firmware_version", "modbus_version", "work_time_total", "device_type_code",
   "num_mppt", "num_phases", "battery_type", "meter_type", "usb_device_inserted",
   "battery_capacity_kwh", "battery_capacity_ah",
+  // money sensors (present only when tariff options are configured; tests that
+  // exercise their absence pass them via omitKeys)
+  "grid_import_cost_today", "grid_export_earnings_today", "net_energy_cost_today",
+  "counterfactual_cost_today",
 ];
 
 const BATTERY_KEYS = (function () {

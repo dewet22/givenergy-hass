@@ -67,11 +67,17 @@ _LOGGER = logging.getLogger(__name__)
 # _STRATEGY_VERSION whenever the JS changes, to bust the browser cache.
 _STRATEGY_FILENAME = "ge-strategy.js"
 _STRATEGY_URL = f"/{DOMAIN}/{_STRATEGY_FILENAME}"
+# Second module: the mission-mode cards (custom:givenergy-tape /
+# custom:givenergy-mission) - split out so ge-strategy.js stays the
+# strategy/classic-cards module rather than growing without bound.
+_TAPE_FILENAME = "ge-tape.js"
+_TAPE_URL = f"/{DOMAIN}/{_TAPE_FILENAME}"
 # Glyph-subsetted woff2 fonts (Fraunces + Geist Mono) used by the flow card,
 # served from the same package dir so they resolve offline without a CDN.
 _FONTS_DIRNAME = "fonts"
 _FONTS_URL = f"/{DOMAIN}/{_FONTS_DIRNAME}"
-_STRATEGY_VERSION = "9"
+# Shared cache-bust version for both JS modules; bump on any JS change.
+_STRATEGY_VERSION = "10"
 
 # Per-config-entry topology cache. PlantCapabilities is persisted as
 # `to_dict()` directly (no envelope) following HA Core's Store convention —
@@ -255,15 +261,15 @@ async def _async_register_frontend_card(hass: HomeAssistant) -> None:
         return
     try:
         www_dir = Path(__file__).parent / "www"
-        module_path = www_dir / _STRATEGY_FILENAME
-        fonts_path = www_dir / _FONTS_DIRNAME
         await hass.http.async_register_static_paths(
             [
-                StaticPathConfig(_STRATEGY_URL, str(module_path), False),
-                StaticPathConfig(_FONTS_URL, str(fonts_path), True),
+                StaticPathConfig(_STRATEGY_URL, str(www_dir / _STRATEGY_FILENAME), False),
+                StaticPathConfig(_TAPE_URL, str(www_dir / _TAPE_FILENAME), False),
+                StaticPathConfig(_FONTS_URL, str(www_dir / _FONTS_DIRNAME), True),
             ]
         )
         add_extra_js_url(hass, f"{_STRATEGY_URL}?v={_STRATEGY_VERSION}")
+        add_extra_js_url(hass, f"{_TAPE_URL}?v={_STRATEGY_VERSION}")
     except Exception as exc:  # noqa: BLE001
         # The bundled module is cosmetic (dashboard frontend). Registering it
         # once at component scope means a failure here is genuinely unexpected,

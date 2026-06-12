@@ -492,3 +492,115 @@ describe("analyst mode", () => {
     expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
   });
 });
+
+describe("mission mode", () => {
+  const missionCard = (dash) => view(dash, "Mission Control").cards[0];
+  const tapeCard = (dash) => view(dash, "Tape").cards[0];
+  const MISSION_CFG = {
+    mode: "mission",
+    tariff_import: "sensor.octopus_import_rate",
+    tariff_export: "sensor.octopus_export_rate",
+    solar_forecast: "sensor.solcast_today",
+  };
+
+  it("leads with panel Mission Control + Tape views, then the classic set", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"] });
+    const dash = await GE.generateDashboard(MISSION_CFG, hass);
+    expect(titles(dash)).toEqual([
+      "Mission Control",
+      "Tape",
+      "Overview",
+      "Energy",
+      "Batteries",
+      "Battery Health",
+      "Controls",
+      "Diagnostics",
+    ]);
+    const mission = view(dash, "Mission Control");
+    expect(mission.panel).toBe(true);
+    expect(mission.cards.length).toBe(1);
+    expect(mission.cards[0].type).toBe("custom:givenergy-mission");
+    const tape = view(dash, "Tape");
+    expect(tape.panel).toBe(true);
+    expect(tape.cards[0].type).toBe("custom:givenergy-tape");
+    expect(tape.cards[0].variant).toBe("full");
+  });
+
+  it("passes the tariff/forecast entity ids through to both cards", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"] });
+    const dash = await GE.generateDashboard(MISSION_CFG, hass);
+    for (const c of [missionCard(dash), tapeCard(dash)]) {
+      expect(c.tariff_import).toBe("sensor.octopus_import_rate");
+      expect(c.tariff_export).toBe("sensor.octopus_export_rate");
+      expect(c.solar_forecast).toBe("sensor.solcast_today");
+    }
+  });
+
+  it("omits tariff/forecast fields when not configured", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"] });
+    const dash = await GE.generateDashboard({ mode: "mission" }, hass);
+    const c = missionCard(dash);
+    expect(c.tariff_import).toBeUndefined();
+    expect(c.tariff_export).toBeUndefined();
+    expect(c.solar_forecast).toBeUndefined();
+  });
+
+  it("resolves live, slot and money entities from the registry (loft_ safe)", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"], areaPrefix: "loft_" });
+    const dash = await GE.generateDashboard(MISSION_CFG, hass);
+    const c = missionCard(dash);
+    const registry = await regSet(hass);
+
+    const slots = [c.solar, c.grid, c.load, c.battery_power, c.battery_soc, c.battery_capacity]
+      .concat(Object.values(c.totals || {}))
+      .concat(Object.values(c.money || {}))
+      .concat((c.charge_slots || []).flatMap((s) => [s.start, s.end]))
+      .concat((c.discharge_slots || []).flatMap((s) => [s.start, s.end]))
+      .concat((c.packs || []).map((p) => p.soc));
+
+    expect(slots.length).toBeGreaterThan(12);
+    for (const eid of slots) {
+      expect(registry.has(eid)).toBe(true);
+      expect(eid).toContain("loft_");
+    }
+    expect(c.money.net).toBeTruthy();
+    expect(c.money.counterfactual).toBeTruthy();
+  });
+
+  it("omits the money block when the money sensors are not registered", async () => {
+    const hass = makeHass({
+      batterySerials: ["BAT1"],
+      omitKeys: [
+        "grid_import_cost_today",
+        "grid_export_earnings_today",
+        "net_energy_cost_today",
+        "counterfactual_cost_today",
+      ],
+    });
+    const c = missionCard(await GE.generateDashboard(MISSION_CFG, hass));
+    expect(c.money).toBeUndefined();
+    expect(hasNullEntity(c)).toBe(false);
+  });
+
+  it("adds kiosk hints to Mission Control only, and only when kiosk-mode exists", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"] });
+    const without = await GE.generateDashboard(MISSION_CFG, hass);
+    expect(view(without, "Mission Control").kiosk_mode).toBeUndefined();
+
+    await withCards(["kiosk-mode"], async () => {
+      const hass2 = makeHass({ batterySerials: ["BAT1"] });
+      const dash = await GE.generateDashboard(MISSION_CFG, hass2);
+      expect(view(dash, "Mission Control").kiosk_mode).toEqual({
+        hide_header: true,
+        hide_sidebar: true,
+      });
+      expect(view(dash, "Tape").kiosk_mode).toBeUndefined();
+    });
+  });
+
+  it("falls back to classic for an EMS plant", async () => {
+    const hass = makeHass({ ems: true });
+    const dash = await GE.generateDashboard(MISSION_CFG, hass);
+    expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
+  });
+});
