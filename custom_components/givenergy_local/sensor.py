@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from givenergy_modbus.model.aio_battery import AioBatteryModule
@@ -1259,14 +1259,30 @@ def _derive_display_precision(description: SensorEntityDescription, model: Any) 
     return model.precision_of(description.key)
 
 
-# A drop larger than this (in the sensor's native unit) is treated as a
-# genuine source reset rather than a transient polling artefact. Covers the
-# case where the inverter clock lags HA's local midnight by one scan interval,
-# so the actual counter reset arrives on a subsequent read after the day
-# boundary has already been committed. The value is intentionally conservative:
-# transient multi-register skew is a few Wh; a 500 Wh floor is far above any
-# realistic polling noise while still detecting any meaningful midnight reset.
+# Dual-role floor (in the sensor's native unit) for same-day reset detection:
+# a drop must be larger than this to be considered a reset at all, AND the
+# post-drop value must land within [0, ceiling] to be accepted as one. Covers
+# the case where the inverter clock lags HA's local midnight by one scan
+# interval, so the actual counter reset arrives on a subsequent read after the
+# day boundary has already been committed. A drop to anything outside the band
+# (a negative excursion, a sag to a still-large value) is transient register
+# skew — e.g. a one-poll zeroed register read sinking the derived consumption
+# (#142) — and must be held at the previous max, or the recorder books a fake
+# reset and double-counts the recovery.
+#
+# The acceptance ceiling scales with time since the previous reading:
+# max(floor, max-load × elapsed). At the default 30 s cadence that stays at
+# the 0.5 kWh floor (tight against skew), while a long scan interval or a
+# polling outage spanning the reset widens it to what a genuine post-reset
+# reading can have legitimately accumulated — otherwise yesterday's max stays
+# clamped and the day's statistics are lost. The trade-off is a wider
+# corruptible band on the first poll after an outage; that is the price of
+# not freezing the sensor for hours.
 _MONOTONIC_RESET_THRESHOLD = 0.5  # kWh (matches e_consumption_today's native unit)
+# Conservative continuous-load bound for the elapsed-scaled ceiling — covers
+# three-phase EV-charging/heat-pump households without admitting daytime
+# totals as "resets".
+_MONOTONIC_RESET_MAX_LOAD_KW = 15.0
 
 # A backing input-register bank that has stopped committing past this ceiling
 # reads as a fault, not polling jitter (#152): stale-but-plausible values
@@ -1311,6 +1327,9 @@ class GivEnergyInverterSensor(
         self.entity_description = description
         self._monotonic_max: float | None = None
         self._monotonic_date: date | None = None
+        self._monotonic_last_read: datetime | None = None
+        self._monotonic_reset_pending: bool | None = False
+        self._monotonic_prior_day_value: float | None = None
         self._source_ir_registers = _source_ir_registers(
             type(coordinator.data.inverter), description.source_field or description.key
         )
@@ -1349,9 +1368,17 @@ class GivEnergyInverterSensor(
         if last_date == dt_util.now().date():
             # Seed the intra-day max from the last persisted value so a
             # transient dip on the first post-restart reading doesn't become
-            # the new baseline while the recorder still holds the higher value.
-            self._monotonic_max = restored
+            # the new baseline while the recorder still holds the higher
+            # value. Floored at zero: pre-fix versions could persist a
+            # negative state (#142), which must not re-seed the baseline.
+            self._monotonic_max = max(restored, 0.0)
             self._monotonic_date = last_date
+        else:
+            # A prior-day value is no intra-day baseline, but it is the
+            # reference for the first reading of the new day: matching it
+            # means the counter carried over un-reset across a restart
+            # spanning midnight, so the late reset must still be admitted.
+            self._monotonic_prior_day_value = max(restored, 0.0)
 
     @property
     def available(self) -> bool:
@@ -1380,25 +1407,92 @@ class GivEnergyInverterSensor(
     def native_value(self) -> Any:
         value = self.entity_description.value_fn(self.coordinator.data.inverter)
         if self.entity_description.monotonic and isinstance(value, (int, float)):
-            today = dt_util.now().date()
+            now = dt_util.now()
+            today = now.date()
+            last_read = self._monotonic_last_read
+            self._monotonic_last_read = now
             if self._monotonic_date != today:
                 # New calendar day in HA's timezone: start fresh so the
-                # midnight reset passes through as a real decrease.
-                self._monotonic_max = value
+                # midnight reset passes through as a real decrease. Floored
+                # at zero — register skew on a derived value can read
+                # negative at any moment, including across the day boundary
+                # (#142). A high carry-over here is normal (inverter clock
+                # lagging HA's midnight); the reset branch below catches the
+                # real reset a poll later. A reset is owed exactly when the
+                # counter did NOT drop at the boundary — judged against the
+                # running max, or after a restart against the restored
+                # prior-day value; only while it is owed may the acceptance
+                # band widen with elapsed time. An implausible (negative)
+                # boundary reading decides nothing: defer the owed-reset
+                # call to the first plausible reading of the day, or the
+                # carry-over reappearing after the skew would lose it.
+                prior_ref = (
+                    self._monotonic_max
+                    if self._monotonic_max is not None
+                    else self._monotonic_prior_day_value
+                )
+                if value < 0.0:
+                    self._monotonic_reset_pending = None
+                    self._monotonic_prior_day_value = prior_ref
+                else:
+                    self._monotonic_reset_pending = (
+                        prior_ref is not None and value >= prior_ref - _MONOTONIC_RESET_THRESHOLD
+                    )
+                    self._monotonic_prior_day_value = None
+                self._monotonic_max = max(value, 0.0)
                 self._monotonic_date = today
-            elif (
-                self._monotonic_max is not None
-                and value < self._monotonic_max - _MONOTONIC_RESET_THRESHOLD
-            ):
-                # Large same-day drop: treat as a genuine source reset.
-                # This handles an inverter clock that lags HA's midnight by
-                # one poll cycle — the actual counter reset arrives on a
-                # subsequent read after date tracking has already committed
-                # the new day, so we must detect it by magnitude rather than
-                # date alone.
-                self._monotonic_max = value
+            elif self._monotonic_reset_pending is None and value >= 0.0:
+                # Deferred owed-reset call (the boundary poll was skew).
+                # Three outcomes: the carry-over reappearing means the reset
+                # is still owed; a reading inside the (elapsed-scaled) reset
+                # band means it happened during the skew window; anything in
+                # between is an ambiguous still-large sag — exactly the
+                # shape this clamp rejects — so it neither settles the
+                # question nor gets exposed, and a later plausible poll
+                # decides.
+                prior_ref = self._monotonic_prior_day_value
+                ceiling = _MONOTONIC_RESET_THRESHOLD
+                if last_read is not None:
+                    elapsed_hours = (now - last_read).total_seconds() / 3600.0
+                    ceiling = max(ceiling, _MONOTONIC_RESET_MAX_LOAD_KW * elapsed_hours)
+                held_max = self._monotonic_max if self._monotonic_max is not None else 0.0
+                if prior_ref is not None and value >= prior_ref - _MONOTONIC_RESET_THRESHOLD:
+                    self._monotonic_reset_pending = True
+                    self._monotonic_prior_day_value = None
+                    self._monotonic_max = max(value, held_max)
+                elif prior_ref is None or value <= ceiling:
+                    self._monotonic_reset_pending = False
+                    self._monotonic_prior_day_value = None
+                    self._monotonic_max = max(value, held_max)
+                # else: ambiguous — hold the current max, stay undecided.
+            elif self._monotonic_max is None:
+                # Unreachable in practice (date and max are set together),
+                # but keeps the invariant explicit and lets the branches
+                # below assume a non-None max.
+                self._monotonic_max = max(value, 0.0)
+            elif value < self._monotonic_max - _MONOTONIC_RESET_THRESHOLD:
+                # Large same-day drop: a genuine counter reset, but only when
+                # the new value is a plausible post-reset reading (see the
+                # threshold's comment). Anything else is transient register
+                # skew: hold the clamp until the source recovers, so the
+                # recorder never sees a fake reset followed by a
+                # sum-corrupting recovery jump (#142). While the midnight
+                # reset is still owed, the ceiling scales with time since
+                # the previous reading so a reset observed late — long scan
+                # interval, or a polling outage after the date flip — is
+                # not rejected for having accumulated more than the floor.
+                # Once it has been observed (or was never owed), the band
+                # stays at the floor: a post-gap daytime sag is skew, not a
+                # reset.
+                ceiling = _MONOTONIC_RESET_THRESHOLD
+                if self._monotonic_reset_pending and last_read is not None:
+                    elapsed_hours = (now - last_read).total_seconds() / 3600.0
+                    ceiling = max(ceiling, _MONOTONIC_RESET_MAX_LOAD_KW * elapsed_hours)
+                if 0.0 <= value <= ceiling:
+                    self._monotonic_max = value
+                    self._monotonic_reset_pending = False
             else:
-                self._monotonic_max = max(value, self._monotonic_max or value)
+                self._monotonic_max = max(value, self._monotonic_max)
             return self._monotonic_max
         return value
 

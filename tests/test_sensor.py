@@ -981,3 +981,310 @@ def test_sensor_without_ir_source_keeps_default_availability(mock_plant):
     mock_plant.register_age = MagicMock()
     assert entity.available is True
     mock_plant.register_age.assert_not_called()
+
+
+# --- #142: monotonic clamp must not accept transient dips as counter resets ---
+
+
+def _monotonic_entity(mock_plant):
+    from datetime import timedelta
+
+    from custom_components.givenergy_local.sensor import GivEnergyInverterSensor
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    return GivEnergyInverterSensor(coordinator, _inverter_desc("e_consumption_today"))
+
+
+def _read(entity, mock_plant, value):
+    mock_plant.inverter.e_consumption_today = value
+    return entity.native_value
+
+
+def test_monotonic_clamp_holds_through_transient_dip(mock_plant, freezer):
+    """A transient register-skew dip — any size, any sign — must be held at the
+    previous max, not adopted as a 'reset' (#142: a one-poll zeroed PV read sank
+    the derived value to -2.2 / 1.4 and the recorder double-counted the
+    recovery as ~20 kWh of new consumption)."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # The #142 excursion: negative dip held, never exposed.
+    assert _read(entity, mock_plant, -2.2) == 14.3
+    # A sag to a still-large value is no more plausible a reset.
+    assert _read(entity, mock_plant, 12.1) == 14.3
+    # Recovery is a plain increase — no fake reset, no double-count.
+    assert _read(entity, mock_plant, 14.5) == 14.5
+
+
+def test_monotonic_never_exposes_negative_baseline(mock_plant, freezer):
+    """A negative first/new-day reading floors the baseline at zero."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, -2.2) == 0.0
+    assert _read(entity, mock_plant, 0.4) == 0.4
+
+    # Negative skew spanning the day boundary: the new-day baseline is floored.
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, -1.0) == 0.0
+
+
+def test_monotonic_zero_baseline_small_dip(mock_plant, freezer):
+    """Falsy-zero regression: with a 0.0 baseline, a sub-threshold dip used to
+    slip through `self._monotonic_max or value` and expose a negative."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 0.0) == 0.0
+    assert _read(entity, mock_plant, -0.3) == 0.0
+    assert _read(entity, mock_plant, 0.2) == 0.2
+
+
+def test_monotonic_midnight_reset_passes(mock_plant, freezer):
+    """The genuine midnight reset still passes through as a real decrease."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 21.4) == 21.4
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, 0.1) == 0.1
+
+
+def test_monotonic_reset_accepted_after_poll_gap(mock_plant, freezer):
+    """The post-reset plausibility ceiling scales with time since the previous
+    reading: after a polling outage spanning the counter reset, or on a long
+    scan interval under heavy load, the first reading has legitimately
+    accumulated more than the 0.5 kWh floor and must still be accepted."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # HA's date flips; the lagging counter still reads yesterday's total.
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # Two hours of failed polls; the counter reset during the gap and has
+    # since accumulated 1.8 kWh — far over the floor, well under 15 kW × 2 h.
+    freezer.tick(2 * 3600)
+    assert _read(entity, mock_plant, 1.8) == 1.8
+    assert _read(entity, mock_plant, 2.0) == 2.0
+
+
+def test_monotonic_reset_accepted_on_long_scan_interval(mock_plant, freezer):
+    """A 5-minute scan interval at high load: the first post-reset reading can
+    exceed the 0.5 kWh floor (e.g. 0.9 kWh at ~11 kW); the elapsed-scaled
+    ceiling (15 kW × 300 s = 1.25 kWh) accepts it."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(300)
+    assert _read(entity, mock_plant, 0.9) == 0.9
+
+
+def test_monotonic_daytime_gap_does_not_widen_acceptance(mock_plant, freezer):
+    """An ordinary daytime polling gap must not widen the reset band: no reset
+    is owed (the day's reset was already observed), so a still-large sag on
+    the first post-gap poll stays clamped (review on #163)."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # Two-hour outage, then a skew sag to a still-large value: without the
+    # reset-pending gate, the elapsed-scaled ceiling (30 kWh) would accept
+    # 12.1 as a "reset" and double-count the recovery.
+    freezer.tick(2 * 3600)
+    assert _read(entity, mock_plant, 12.1) == 14.3
+    assert _read(entity, mock_plant, 14.4) == 14.4
+
+
+def test_monotonic_pending_reset_consumed_by_acceptance(mock_plant, freezer):
+    """Once the owed reset has been accepted, later same-day gaps revert to
+    the tight floor — a subsequent dip is skew, not another reset."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(2 * 3600)
+    assert _read(entity, mock_plant, 1.8) == 1.8  # owed reset accepted
+    assert _read(entity, mock_plant, 2.0) == 2.0
+    # Another gap the same day: the band is back at the floor.
+    freezer.tick(3600)
+    assert _read(entity, mock_plant, 0.9) == 2.0
+
+
+def test_monotonic_pending_survives_negative_boundary_reading(mock_plant, freezer):
+    """A transient negative reading exactly at the date flip must not decide
+    the owed-reset question: the carry-over reappears on the next poll, and
+    the genuine reset after a later gap must still be admitted (review on
+    #163)."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # The boundary poll itself is register skew gone negative.
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, -1.0) == 0.0
+    # Next poll: yesterday's still-unreset total reappears — reset still owed.
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # The owed reset lands after a two-hour gap, above the fixed floor.
+    freezer.tick(2 * 3600)
+    assert _read(entity, mock_plant, 1.8) == 1.8
+
+
+def test_monotonic_deferred_decision_skips_ambiguous_sag(mock_plant, freezer):
+    """While the owed-reset question is deferred past a skewed boundary
+    reading, an ambiguous still-large sag (neither carry-over nor a plausible
+    reset) must not settle it — nor be exposed. A later plausible poll makes
+    the call (review on #163)."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, -1.0) == 0.0  # boundary skew: undecided
+    assert _read(entity, mock_plant, 12.1) == 0.0  # ambiguous sag: held, still undecided
+    assert _read(entity, mock_plant, 14.3) == 14.3  # carry-over: reset owed
+    freezer.tick(2 * 3600)
+    assert _read(entity, mock_plant, 1.8) == 1.8  # owed reset admitted
+
+
+def test_monotonic_deferred_decision_settles_on_plausible_reset(mock_plant, freezer):
+    """The other arm of the deferred call: after boundary skew, a reading in
+    the (elapsed-scaled) reset band means the reset happened during the skew
+    window — decided as seen, counting resumes."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, -1.0) == 0.0
+    assert _read(entity, mock_plant, 0.2) == 0.2  # plausible post-reset: decided
+    # The band is now back at the floor: a later still-large sag stays held.
+    freezer.tick(2 * 3600)
+    assert _read(entity, mock_plant, 5.0) == 5.0  # normal accumulation
+    assert _read(entity, mock_plant, 3.0) == 5.0  # still-large sag clamped
+
+
+def test_monotonic_negative_still_rejected_after_poll_gap(mock_plant, freezer):
+    """A widened ceiling never admits a negative excursion."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(3600)
+    assert _read(entity, mock_plant, -2.2) == 14.3
+
+
+def test_monotonic_clock_lag_reset_after_date_flip(mock_plant, freezer):
+    """An inverter clock lagging HA's midnight: the pre-reset value carries over
+    as the new-day baseline, and the real reset lands a poll later via the
+    magnitude branch — gated on a plausible post-reset value."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 21.4) == 21.4
+    # HA's date flips first; the counter hasn't reset yet.
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, 21.4) == 21.4
+    # The actual reset arrives on the next poll.
+    assert _read(entity, mock_plant, 0.05) == 0.05
+    # Counting resumes from the new baseline.
+    assert _read(entity, mock_plant, 0.3) == 0.3
+
+
+async def test_monotonic_restore_floors_negative(hass, mock_plant):
+    """A persisted negative state (recorded by pre-fix versions) must not
+    re-seed a negative baseline after restart."""
+    from unittest.mock import AsyncMock
+
+    from homeassistant.core import State
+
+    entity = _monotonic_entity(mock_plant)
+    entity.hass = hass
+    entity.entity_id = "sensor.test_house_consumption_today"
+    entity.async_get_last_state = AsyncMock(return_value=State(entity.entity_id, "-2.2"))
+    await entity.async_added_to_hass()
+
+    assert entity._monotonic_max == 0.0
+    assert _read(entity, mock_plant, -0.3) == 0.0
+
+
+async def test_monotonic_restore_seeds_same_day_max(hass, mock_plant):
+    """A same-day persisted value seeds the intra-day max, so a transient dip
+    on the first post-restart poll is held rather than adopted."""
+    from unittest.mock import AsyncMock
+
+    from homeassistant.core import State
+
+    entity = _monotonic_entity(mock_plant)
+    entity.hass = hass
+    entity.entity_id = "sensor.test_house_consumption_today"
+    entity.async_get_last_state = AsyncMock(return_value=State(entity.entity_id, "13.7"))
+    await entity.async_added_to_hass()
+
+    assert entity._monotonic_max == 13.7
+    # A >threshold drop to a still-large value is rejected by the reset gate.
+    assert _read(entity, mock_plant, 12.1) == 13.7
+    assert _read(entity, mock_plant, 13.8) == 13.8
+
+
+async def test_monotonic_restore_prior_day_carry_over_allows_late_reset(hass, mock_plant, freezer):
+    """A restart spanning midnight: the persisted state is from yesterday, and
+    the first reading of the new day still matches it (inverter clock lag).
+    The owed reset arriving on a later poll must be admitted."""
+    from datetime import timedelta
+    from unittest.mock import AsyncMock
+
+    from homeassistant.core import State
+    from homeassistant.util import dt as dt_util
+
+    freezer.move_to("2026-06-13 00:02:00+00:00")
+    yesterday = dt_util.utcnow() - timedelta(days=1)
+    entity = _monotonic_entity(mock_plant)
+    entity.hass = hass
+    entity.entity_id = "sensor.test_house_consumption_today"
+    entity.async_get_last_state = AsyncMock(
+        return_value=State(entity.entity_id, "14.3", last_updated=yesterday)
+    )
+    await entity.async_added_to_hass()
+    assert entity._monotonic_max is None  # prior-day state is not a baseline
+
+    # First reading still carries yesterday's total — reset owed.
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # The real reset lands two polls later, after some accumulation.
+    freezer.tick(120)
+    assert _read(entity, mock_plant, 0.3) == 0.3
+
+
+async def test_monotonic_restore_skips_unusable_states(hass, mock_plant):
+    """Non-numeric or prior-day persisted states must not seed the baseline."""
+    from datetime import timedelta
+    from unittest.mock import AsyncMock
+
+    from homeassistant.core import State
+    from homeassistant.util import dt as dt_util
+
+    entity = _monotonic_entity(mock_plant)
+    entity.hass = hass
+    entity.entity_id = "sensor.test_house_consumption_today"
+    entity.async_get_last_state = AsyncMock(return_value=State(entity.entity_id, "unavailable"))
+    await entity.async_added_to_hass()
+    assert entity._monotonic_max is None
+
+    yesterday = dt_util.utcnow() - timedelta(days=1)
+    entity = _monotonic_entity(mock_plant)
+    entity.hass = hass
+    entity.entity_id = "sensor.test_house_consumption_today"
+    entity.async_get_last_state = AsyncMock(
+        return_value=State(entity.entity_id, "13.7", last_updated=yesterday)
+    )
+    await entity.async_added_to_hass()
+    assert entity._monotonic_max is None
