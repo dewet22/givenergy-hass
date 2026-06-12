@@ -48,13 +48,13 @@ jobs:
           fi
           # Route the PR to the branch whose dependency range that minor
           # version belongs to. Convention: hass v1.0 tracks modbus v2.0,
-          # hass main (v1.1+) tracks modbus v2.1+. Update when a new modbus
-          # minor or hass release branch is introduced.
+          # hass main tracks every later 2.x minor. A 3.x major fails the
+          # routing on purpose — that bump deserves a deliberate decision.
           major="${NEW%%.*}"
           minor="${NEW#*.}"; minor="${minor%%.*}"
           case "$major.$minor" in
             2.0) base=v1.0 ;;
-            2.1) base=main ;;
+            2.*) base=main ;;
             *)
               echo "::error::no target branch configured for givenergy-modbus ${major}.${minor}.x (version $NEW)"
               exit 1
