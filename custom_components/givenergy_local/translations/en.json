@@ -94,27 +94,6 @@
   },
   "entity": {
     "sensor": {
-      "inverter_status": {
-        "state": {
-          "waiting": "Waiting",
-          "normal": "Normal",
-          "warning": "Warning",
-          "fault": "Fault",
-          "flashing_firmware_update": "Flashing Firmware Update"
-        }
-      },
-      "meter_type": {
-        "state": {
-          "ct_or_em418": "CT or EM418",
-          "em115": "EM115"
-        }
-      },
-      "battery_type": {
-        "state": {
-          "lead_acid": "Lead Acid",
-          "lithium": "Lithium"
-        }
-      },
       "battery_calibration_stage": {
         "state": {
           "off": "Off",
@@ -133,6 +112,35 @@
           "discharge": "Discharge",
           "charge": "Charge",
           "standby": "Standby"
+        }
+      },
+      "battery_type": {
+        "state": {
+          "lead_acid": "Lead Acid",
+          "lithium": "Lithium"
+        }
+      },
+      "charge_status": {
+        "state": {
+          "idle": "Idle",
+          "charging": "Charging",
+          "finishing": "Finishing",
+          "discharging": "Discharging"
+        }
+      },
+      "inverter_status": {
+        "state": {
+          "waiting": "Waiting",
+          "normal": "Normal",
+          "warning": "Warning",
+          "fault": "Fault",
+          "flashing_firmware_update": "Flashing Firmware Update"
+        }
+      },
+      "meter_type": {
+        "state": {
+          "ct_or_em418": "CT or EM418",
+          "em115": "EM115"
         }
       },
       "usb_device_inserted": {

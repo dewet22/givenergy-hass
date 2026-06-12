@@ -11,6 +11,7 @@ from givenergy_modbus.model.battery import Battery, BatteryMaintenance
 from givenergy_modbus.model.inverter import (
     BatteryCalibrationStage,
     BatteryType,
+    ChargeStatus,
     MeterType,
     Model,
     Status,
@@ -202,14 +203,19 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         ),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
-    # charge_status_label is a ChargeStatus IntEnum, so the rendered state
-    # stays the raw numeric code for known values (unknown codes read as
-    # unavailable rather than a bare int, per modbus #222). system_mode is
-    # still a raw integer — the library ships no mapping for it yet.
+    # ChargeStatus mapping shipped in modbus 2.3.1 (#222) — render the
+    # friendly label; unknown codes read as unknown rather than a bare int.
+    # system_mode is still a raw integer (stringified, so a future enum
+    # rendering isn't an intrusive change) — no library mapping yet.
     GivEnergyInverterSensorDescription(
         key="charge_status",
         name="Charge Status",
-        value_fn=lambda inv: inv.charge_status_label,
+        device_class=SensorDeviceClass.ENUM,
+        options=[s.name.lower() for s in ChargeStatus],
+        translation_key="charge_status",
+        value_fn=lambda inv: (
+            s.name.lower() if (s := getattr(inv, "charge_status_label", None)) is not None else None
+        ),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(
