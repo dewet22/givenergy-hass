@@ -1328,7 +1328,7 @@ class GivEnergyInverterSensor(
         self._monotonic_max: float | None = None
         self._monotonic_date: date | None = None
         self._monotonic_last_read: datetime | None = None
-        self._monotonic_reset_pending = False
+        self._monotonic_reset_pending: bool | None = False
         self._monotonic_prior_day_value: float | None = None
         self._source_ir_registers = _source_ir_registers(
             type(coordinator.data.inverter), description.source_field or description.key
@@ -1422,18 +1422,37 @@ class GivEnergyInverterSensor(
                 # counter did NOT drop at the boundary — judged against the
                 # running max, or after a restart against the restored
                 # prior-day value; only while it is owed may the acceptance
-                # band widen with elapsed time.
+                # band widen with elapsed time. An implausible (negative)
+                # boundary reading decides nothing: defer the owed-reset
+                # call to the first plausible reading of the day, or the
+                # carry-over reappearing after the skew would lose it.
                 prior_ref = (
                     self._monotonic_max
                     if self._monotonic_max is not None
                     else self._monotonic_prior_day_value
                 )
+                if value < 0.0:
+                    self._monotonic_reset_pending = None
+                    self._monotonic_prior_day_value = prior_ref
+                else:
+                    self._monotonic_reset_pending = (
+                        prior_ref is not None and value >= prior_ref - _MONOTONIC_RESET_THRESHOLD
+                    )
+                    self._monotonic_prior_day_value = None
+                self._monotonic_max = max(value, 0.0)
+                self._monotonic_date = today
+            elif self._monotonic_reset_pending is None and value >= 0.0:
+                # First plausible reading of a day whose boundary poll was
+                # skew: make the deferred owed-reset call now, then fall
+                # through to the normal same-day handling on the next poll.
+                prior_ref = self._monotonic_prior_day_value
                 self._monotonic_reset_pending = (
                     prior_ref is not None and value >= prior_ref - _MONOTONIC_RESET_THRESHOLD
                 )
                 self._monotonic_prior_day_value = None
-                self._monotonic_max = max(value, 0.0)
-                self._monotonic_date = today
+                self._monotonic_max = max(
+                    value, self._monotonic_max if self._monotonic_max is not None else 0.0
+                )
             elif self._monotonic_max is None:
                 # Unreachable in practice (date and max are set together),
                 # but keeps the invariant explicit and lets the branches

@@ -1120,6 +1120,25 @@ def test_monotonic_pending_reset_consumed_by_acceptance(mock_plant, freezer):
     assert _read(entity, mock_plant, 0.9) == 2.0
 
 
+def test_monotonic_pending_survives_negative_boundary_reading(mock_plant, freezer):
+    """A transient negative reading exactly at the date flip must not decide
+    the owed-reset question: the carry-over reappears on the next poll, and
+    the genuine reset after a later gap must still be admitted (review on
+    #163)."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # The boundary poll itself is register skew gone negative.
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, -1.0) == 0.0
+    # Next poll: yesterday's still-unreset total reappears — reset still owed.
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # The owed reset lands after a two-hour gap, above the fixed floor.
+    freezer.tick(2 * 3600)
+    assert _read(entity, mock_plant, 1.8) == 1.8
+
+
 def test_monotonic_negative_still_rejected_after_poll_gap(mock_plant, freezer):
     """A widened ceiling never admits a negative excursion."""
     freezer.move_to("2026-06-12 12:00:00+00:00")
