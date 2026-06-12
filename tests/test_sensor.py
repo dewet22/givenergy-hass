@@ -1064,7 +1064,7 @@ def test_monotonic_reset_accepted_after_poll_gap(mock_plant, freezer):
 
     assert _read(entity, mock_plant, 14.3) == 14.3
     # HA's date flips; the lagging counter still reads yesterday's total.
-    freezer.tick(12 * 3600)
+    freezer.tick(24 * 3600)
     assert _read(entity, mock_plant, 14.3) == 14.3
     # Two hours of failed polls; the counter reset during the gap and has
     # since accumulated 1.8 kWh — far over the floor, well under 15 kW × 2 h.
@@ -1081,10 +1081,43 @@ def test_monotonic_reset_accepted_on_long_scan_interval(mock_plant, freezer):
     entity = _monotonic_entity(mock_plant)
 
     assert _read(entity, mock_plant, 14.3) == 14.3
-    freezer.tick(12 * 3600)
+    freezer.tick(24 * 3600)
     assert _read(entity, mock_plant, 14.3) == 14.3
     freezer.tick(300)
     assert _read(entity, mock_plant, 0.9) == 0.9
+
+
+def test_monotonic_daytime_gap_does_not_widen_acceptance(mock_plant, freezer):
+    """An ordinary daytime polling gap must not widen the reset band: no reset
+    is owed (the day's reset was already observed), so a still-large sag on
+    the first post-gap poll stays clamped (review on #163)."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # Two-hour outage, then a skew sag to a still-large value: without the
+    # reset-pending gate, the elapsed-scaled ceiling (30 kWh) would accept
+    # 12.1 as a "reset" and double-count the recovery.
+    freezer.tick(2 * 3600)
+    assert _read(entity, mock_plant, 12.1) == 14.3
+    assert _read(entity, mock_plant, 14.4) == 14.4
+
+
+def test_monotonic_pending_reset_consumed_by_acceptance(mock_plant, freezer):
+    """Once the owed reset has been accepted, later same-day gaps revert to
+    the tight floor — a subsequent dip is skew, not another reset."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(2 * 3600)
+    assert _read(entity, mock_plant, 1.8) == 1.8  # owed reset accepted
+    assert _read(entity, mock_plant, 2.0) == 2.0
+    # Another gap the same day: the band is back at the floor.
+    freezer.tick(3600)
+    assert _read(entity, mock_plant, 0.9) == 2.0
 
 
 def test_monotonic_negative_still_rejected_after_poll_gap(mock_plant, freezer):
@@ -1148,6 +1181,34 @@ async def test_monotonic_restore_seeds_same_day_max(hass, mock_plant):
     # A >threshold drop to a still-large value is rejected by the reset gate.
     assert _read(entity, mock_plant, 12.1) == 13.7
     assert _read(entity, mock_plant, 13.8) == 13.8
+
+
+async def test_monotonic_restore_prior_day_carry_over_allows_late_reset(hass, mock_plant, freezer):
+    """A restart spanning midnight: the persisted state is from yesterday, and
+    the first reading of the new day still matches it (inverter clock lag).
+    The owed reset arriving on a later poll must be admitted."""
+    from datetime import timedelta
+    from unittest.mock import AsyncMock
+
+    from homeassistant.core import State
+    from homeassistant.util import dt as dt_util
+
+    freezer.move_to("2026-06-13 00:02:00+00:00")
+    yesterday = dt_util.utcnow() - timedelta(days=1)
+    entity = _monotonic_entity(mock_plant)
+    entity.hass = hass
+    entity.entity_id = "sensor.test_house_consumption_today"
+    entity.async_get_last_state = AsyncMock(
+        return_value=State(entity.entity_id, "14.3", last_updated=yesterday)
+    )
+    await entity.async_added_to_hass()
+    assert entity._monotonic_max is None  # prior-day state is not a baseline
+
+    # First reading still carries yesterday's total — reset owed.
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # The real reset lands two polls later, after some accumulation.
+    freezer.tick(120)
+    assert _read(entity, mock_plant, 0.3) == 0.3
 
 
 async def test_monotonic_restore_skips_unusable_states(hass, mock_plant):

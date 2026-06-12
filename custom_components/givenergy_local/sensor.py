@@ -1328,6 +1328,8 @@ class GivEnergyInverterSensor(
         self._monotonic_max: float | None = None
         self._monotonic_date: date | None = None
         self._monotonic_last_read: datetime | None = None
+        self._monotonic_reset_pending = False
+        self._monotonic_prior_day_value: float | None = None
         self._source_ir_registers = _source_ir_registers(
             type(coordinator.data.inverter), description.source_field or description.key
         )
@@ -1371,6 +1373,12 @@ class GivEnergyInverterSensor(
             # negative state (#142), which must not re-seed the baseline.
             self._monotonic_max = max(restored, 0.0)
             self._monotonic_date = last_date
+        else:
+            # A prior-day value is no intra-day baseline, but it is the
+            # reference for the first reading of the new day: matching it
+            # means the counter carried over un-reset across a restart
+            # spanning midnight, so the late reset must still be admitted.
+            self._monotonic_prior_day_value = max(restored, 0.0)
 
     @property
     def available(self) -> bool:
@@ -1410,7 +1418,20 @@ class GivEnergyInverterSensor(
                 # negative at any moment, including across the day boundary
                 # (#142). A high carry-over here is normal (inverter clock
                 # lagging HA's midnight); the reset branch below catches the
-                # real reset a poll later.
+                # real reset a poll later. A reset is owed exactly when the
+                # counter did NOT drop at the boundary — judged against the
+                # running max, or after a restart against the restored
+                # prior-day value; only while it is owed may the acceptance
+                # band widen with elapsed time.
+                prior_ref = (
+                    self._monotonic_max
+                    if self._monotonic_max is not None
+                    else self._monotonic_prior_day_value
+                )
+                self._monotonic_reset_pending = (
+                    prior_ref is not None and value >= prior_ref - _MONOTONIC_RESET_THRESHOLD
+                )
+                self._monotonic_prior_day_value = None
                 self._monotonic_max = max(value, 0.0)
                 self._monotonic_date = today
             elif self._monotonic_max is None:
@@ -1424,17 +1445,21 @@ class GivEnergyInverterSensor(
                 # threshold's comment). Anything else is transient register
                 # skew: hold the clamp until the source recovers, so the
                 # recorder never sees a fake reset followed by a
-                # sum-corrupting recovery jump (#142). The ceiling scales
-                # with time since the previous reading so a reset observed
-                # late — long scan interval, or a polling outage spanning
-                # midnight — is not rejected for having accumulated more
-                # than the floor.
+                # sum-corrupting recovery jump (#142). While the midnight
+                # reset is still owed, the ceiling scales with time since
+                # the previous reading so a reset observed late — long scan
+                # interval, or a polling outage after the date flip — is
+                # not rejected for having accumulated more than the floor.
+                # Once it has been observed (or was never owed), the band
+                # stays at the floor: a post-gap daytime sag is skew, not a
+                # reset.
                 ceiling = _MONOTONIC_RESET_THRESHOLD
-                if last_read is not None:
+                if self._monotonic_reset_pending and last_read is not None:
                     elapsed_hours = (now - last_read).total_seconds() / 3600.0
                     ceiling = max(ceiling, _MONOTONIC_RESET_MAX_LOAD_KW * elapsed_hours)
                 if 0.0 <= value <= ceiling:
                     self._monotonic_max = value
+                    self._monotonic_reset_pending = False
             else:
                 self._monotonic_max = max(value, self._monotonic_max)
             return self._monotonic_max
