@@ -202,3 +202,31 @@ async def test_reconfigure_cannot_connect_shows_error(hass, mock_client, setup_i
     assert result["type"] == "form"
     assert result["errors"] == {"base": "cannot_connect"}
     assert setup_integration.data[CONF_HOST] == "192.168.1.100"
+
+
+async def test_options_flow_sets_tariff_entities(hass, mock_client, setup_integration):
+    """The options flow stores the tariff rate entity ids."""
+    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    assert result["type"] == "form"
+    assert result["step_id"] == "init"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "tariff_import_entity": "sensor.octopus_import_rate",
+            "tariff_export_entity": "sensor.octopus_export_rate",
+        },
+    )
+    assert result["type"] == "create_entry"
+    assert setup_integration.options == {
+        "tariff_import_entity": "sensor.octopus_import_rate",
+        "tariff_export_entity": "sensor.octopus_export_rate",
+    }
+
+
+async def test_options_flow_allows_blank_tariffs(hass, mock_client, setup_integration):
+    """Submitting the form empty stores no tariff entities (sensors not created)."""
+    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+    assert result["type"] == "create_entry"
+    assert setup_integration.options == {}

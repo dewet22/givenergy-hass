@@ -43,7 +43,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import CONF_TARIFF_EXPORT_ENTITY, CONF_TARIFF_IMPORT_ENTITY, DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 
 _LOGGER = logging.getLogger(__name__)
@@ -1216,6 +1216,27 @@ async def async_setup_entry(
         GivEnergyCoordinatorSensor(coordinator, description) for description in COORDINATOR_SENSORS
     )
 
+    # Money sensors: only when the entry's options name tariff rate entities.
+    import_entity = entry.options.get(CONF_TARIFF_IMPORT_ENTITY)
+    export_entity = entry.options.get(CONF_TARIFF_EXPORT_ENTITY)
+    configured = {
+        need
+        for need, rate_entity in (("import", import_entity), ("export", export_entity))
+        if rate_entity
+    }
+    if configured:
+        tracker = _MoneyTracker(hass, import_entity, export_entity)
+        # Baseline today's counters; nothing is priced until the next tick.
+        tracker.update(coordinator.data)
+        entry.async_on_unload(
+            coordinator.async_add_listener(lambda: tracker.update(coordinator.data))
+        )
+        entities.extend(
+            GivEnergyMoneySensor(coordinator, description, tracker)
+            for description in MONEY_SENSORS
+            if set(description.needs) <= configured
+        )
+
     async_add_entities(entities)
 
 
@@ -1595,6 +1616,207 @@ class GivEnergyAioModuleSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Se
         if module is None:
             return None
         return self.entity_description.value_fn(module)
+
+
+# ----- money sensors (mission dashboard) -------------------------------------
+
+
+def _consumption_today(inv: InverterModel) -> float | None:
+    """Today's house consumption: derived field on single-phase, native on 3ph."""
+    try:
+        return inv.e_consumption_today
+    except AttributeError:
+        return getattr(inv, "e_load_today", None)
+
+
+class _MoneyTracker:
+    """Prices each coordinator tick's energy deltas against tariff rate entities.
+
+    One per config entry, shared by the money sensors. Registered as a
+    coordinator listener before the entities are added, so their state writes
+    always see this tick's totals. Two honesty rules: energy that accrued
+    before tracking started is never retro-priced (the first sight of a source
+    only sets its baseline), and a tick without a usable rate advances the
+    baseline *without* pricing the gap - the dependent sensors go unavailable
+    instead of accumulating priced-at-zero or priced-at-the-wrong-rate values.
+    """
+
+    def __init__(
+        self, hass: HomeAssistant, import_entity: str | None, export_entity: str | None
+    ) -> None:
+        self._hass = hass
+        self._rate_entities = {"import": import_entity, "export": export_entity}
+        self.totals = {"import": 0.0, "export": 0.0, "counterfactual": 0.0}
+        self._last: dict[str, float] = {}
+        self.rate_ok = {"import": False, "export": False}
+        self.currency: str = hass.config.currency
+
+    def update(self, plant: Any) -> None:
+        inverter = plant.inverter
+        import_rate = self._rate("import")
+        export_rate = self._rate("export")
+        self._accumulate("import", inverter.e_grid_in_day, import_rate)
+        self._accumulate("export", inverter.e_grid_out_day, export_rate)
+        self._accumulate("counterfactual", _consumption_today(inverter), import_rate)
+
+    def net(self) -> float:
+        return self.totals["import"] - self.totals["export"]
+
+    def _rate(self, key: str) -> float | None:
+        """The rate entity's current value in major currency units per kWh."""
+        entity_id = self._rate_entities[key]
+        state = self._hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in ("unknown", "unavailable"):
+            self.rate_ok[key] = False
+            return None
+        try:
+            value = float(state.state)
+        except TypeError, ValueError:
+            self.rate_ok[key] = False
+            return None
+        unit = state.attributes.get("unit_of_measurement") or ""
+        currency = unit.split("/", 1)[0].strip() if "/" in unit else ""
+        if currency.lower() == "p":  # pence -> pounds
+            value /= 100
+            currency = "GBP"
+        if currency:
+            self.currency = currency
+        self.rate_ok[key] = True
+        return value
+
+    def _accumulate(self, key: str, source: float | None, rate: float | None) -> None:
+        if source is None:
+            return
+        source = float(source)
+        last = self._last.get(key)
+        self._last[key] = source
+        if last is None:
+            return
+        if source < last:
+            # The source counter reset at midnight; its new value is the whole
+            # new day's energy.
+            self.totals[key] = 0.0
+            delta = source
+        else:
+            delta = source - last
+        if rate is None:
+            return
+        self.totals[key] += delta * rate
+
+
+@dataclass(frozen=True, kw_only=True)
+class GivEnergyMoneySensorDescription(SensorEntityDescription):
+    value_fn: Callable[[_MoneyTracker], float]
+    # Which tariff feeds ("import"/"export") must be configured for the sensor
+    # to be created, and healthy for it to be available.
+    needs: tuple[str, ...]
+    # Tracker accumulator this sensor's restored state seeds after a restart
+    # (None for derived sensors like net, which restore through their inputs).
+    restore_key: str | None = None
+    attributes_fn: Callable[[_MoneyTracker], dict[str, Any]] | None = None
+
+
+MONEY_SENSORS: tuple[GivEnergyMoneySensorDescription, ...] = (
+    GivEnergyMoneySensorDescription(
+        key="grid_import_cost_today",
+        name="Grid Import Cost Today",
+        icon="mdi:cash-minus",
+        value_fn=lambda t: t.totals["import"],
+        needs=("import",),
+        restore_key="import",
+    ),
+    GivEnergyMoneySensorDescription(
+        key="grid_export_earnings_today",
+        name="Grid Export Earnings Today",
+        icon="mdi:cash-plus",
+        value_fn=lambda t: t.totals["export"],
+        needs=("export",),
+        restore_key="export",
+    ),
+    GivEnergyMoneySensorDescription(
+        key="net_energy_cost_today",
+        name="Net Energy Cost Today",
+        icon="mdi:scale-balance",
+        value_fn=lambda t: t.net(),
+        needs=("import", "export"),
+    ),
+    GivEnergyMoneySensorDescription(
+        key="counterfactual_cost_today",
+        name="Cost Without System Today",
+        icon="mdi:cash-clock",
+        value_fn=lambda t: t.totals["counterfactual"],
+        needs=("import",),
+        restore_key="counterfactual",
+        # The single modelled claim: what the day would have cost with every
+        # consumed kWh bought from the grid.
+        attributes_fn=lambda t: {"savings_today": t.totals["counterfactual"] - t.net()},
+    ),
+)
+
+
+class GivEnergyMoneySensor(
+    CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity, RestoreEntity
+):
+    """Tariff-priced daily accumulator backed by the entry's _MoneyTracker."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.MONETARY
+    _attr_state_class = SensorStateClass.TOTAL
+    _attr_suggested_display_precision = 2
+    entity_description: GivEnergyMoneySensorDescription
+
+    def __init__(
+        self,
+        coordinator: GivEnergyUpdateCoordinator,
+        description: GivEnergyMoneySensorDescription,
+        tracker: _MoneyTracker,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._tracker = tracker
+        serial = coordinator.data.inverter_serial_number
+        self._attr_unique_id = f"{serial}_{description.key}"
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, serial)})
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        restore_key = self.entity_description.restore_key
+        if restore_key is None:
+            return
+        last_state = await self.async_get_last_state()
+        if last_state is None:
+            return
+        try:
+            restored = float(last_state.state)
+        except ValueError, TypeError:
+            return
+        # Same-day check mirrors the monotonic restore above: yesterday's
+        # total must not leak into a fresh day.
+        if dt_util.as_local(last_state.last_updated).date() == dt_util.now().date():
+            self._tracker.totals[restore_key] = restored
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        return self._tracker.currency
+
+    @property
+    def last_reset(self) -> Any:
+        return dt_util.start_of_local_day()
+
+    @property
+    def available(self) -> bool:
+        if not super().available:
+            return False
+        return all(self._tracker.rate_ok[need] for need in self.entity_description.needs)
+
+    @property
+    def native_value(self) -> float:
+        return self.entity_description.value_fn(self._tracker)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        fn = self.entity_description.attributes_fn
+        return fn(self._tracker) if fn else None
 
 
 class GivEnergyCoordinatorSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):

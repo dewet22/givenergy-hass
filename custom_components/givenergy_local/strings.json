@@ -94,5 +94,17 @@
         }
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tariff rates",
+        "description": "Optional tariff rate entities used to price today's energy flows (the money sensors and the mission dashboard's Ledger). Leave blank to disable.",
+        "data": {
+          "tariff_import_entity": "Import rate entity (e.g. Octopus current import rate)",
+          "tariff_export_entity": "Export rate entity (e.g. Octopus current export rate)"
+        }
+      }
+    }
   }
 }

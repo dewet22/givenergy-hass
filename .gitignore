@@ -19,3 +19,4 @@ dist/
 # Node / frontend test tooling
 node_modules/
 .claude/*.local.md
+.superpowers/
