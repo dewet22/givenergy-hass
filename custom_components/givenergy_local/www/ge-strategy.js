@@ -511,6 +511,75 @@
     };
   }
 
+  // Observatory: longevity made legible. The cell heatmap as centrepiece plus
+  // stock statistics-graph cards over long-term statistics: per-pack cell
+  // envelope (balance drift), cycle count, calibrated capacity (the honest
+  // degradation signal) and pack temperature spread. Entities gate on registry
+  // presence; a sensor without statistics renders an empty chart rather than
+  // dropping the view.
+  function observatoryView(plant, a) {
+    if (!plant.batteries.length) return null;
+    var cards = [
+      {
+        type: "custom:ge-cell-heatmap",
+        title: "Cell balance - deviation from pack mean",
+        batteries: plant.batteries.map(function (rec) {
+          return rec.serial;
+        }),
+      },
+    ];
+
+    // Per-pack cell envelope: min/max across all 16 cells over 30 days makes
+    // a widening balance spread visible at a glance.
+    plant.batteries.forEach(function (rec, index) {
+      var cells = [];
+      for (var cell = 1; cell <= 16; cell++) {
+        var ve = a.bat(rec, "v_cell_" + pad2(cell));
+        if (ve) cells.push(ve);
+      }
+      if (cells.length) {
+        cards.push({
+          type: "statistics-graph",
+          title:
+            "B" + (index + 1) + " " + String(rec.serial).toUpperCase() +
+            " cell envelope (V) - 30d",
+          entities: cells,
+          stat_types: ["min", "max"],
+          days_to_show: 30,
+          hide_legend: true,
+        });
+      }
+    });
+
+    function packStatCard(title, keys, statTypes, days) {
+      var entities = [];
+      plant.batteries.forEach(function (rec) {
+        keys.forEach(function (key) {
+          var eid = a.bat(rec, key);
+          if (eid) entities.push(eid);
+        });
+      });
+      if (!entities.length) return null;
+      return {
+        type: "statistics-graph",
+        title: title,
+        entities: entities,
+        stat_types: statTypes,
+        days_to_show: days,
+      };
+    }
+
+    [
+      packStatCard("Cycle count - 90d", ["num_cycles"], ["mean"], 90),
+      packStatCard("Calibrated capacity (kWh) - 90d", ["cap_calibrated"], ["mean"], 90),
+      packStatCard("Pack temperature spread (degC) - 30d", ["t_max", "t_min"], ["mean"], 30),
+    ].forEach(function (c) {
+      if (c) cards.push(c);
+    });
+
+    return { title: "Observatory", path: "observatory", icon: "mdi:telescope", cards: cards };
+  }
+
   // mode: mission -- the tape-centred hub (Mission Control) plus the Tape deep
   // view, then the classic tab set. Inverter-centric like flow/glance; EMS
   // plants fall back to classic. See docs/superpowers/specs/
@@ -521,6 +590,8 @@
     var views = [missionView(plant, a, opts), tapeView(plant, a, opts)];
     var ledger = ledgerView(plant, a, opts);
     if (ledger) views.push(ledger);
+    var observatory = observatoryView(plant, a);
+    if (observatory) views.push(observatory);
     return views.concat(classicViews(plant, opts));
   }
 

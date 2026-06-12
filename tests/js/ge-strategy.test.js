@@ -503,13 +503,14 @@ describe("mission mode", () => {
     solar_forecast: "sensor.solcast_today",
   };
 
-  it("leads with panel Mission Control + Tape + Ledger views, then the classic set", async () => {
+  it("leads with panel Mission Control + Tape + Ledger + Observatory, then the classic set", async () => {
     const hass = makeHass({ batterySerials: ["BAT1"] });
     const dash = await GE.generateDashboard(MISSION_CFG, hass);
     expect(titles(dash)).toEqual([
       "Mission Control",
       "Tape",
       "Ledger",
+      "Observatory",
       "Overview",
       "Energy",
       "Batteries",
@@ -640,6 +641,55 @@ describe("mission mode - ledger view", () => {
     });
     const dash = await GE.generateDashboard(MISSION_CFG, hass);
     expect(view(dash, "Ledger")).toBeUndefined();
-    expect(titles(dash).slice(0, 3)).toEqual(["Mission Control", "Tape", "Overview"]);
+    expect(titles(dash).slice(0, 4)).toEqual([
+      "Mission Control",
+      "Tape",
+      "Observatory",
+      "Overview",
+    ]);
+  });
+});
+
+describe("mission mode - observatory view", () => {
+  const MISSION_CFG = { mode: "mission" };
+
+  it("emits an Observatory view when batteries exist", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1", "BAT2"] });
+    const dash = await GE.generateDashboard(MISSION_CFG, hass);
+    const obs = view(dash, "Observatory");
+    expect(obs).toBeTruthy();
+    expect(obs.path).toBe("observatory");
+
+    const heatmap = card(obs, (c) => c.type === "custom:ge-cell-heatmap");
+    expect(heatmap.batteries).toEqual(["BAT1", "BAT2"]);
+
+    const statsCards = (obs.cards || []).filter((c) => c.type === "statistics-graph");
+    expect(statsCards.length).toBeGreaterThanOrEqual(3);
+    const registry = await regSet(hass);
+    for (const sc of statsCards) {
+      expect(sc.entities.length).toBeGreaterThan(0);
+      for (const e of sc.entities) {
+        const eid = typeof e === "string" ? e : e.entity;
+        expect(registry.has(eid)).toBe(true);
+      }
+    }
+    expect(hasNullEntity(obs)).toBe(false);
+  });
+
+  it("orders Observatory after Ledger and before the classic set", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"] });
+    const dash = await GE.generateDashboard(MISSION_CFG, hass);
+    expect(titles(dash).slice(0, 4)).toEqual([
+      "Mission Control",
+      "Tape",
+      "Ledger",
+      "Observatory",
+    ]);
+  });
+
+  it("omits the Observatory view without batteries", async () => {
+    const hass = makeHass({ batterySerials: [] });
+    const dash = await GE.generateDashboard(MISSION_CFG, hass);
+    expect(view(dash, "Observatory")).toBeUndefined();
   });
 });
