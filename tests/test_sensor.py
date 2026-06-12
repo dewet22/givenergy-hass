@@ -981,3 +981,153 @@ def test_sensor_without_ir_source_keeps_default_availability(mock_plant):
     mock_plant.register_age = MagicMock()
     assert entity.available is True
     mock_plant.register_age.assert_not_called()
+
+
+# --- #142: monotonic clamp must not accept transient dips as counter resets ---
+
+
+def _monotonic_entity(mock_plant):
+    from datetime import timedelta
+
+    from custom_components.givenergy_local.sensor import GivEnergyInverterSensor
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    return GivEnergyInverterSensor(coordinator, _inverter_desc("e_consumption_today"))
+
+
+def _read(entity, mock_plant, value):
+    mock_plant.inverter.e_consumption_today = value
+    return entity.native_value
+
+
+def test_monotonic_clamp_holds_through_transient_dip(mock_plant, freezer):
+    """A transient register-skew dip — any size, any sign — must be held at the
+    previous max, not adopted as a 'reset' (#142: a one-poll zeroed PV read sank
+    the derived value to -2.2 / 1.4 and the recorder double-counted the
+    recovery as ~20 kWh of new consumption)."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    # The #142 excursion: negative dip held, never exposed.
+    assert _read(entity, mock_plant, -2.2) == 14.3
+    # A sag to a still-large value is no more plausible a reset.
+    assert _read(entity, mock_plant, 12.1) == 14.3
+    # Recovery is a plain increase — no fake reset, no double-count.
+    assert _read(entity, mock_plant, 14.5) == 14.5
+
+
+def test_monotonic_never_exposes_negative_baseline(mock_plant, freezer):
+    """A negative first/new-day reading floors the baseline at zero."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, -2.2) == 0.0
+    assert _read(entity, mock_plant, 0.4) == 0.4
+
+    # Negative skew spanning the day boundary: the new-day baseline is floored.
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, -1.0) == 0.0
+
+
+def test_monotonic_zero_baseline_small_dip(mock_plant, freezer):
+    """Falsy-zero regression: with a 0.0 baseline, a sub-threshold dip used to
+    slip through `self._monotonic_max or value` and expose a negative."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 0.0) == 0.0
+    assert _read(entity, mock_plant, -0.3) == 0.0
+    assert _read(entity, mock_plant, 0.2) == 0.2
+
+
+def test_monotonic_midnight_reset_passes(mock_plant, freezer):
+    """The genuine midnight reset still passes through as a real decrease."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 21.4) == 21.4
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, 0.1) == 0.1
+
+
+def test_monotonic_clock_lag_reset_after_date_flip(mock_plant, freezer):
+    """An inverter clock lagging HA's midnight: the pre-reset value carries over
+    as the new-day baseline, and the real reset lands a poll later via the
+    magnitude branch — gated on a plausible post-reset value."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 21.4) == 21.4
+    # HA's date flips first; the counter hasn't reset yet.
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, 21.4) == 21.4
+    # The actual reset arrives on the next poll.
+    assert _read(entity, mock_plant, 0.05) == 0.05
+    # Counting resumes from the new baseline.
+    assert _read(entity, mock_plant, 0.3) == 0.3
+
+
+async def test_monotonic_restore_floors_negative(hass, mock_plant):
+    """A persisted negative state (recorded by pre-fix versions) must not
+    re-seed a negative baseline after restart."""
+    from unittest.mock import AsyncMock
+
+    from homeassistant.core import State
+
+    entity = _monotonic_entity(mock_plant)
+    entity.hass = hass
+    entity.entity_id = "sensor.test_house_consumption_today"
+    entity.async_get_last_state = AsyncMock(return_value=State(entity.entity_id, "-2.2"))
+    await entity.async_added_to_hass()
+
+    assert entity._monotonic_max == 0.0
+    assert _read(entity, mock_plant, -0.3) == 0.0
+
+
+async def test_monotonic_restore_seeds_same_day_max(hass, mock_plant):
+    """A same-day persisted value seeds the intra-day max, so a transient dip
+    on the first post-restart poll is held rather than adopted."""
+    from unittest.mock import AsyncMock
+
+    from homeassistant.core import State
+
+    entity = _monotonic_entity(mock_plant)
+    entity.hass = hass
+    entity.entity_id = "sensor.test_house_consumption_today"
+    entity.async_get_last_state = AsyncMock(return_value=State(entity.entity_id, "13.7"))
+    await entity.async_added_to_hass()
+
+    assert entity._monotonic_max == 13.7
+    # A >threshold drop to a still-large value is rejected by the reset gate.
+    assert _read(entity, mock_plant, 12.1) == 13.7
+    assert _read(entity, mock_plant, 13.8) == 13.8
+
+
+async def test_monotonic_restore_skips_unusable_states(hass, mock_plant):
+    """Non-numeric or prior-day persisted states must not seed the baseline."""
+    from datetime import timedelta
+    from unittest.mock import AsyncMock
+
+    from homeassistant.core import State
+    from homeassistant.util import dt as dt_util
+
+    entity = _monotonic_entity(mock_plant)
+    entity.hass = hass
+    entity.entity_id = "sensor.test_house_consumption_today"
+    entity.async_get_last_state = AsyncMock(return_value=State(entity.entity_id, "unavailable"))
+    await entity.async_added_to_hass()
+    assert entity._monotonic_max is None
+
+    yesterday = dt_util.utcnow() - timedelta(days=1)
+    entity = _monotonic_entity(mock_plant)
+    entity.hass = hass
+    entity.entity_id = "sensor.test_house_consumption_today"
+    entity.async_get_last_state = AsyncMock(
+        return_value=State(entity.entity_id, "13.7", last_updated=yesterday)
+    )
+    await entity.async_added_to_hass()
+    assert entity._monotonic_max is None

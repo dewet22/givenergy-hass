@@ -1259,13 +1259,17 @@ def _derive_display_precision(description: SensorEntityDescription, model: Any) 
     return model.precision_of(description.key)
 
 
-# A drop larger than this (in the sensor's native unit) is treated as a
-# genuine source reset rather than a transient polling artefact. Covers the
+# Dual-role bound (in the sensor's native unit) for same-day reset detection:
+# a drop must be larger than this to be considered a reset at all, AND the
+# post-drop value must land within [0, this] to be accepted as one. Covers the
 # case where the inverter clock lags HA's local midnight by one scan interval,
 # so the actual counter reset arrives on a subsequent read after the day
-# boundary has already been committed. The value is intentionally conservative:
-# transient multi-register skew is a few Wh; a 500 Wh floor is far above any
-# realistic polling noise while still detecting any meaningful midnight reset.
+# boundary has already been committed — a real reset observed within a poll or
+# two has accumulated at most a few Wh, so it lands well inside the band. A
+# drop to anything outside it (a negative excursion, a sag to a still-large
+# value) is transient register skew — e.g. a one-poll zeroed register read
+# sinking the derived consumption (#142) — and must be held at the previous
+# max, or the recorder books a fake reset and double-counts the recovery.
 _MONOTONIC_RESET_THRESHOLD = 0.5  # kWh (matches e_consumption_today's native unit)
 
 # A backing input-register bank that has stopped committing past this ceiling
@@ -1349,8 +1353,10 @@ class GivEnergyInverterSensor(
         if last_date == dt_util.now().date():
             # Seed the intra-day max from the last persisted value so a
             # transient dip on the first post-restart reading doesn't become
-            # the new baseline while the recorder still holds the higher value.
-            self._monotonic_max = restored
+            # the new baseline while the recorder still holds the higher
+            # value. Floored at zero: pre-fix versions could persist a
+            # negative state (#142), which must not re-seed the baseline.
+            self._monotonic_max = max(restored, 0.0)
             self._monotonic_date = last_date
 
     @property
@@ -1383,22 +1389,30 @@ class GivEnergyInverterSensor(
             today = dt_util.now().date()
             if self._monotonic_date != today:
                 # New calendar day in HA's timezone: start fresh so the
-                # midnight reset passes through as a real decrease.
-                self._monotonic_max = value
+                # midnight reset passes through as a real decrease. Floored
+                # at zero — register skew on a derived value can read
+                # negative at any moment, including across the day boundary
+                # (#142). A high carry-over here is normal (inverter clock
+                # lagging HA's midnight); the reset branch below catches the
+                # real reset a poll later.
+                self._monotonic_max = max(value, 0.0)
                 self._monotonic_date = today
-            elif (
-                self._monotonic_max is not None
-                and value < self._monotonic_max - _MONOTONIC_RESET_THRESHOLD
-            ):
-                # Large same-day drop: treat as a genuine source reset.
-                # This handles an inverter clock that lags HA's midnight by
-                # one poll cycle — the actual counter reset arrives on a
-                # subsequent read after date tracking has already committed
-                # the new day, so we must detect it by magnitude rather than
-                # date alone.
-                self._monotonic_max = value
+            elif self._monotonic_max is None:
+                # Unreachable in practice (date and max are set together),
+                # but keeps the invariant explicit and lets the branches
+                # below assume a non-None max.
+                self._monotonic_max = max(value, 0.0)
+            elif value < self._monotonic_max - _MONOTONIC_RESET_THRESHOLD:
+                # Large same-day drop: a genuine counter reset, but only when
+                # the new value is a plausible post-reset reading (see the
+                # threshold's comment). Anything else is transient register
+                # skew: hold the clamp until the source recovers, so the
+                # recorder never sees a fake reset followed by a
+                # sum-corrupting recovery jump (#142).
+                if 0.0 <= value <= _MONOTONIC_RESET_THRESHOLD:
+                    self._monotonic_max = value
             else:
-                self._monotonic_max = max(value, self._monotonic_max or value)
+                self._monotonic_max = max(value, self._monotonic_max)
             return self._monotonic_max
         return value
 
