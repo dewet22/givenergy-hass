@@ -15,6 +15,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.givenergy_local import (
     _STRATEGY_URL,
     _STRATEGY_VERSION,
+    _TAPE_URL,
     async_setup,
 )
 from custom_components.givenergy_local.const import (
@@ -29,8 +30,8 @@ from custom_components.givenergy_local.const import (
 
 
 async def test_frontend_modules_served_and_autoloaded():
-    """The bundled frontend module (strategy + heatmap card) is served +
-    auto-loaded at component setup."""
+    """Both bundled frontend modules (strategy + tape) are served + auto-loaded
+    at component setup."""
     hass = MagicMock()
     hass.data = {}
     hass.http.async_register_static_paths = AsyncMock()
@@ -42,9 +43,12 @@ async def test_frontend_modules_served_and_autoloaded():
         assert await async_setup(hass, {}) is True
 
     hass.http.async_register_static_paths.assert_awaited_once()
-    served_url = hass.http.async_register_static_paths.call_args.args[0][0].url_path
-    assert served_url == _STRATEGY_URL
-    add_js.assert_called_once_with(hass, f"{_STRATEGY_URL}?v={_STRATEGY_VERSION}")
+    served_urls = [cfg.url_path for cfg in hass.http.async_register_static_paths.call_args.args[0]]
+    assert _STRATEGY_URL in served_urls
+    assert _TAPE_URL in served_urls
+    loaded_urls = [call.args[1] for call in add_js.call_args_list]
+    assert f"{_STRATEGY_URL}?v={_STRATEGY_VERSION}" in loaded_urls
+    assert f"{_TAPE_URL}?v={_STRATEGY_VERSION}" in loaded_urls
 
 
 async def test_frontend_card_registered_once_across_multiple_entries(hass, mock_client):

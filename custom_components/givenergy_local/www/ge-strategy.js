@@ -385,6 +385,118 @@
     return view;
   }
 
+  // ----- mission mode ---------------------------------------------------------
+
+  // Shared entity wiring for the tape card; the mission card embeds the tape
+  // as its spine so it carries the same fields. Tariff/forecast ids are
+  // user-supplied strategy options naming foreign integrations' entities, so
+  // they pass through unresolved - everything else resolves via the registry.
+  function tapeSlotConfig(plant, a, opts) {
+    var cfg = { max_power_kw: opts.maxPowerKw || 10 };
+    if (a.inv("p_pv")) cfg.solar = a.inv("p_pv");
+    if (a.inv("grid_power")) cfg.grid = a.inv("grid_power");
+    if (a.inv("p_load_demand")) cfg.load = a.inv("p_load_demand");
+    if (a.inv("p_battery")) cfg.battery_power = a.inv("p_battery");
+    if (a.inv("battery_soc")) cfg.battery_soc = a.inv("battery_soc");
+    if (a.inv("battery_capacity_kwh")) cfg.battery_capacity = a.inv("battery_capacity_kwh");
+
+    ["charge", "discharge"].forEach(function (kind) {
+      var slots = [];
+      for (var i = 1; i <= 2; i++) {
+        var s = a.inv(kind + "_slot_" + i + "_start");
+        var e = a.inv(kind + "_slot_" + i + "_end");
+        if (s && e) slots.push({ start: s, end: e });
+      }
+      if (slots.length) cfg[kind + "_slots"] = slots;
+    });
+
+    if (opts.tariffImport) cfg.tariff_import = opts.tariffImport;
+    if (opts.tariffExport) cfg.tariff_export = opts.tariffExport;
+    if (opts.solarForecast) cfg.solar_forecast = opts.solarForecast;
+    return cfg;
+  }
+
+  function missionView(plant, a, opts) {
+    var cfg = tapeSlotConfig(plant, a, opts);
+    cfg.type = "custom:givenergy-mission";
+
+    var totalKeys = {
+      pv_today: "e_pv_day",
+      charge_today: "e_battery_charge_day",
+      discharge_today: "e_battery_discharge_day",
+      import_today: "e_grid_in_day",
+      export_today: "e_grid_out_day",
+      house_today: "e_consumption_today",
+    };
+    var totals = {};
+    Object.keys(totalKeys).forEach(function (slot) {
+      var eid = a.inv(totalKeys[slot]);
+      if (eid) totals[slot] = eid;
+    });
+    if (Object.keys(totals).length) cfg.totals = totals;
+
+    // Money tiles resolve only when the money sensors exist (tariff options
+    // configured on the integration); absent, the ledger tile is dropped.
+    var moneyKeys = {
+      net: "net_energy_cost_today",
+      import_cost: "grid_import_cost_today",
+      export_earnings: "grid_export_earnings_today",
+      counterfactual: "counterfactual_cost_today",
+    };
+    var money = {};
+    Object.keys(moneyKeys).forEach(function (slot) {
+      var eid = a.inv(moneyKeys[slot]);
+      if (eid) money[slot] = eid;
+    });
+    if (Object.keys(money).length) cfg.money = money;
+
+    var packs = plant.batteries
+      .map(function (b) {
+        return { name: String(b.serial).toUpperCase(), soc: a.bat(b, "soc") };
+      })
+      .filter(function (p) {
+        return p.soc;
+      });
+    if (packs.length) cfg.packs = packs;
+
+    var view = {
+      title: "Mission Control",
+      path: "mission",
+      icon: "mdi:monitor-dashboard",
+      panel: true,
+      cards: [cfg],
+    };
+    if (haveCard("kiosk-mode")) {
+      view.kiosk_mode = { hide_header: true, hide_sidebar: true };
+    }
+    return view;
+  }
+
+  function tapeView(plant, a, opts) {
+    var cfg = tapeSlotConfig(plant, a, opts);
+    cfg.type = "custom:givenergy-tape";
+    cfg.variant = "full";
+    return {
+      title: "Tape",
+      path: "tape",
+      icon: "mdi:chart-timeline-variant",
+      panel: true,
+      cards: [cfg],
+    };
+  }
+
+  // mode: mission -- the tape-centred hub (Mission Control) plus the Tape deep
+  // view, then the classic tab set. Inverter-centric like flow/glance; EMS
+  // plants fall back to classic. See docs/superpowers/specs/
+  // 2026-06-12-dashboard-mission-design.md.
+  function missionViews(plant, opts) {
+    var a = makeAccessors(plant);
+    if (plant.target && plant.target.isEms) return classicViews(plant, opts);
+    return [missionView(plant, a, opts), tapeView(plant, a, opts)].concat(
+      classicViews(plant, opts)
+    );
+  }
+
   // mode: all -- Glance + Flow + Analyst panels followed by the classic tab set.
   // Not intended as a permanent user-facing mode; remove when modes split into
   // separate dashboards.
@@ -1140,6 +1252,11 @@
       maxPowerKw: config.max_power_kw != null ? config.max_power_kw : 10,
       serial: config.serial || null,
       mode: config.mode || "classic",
+      // mission mode: optional entity ids of foreign integrations' tariff
+      // rate and solar forecast entities, passed through to the tape cards.
+      tariffImport: config.tariff_import || null,
+      tariffExport: config.tariff_export || null,
+      solarForecast: config.solar_forecast || null,
     };
     var plant = await buildPlant(hass, opts);
     if (!plant.target) {
@@ -1173,6 +1290,7 @@
       opts.mode === "flow"    ? flowViews(plant, opts)    :
       opts.mode === "glance"  ? glanceViews(plant, opts)  :
       opts.mode === "analyst" ? analystViews(plant, opts) :
+      opts.mode === "mission" ? missionViews(plant, opts) :
       opts.mode === "all"     ? allViews(plant, opts)     :
                                 classicViews(plant, opts);
     return { title: "GivEnergy", views: views };
