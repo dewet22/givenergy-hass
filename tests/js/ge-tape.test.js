@@ -318,3 +318,80 @@ describe("nextActionHint", () => {
     expect(TAPE.nextActionHint({ nowMs: NOW, gridW: 0, importState: null })).toBe("");
   });
 });
+
+describe("collectRates", () => {
+  // The Octopus integration's day-rates event entities: each carries a
+  // `rates` attribute; previous/current/next day merge into one timeline.
+  const evt = (day, rate) => ({
+    attributes: {
+      rates: [
+        {
+          start: `2026-06-${day}T00:00:00+01:00`,
+          end: `2026-06-${day}T12:00:00+01:00`,
+          value_inc_vat: rate,
+        },
+      ],
+    },
+  });
+
+  it("merges rates from several state objects, sorted by start", () => {
+    const merged = TAPE.collectRates([evt(13, 0.30), evt(11, 0.069), evt(12, 0.25)]);
+    expect(merged.length).toBe(3);
+    expect(merged.map((r) => r.rate)).toEqual([0.069, 0.25, 0.30]);
+  });
+
+  it("skips null states and dedupes identical band starts", () => {
+    const merged = TAPE.collectRates([null, evt(12, 0.25), evt(12, 0.25)]);
+    expect(merged.length).toBe(1);
+  });
+
+  it("returns [] for empty input", () => {
+    expect(TAPE.collectRates([])).toEqual([]);
+    expect(TAPE.collectRates(null)).toEqual([]);
+  });
+});
+
+describe("nextActionHint with explicit forward rates", () => {
+  it("prefers passed-in forward rates over the sensor's attributes", () => {
+    const hint = TAPE.nextActionHint({
+      nowMs: NOW, // 14:00Z
+      gridW: -800,
+      importState: { state: "0.30", attributes: {} }, // no rates here (new Octopus shape)
+      forwardRates: TAPE.classifyRates([
+        { startMs: NOW - H, endMs: NOW + 8 * H, rate: 0.30 },
+        { startMs: NOW + 8 * H, endMs: NOW + 10 * H, rate: 0.069 },
+        { startMs: NOW + 10 * H, endMs: NOW + 12 * H, rate: 0.30 },
+      ]),
+    });
+    expect(hint).toContain("import 30p/kWh");
+    expect(hint).toContain("cheap");
+  });
+});
+
+describe("forecastPoints", () => {
+  const fc = (hour, kw) => ({
+    attributes: {
+      detailedForecast: [
+        { period_start: `2026-06-12T${hour}:00:00Z`, pv_estimate: kw },
+      ],
+    },
+  });
+
+  it("merges detailedForecast entries from several states, in watts, sorted", () => {
+    const pts = TAPE.forecastPoints([fc("16", 2.5), fc("15", 3.0)], NOW, NOW + 12 * H);
+    expect(pts).toEqual([
+      [Date.UTC(2026, 5, 12, 15, 0, 0), 3000],
+      [Date.UTC(2026, 5, 12, 16, 0, 0), 2500],
+    ]);
+  });
+
+  it("clips to the window and skips null/malformed states", () => {
+    const pts = TAPE.forecastPoints(
+      [null, fc("10", 9.9), fc("15", 3.0)], // 10:00 is before the window
+      NOW,
+      NOW + 12 * H
+    );
+    expect(pts.length).toBe(1);
+    expect(pts[0][1]).toBe(3000);
+  });
+});

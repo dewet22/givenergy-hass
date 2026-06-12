@@ -188,7 +188,18 @@
     });
     if (!ownBatteries.length && !anyViaLinks) ownBatteries = batteries;
 
-    return { target: target, batteries: ownBatteries, unmatchedSerial: unmatchedSerial };
+    // Full registry id set (all integrations) - used by mission mode to
+    // verify derived foreign entity ids (Octopus day-rates events) exist
+    // before forwarding them to the cards.
+    var allEntityIds = new Set();
+    for (var n = 0; n < entities.length; n++) allEntityIds.add(entities[n].entity_id);
+
+    return {
+      target: target,
+      batteries: ownBatteries,
+      unmatchedSerial: unmatchedSerial,
+      allEntityIds: allEntityIds,
+    };
   }
 
   // ----- small helpers -------------------------------------------------------
@@ -412,8 +423,47 @@
 
     if (opts.tariffImport) cfg.tariff_import = opts.tariffImport;
     if (opts.tariffExport) cfg.tariff_export = opts.tariffExport;
-    if (opts.solarForecast) cfg.solar_forecast = opts.solarForecast;
+    if (opts.solarForecast) {
+      cfg.solar_forecast = forecastEntities(opts.solarForecast, plant.allEntityIds);
+    }
+
+    var importRates = ratesEntities(opts.tariffImportRates, opts.tariffImport, plant.allEntityIds);
+    if (importRates) cfg.tariff_import_rates = importRates;
+    var exportRates = ratesEntities(opts.tariffExportRates, opts.tariffExport, plant.allEntityIds);
+    if (exportRates) cfg.tariff_export_rates = exportRates;
     return cfg;
+  }
+
+  // Recent Octopus integration versions carry the day's rates on sibling
+  // event entities rather than the current-rate sensor's attributes. Derive
+  // their ids from the rate sensor's name and keep only ones present in the
+  // registry - constructed-then-verified, so a rename degrades to "no bands"
+  // rather than a dangling reference. Explicit config always wins.
+  // A lone Solcast-style `_today` forecast entity covers only the current
+  // calendar day, so a tape window that crosses midnight loses its forecast
+  // half. Extend it with the `_tomorrow` sibling when the registry has one -
+  // same constructed-then-verified rule as ratesEntities. Lists pass through
+  // verbatim.
+  function forecastEntities(configured, allIds) {
+    if (Array.isArray(configured)) return configured;
+    var m = allIds && configured.match(/^sensor\.(.+)_today$/);
+    if (m && allIds.has("sensor." + m[1] + "_tomorrow")) {
+      return [configured, "sensor." + m[1] + "_tomorrow"];
+    }
+    return configured;
+  }
+
+  function ratesEntities(explicit, rateSensor, allIds) {
+    if (explicit) return Array.isArray(explicit) ? explicit : [explicit];
+    if (!rateSensor || !allIds) return null;
+    var m = rateSensor.match(/^sensor\.(.+)_current_rate$/);
+    if (!m) return null;
+    var out = [];
+    ["previous_day_rates", "current_day_rates", "next_day_rates"].forEach(function (suffix) {
+      var eid = "event." + m[1] + "_" + suffix;
+      if (allIds.has(eid)) out.push(eid);
+    });
+    return out.length ? out : null;
   }
 
   function missionView(plant, a, opts) {
@@ -489,6 +539,10 @@
     if (Object.keys(totals).length) cfg.totals = totals;
     if (opts.tariffImport) cfg.tariff_import = opts.tariffImport;
     if (opts.tariffExport) cfg.tariff_export = opts.tariffExport;
+    var importRates = ratesEntities(opts.tariffImportRates, opts.tariffImport, plant.allEntityIds);
+    if (importRates) cfg.tariff_import_rates = importRates;
+    var exportRates = ratesEntities(opts.tariffExportRates, opts.tariffExport, plant.allEntityIds);
+    if (exportRates) cfg.tariff_export_rates = exportRates;
     return {
       title: "Ledger",
       path: "ledger",
@@ -1354,6 +1408,8 @@
       // rate and solar forecast entities, passed through to the tape cards.
       tariffImport: config.tariff_import || null,
       tariffExport: config.tariff_export || null,
+      tariffImportRates: config.tariff_import_rates || null,
+      tariffExportRates: config.tariff_export_rates || null,
       solarForecast: config.solar_forecast || null,
     };
     var plant = await buildPlant(hass, opts);

@@ -693,3 +693,102 @@ describe("mission mode - observatory view", () => {
     expect(view(dash, "Observatory")).toBeUndefined();
   });
 });
+
+describe("mission mode - tariff rates event derivation", () => {
+  const IMPORT_RATE = "sensor.octopus_energy_electricity_x_1700052254233_current_rate";
+  const EXPORT_RATE = "sensor.octopus_energy_electricity_x_1700060083404_export_current_rate";
+  const ratesEvents = [
+    "event.octopus_energy_electricity_x_1700052254233_previous_day_rates",
+    "event.octopus_energy_electricity_x_1700052254233_current_day_rates",
+    "event.octopus_energy_electricity_x_1700052254233_next_day_rates",
+    "event.octopus_energy_electricity_x_1700060083404_export_current_day_rates",
+  ];
+
+  it("derives day-rates event ids from the rate sensor name, verified in the registry", async () => {
+    const hass = makeHass({
+      batterySerials: ["BAT1"],
+      foreignEntities: [IMPORT_RATE, EXPORT_RATE].concat(ratesEvents),
+    });
+    const dash = await GE.generateDashboard(
+      { mode: "mission", tariff_import: IMPORT_RATE, tariff_export: EXPORT_RATE },
+      hass
+    );
+    const c = view(dash, "Mission Control").cards[0];
+    expect(c.tariff_import_rates).toEqual([
+      "event.octopus_energy_electricity_x_1700052254233_previous_day_rates",
+      "event.octopus_energy_electricity_x_1700052254233_current_day_rates",
+      "event.octopus_energy_electricity_x_1700052254233_next_day_rates",
+    ]);
+    // Only the export events that actually exist are forwarded.
+    expect(c.tariff_export_rates).toEqual([
+      "event.octopus_energy_electricity_x_1700060083404_export_current_day_rates",
+    ]);
+    const tape = view(dash, "Tape").cards[0];
+    expect(tape.tariff_import_rates).toEqual(c.tariff_import_rates);
+  });
+
+  it("omits the rates fields when no matching event entities exist", async () => {
+    const hass = makeHass({
+      batterySerials: ["BAT1"],
+      foreignEntities: [IMPORT_RATE],
+    });
+    const dash = await GE.generateDashboard(
+      { mode: "mission", tariff_import: IMPORT_RATE },
+      hass
+    );
+    expect(view(dash, "Mission Control").cards[0].tariff_import_rates).toBeUndefined();
+  });
+
+  it("honours explicit tariff_*_rates config over derivation", async () => {
+    const hass = makeHass({
+      batterySerials: ["BAT1"],
+      foreignEntities: [IMPORT_RATE].concat(ratesEvents),
+    });
+    const dash = await GE.generateDashboard(
+      {
+        mode: "mission",
+        tariff_import: IMPORT_RATE,
+        tariff_import_rates: ["event.my_custom_rates"],
+      },
+      hass
+    );
+    expect(view(dash, "Mission Control").cards[0].tariff_import_rates).toEqual([
+      "event.my_custom_rates",
+    ]);
+  });
+});
+
+describe("mission mode - solar forecast tomorrow derivation", () => {
+  const TODAY = "sensor.solcast_pv_forecast_forecast_today";
+  const TOMORROW = "sensor.solcast_pv_forecast_forecast_tomorrow";
+
+  it("extends a _today forecast entity with its _tomorrow sibling when present", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"], foreignEntities: [TODAY, TOMORROW] });
+    const dash = await GE.generateDashboard(
+      { mode: "mission", solar_forecast: TODAY },
+      hass
+    );
+    expect(view(dash, "Mission Control").cards[0].solar_forecast).toEqual([TODAY, TOMORROW]);
+  });
+
+  it("passes a lone _today entity through unchanged when no sibling exists", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"], foreignEntities: [TODAY] });
+    const dash = await GE.generateDashboard(
+      { mode: "mission", solar_forecast: TODAY },
+      hass
+    );
+    expect(view(dash, "Mission Control").cards[0].solar_forecast).toBe(TODAY);
+  });
+
+  it("passes an explicit list through verbatim", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"], foreignEntities: [TODAY, TOMORROW] });
+    const dash = await GE.generateDashboard(
+      { mode: "mission", solar_forecast: ["sensor.custom_a", "sensor.custom_b"] },
+      hass
+    );
+    expect(view(dash, "Mission Control").cards[0].solar_forecast).toEqual([
+      "sensor.custom_a",
+      "sensor.custom_b",
+    ]);
+  });
+});
