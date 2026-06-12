@@ -177,3 +177,56 @@ describe("projectSoc", () => {
     expect(pts[1][1]).toBeCloseTo(70);
   });
 });
+
+describe("bandSplit", () => {
+  // A cumulative day-counter (kWh) sampled across two tariff bands: deltas
+  // are allocated to the band in force at the sample time.
+  const bands = [
+    { startMs: 0, endMs: 10000, rate: 0.07, band: "cheap" },
+    { startMs: 10000, endMs: 20000, rate: 0.55, band: "peak" },
+  ];
+
+  it("allocates counter deltas to the band at each sample", () => {
+    const series = [
+      [2000, 1.0],
+      [8000, 3.0],  // +2.0 in cheap
+      [12000, 3.5], // +0.5 in peak
+      [18000, 5.0], // +1.5 in peak
+    ];
+    const split = TAPE.bandSplit(series, bands);
+    expect(split.cheap).toBeCloseTo(2.0);
+    expect(split.peak).toBeCloseTo(2.0);
+    expect(split.standard).toBeCloseTo(0);
+  });
+
+  it("ignores midnight resets and samples outside any band", () => {
+    const series = [
+      [2000, 5.0],
+      [8000, 0.2],  // counter reset: negative delta ignored
+      [9000, 1.2],  // +1.0 in cheap
+      [25000, 2.2], // +1.0 outside all bands -> standard
+    ];
+    const split = TAPE.bandSplit(series, bands);
+    expect(split.cheap).toBeCloseTo(1.0);
+    expect(split.standard).toBeCloseTo(1.0);
+    expect(split.peak).toBeCloseTo(0);
+  });
+
+  it("handles empty inputs", () => {
+    expect(TAPE.bandSplit([], bands)).toEqual({ cheap: 0, standard: 0, peak: 0 });
+    expect(TAPE.bandSplit(null, [])).toEqual({ cheap: 0, standard: 0, peak: 0 });
+  });
+});
+
+describe("sumChange", () => {
+  it("totals LTS change rows, skipping nulls", () => {
+    expect(
+      TAPE.sumChange([{ change: 1.5 }, { change: null }, { change: -0.5 }, {}])
+    ).toBeCloseTo(1.0);
+  });
+
+  it("returns null when no rows carry a change", () => {
+    expect(TAPE.sumChange([])).toBeNull();
+    expect(TAPE.sumChange([{ change: null }])).toBeNull();
+  });
+});

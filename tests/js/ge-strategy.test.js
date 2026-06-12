@@ -503,12 +503,13 @@ describe("mission mode", () => {
     solar_forecast: "sensor.solcast_today",
   };
 
-  it("leads with panel Mission Control + Tape views, then the classic set", async () => {
+  it("leads with panel Mission Control + Tape + Ledger views, then the classic set", async () => {
     const hass = makeHass({ batterySerials: ["BAT1"] });
     const dash = await GE.generateDashboard(MISSION_CFG, hass);
     expect(titles(dash)).toEqual([
       "Mission Control",
       "Tape",
+      "Ledger",
       "Overview",
       "Energy",
       "Batteries",
@@ -602,5 +603,43 @@ describe("mission mode", () => {
     const hass = makeHass({ ems: true });
     const dash = await GE.generateDashboard(MISSION_CFG, hass);
     expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
+  });
+});
+
+describe("mission mode - ledger view", () => {
+  const MISSION_CFG = {
+    mode: "mission",
+    tariff_import: "sensor.octopus_import_rate",
+    tariff_export: "sensor.octopus_export_rate",
+  };
+
+  it("emits a Ledger view after Tape when the money sensors exist", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"] });
+    const dash = await GE.generateDashboard(MISSION_CFG, hass);
+    expect(titles(dash).slice(0, 3)).toEqual(["Mission Control", "Tape", "Ledger"]);
+    const ledger = view(dash, "Ledger");
+    expect(ledger.panel).toBe(true);
+    const c = ledger.cards[0];
+    expect(c.type).toBe("custom:givenergy-ledger");
+    const registry = await regSet(hass);
+    for (const eid of Object.values(c.money)) expect(registry.has(eid)).toBe(true);
+    expect(c.money.net).toBeTruthy();
+    expect(c.totals.import_today).toBeTruthy();
+    expect(c.tariff_import).toBe("sensor.octopus_import_rate");
+  });
+
+  it("omits the Ledger view when the money sensors are not registered", async () => {
+    const hass = makeHass({
+      batterySerials: ["BAT1"],
+      omitKeys: [
+        "grid_import_cost_today",
+        "grid_export_earnings_today",
+        "net_energy_cost_today",
+        "counterfactual_cost_today",
+      ],
+    });
+    const dash = await GE.generateDashboard(MISSION_CFG, hass);
+    expect(view(dash, "Ledger")).toBeUndefined();
+    expect(titles(dash).slice(0, 3)).toEqual(["Mission Control", "Tape", "Overview"]);
   });
 });
