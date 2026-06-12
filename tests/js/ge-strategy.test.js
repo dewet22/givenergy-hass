@@ -655,17 +655,21 @@ describe("mission mode - ledger view", () => {
 describe("mission mode - observatory view", () => {
   const MISSION_CFG = { mode: "mission" };
 
-  it("emits an Observatory view when batteries exist", async () => {
+  it("emits a full-width Observatory panel when batteries exist", async () => {
     const hass = makeHass({ batterySerials: ["BAT1", "BAT2"] });
     const dash = await GE.generateDashboard(MISSION_CFG, hass);
     const obs = view(dash, "Observatory");
     expect(obs).toBeTruthy();
     expect(obs.path).toBe("observatory");
+    expect(obs.panel).toBe(true);
+    expect(obs.cards.length).toBe(1);
+    expect(obs.cards[0].type).toBe("vertical-stack");
+    const inner = obs.cards[0].cards;
 
-    const heatmap = card(obs, (c) => c.type === "custom:ge-cell-heatmap");
+    const heatmap = inner.find((c) => c.type === "custom:ge-cell-heatmap");
     expect(heatmap.batteries).toEqual(["BAT1", "BAT2"]);
 
-    const statsCards = (obs.cards || []).filter((c) => c.type === "statistics-graph");
+    const statsCards = inner.filter((c) => c.type === "statistics-graph");
     expect(statsCards.length).toBeGreaterThanOrEqual(3);
     const registry = await regSet(hass);
     for (const sc of statsCards) {
@@ -838,22 +842,27 @@ describe("mission mode - card readiness await", () => {
 });
 
 describe("mission mode - generation view", () => {
-  it("emits a Generation view with both heatmaps and the weekly line", async () => {
+  it("emits a full-width Generation panel with heatmaps and the weekly chart", async () => {
     const hass = makeHass({ batterySerials: ["BAT1"] });
     const dash = await GE.generateDashboard({ mode: "mission" }, hass);
     const gen = view(dash, "Generation");
     expect(gen).toBeTruthy();
     expect(gen.path).toBe("generation");
+    // Full-width: a panel view stacking the charts vertically.
+    expect(gen.panel).toBe(true);
+    expect(gen.cards.length).toBe(1);
+    expect(gen.cards[0].type).toBe("vertical-stack");
+    const inner = gen.cards[0].cards;
     const registry = await regSet(hass);
 
-    const heatmaps = gen.cards.filter((c) => c.type === "custom:givenergy-gen-heatmap");
-    expect(heatmaps.map((c) => c.variant).sort()).toEqual(["calendar", "density"]);
-    for (const c of heatmaps) expect(registry.has(c.source)).toBe(true);
-
-    const weekly = gen.cards.find((c) => c.type === "statistics-graph");
-    expect(weekly.period).toBe("week");
-    expect(weekly.days_to_show).toBe(365);
-    for (const eid of weekly.entities) expect(registry.has(eid)).toBe(true);
+    const variants = inner
+      .filter((c) => c.type === "custom:givenergy-gen-heatmap")
+      .map((c) => c.variant)
+      .sort();
+    // The weekly chart is ours too: weekly kWh from hourly means, immune to
+    // sum-counter seams (e.g. a statistics backport rewriting the counter).
+    expect(variants).toEqual(["calendar", "density", "weekly"]);
+    for (const c of inner) expect(registry.has(c.source)).toBe(true);
     expect(hasNullEntity(gen)).toBe(false);
   });
 
