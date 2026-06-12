@@ -202,13 +202,14 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         ),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
-    # Raw integers — the upstream library doesn't ship enum mappings for
-    # these yet, but exposing the values lets users build templates or
-    # see them change in history while the mappings get figured out.
+    # charge_status_label is a ChargeStatus IntEnum, so the rendered state
+    # stays the raw numeric code for known values (unknown codes read as
+    # unavailable rather than a bare int, per modbus #222). system_mode is
+    # still a raw integer — the library ships no mapping for it yet.
     GivEnergyInverterSensorDescription(
         key="charge_status",
         name="Charge Status",
-        value_fn=lambda inv: inv.charge_status,
+        value_fn=lambda inv: inv.charge_status_label,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(

@@ -316,7 +316,7 @@ async def test_new_inverter_sensors_present(hass, setup_integration):
     """Spot-check a handful of the newly-added inverter sensors."""
     cases = {
         "system_mode": "1",
-        "charge_status": "1",
+        "charge_status": "2",
         "i_ac1": "5.2",
         "p_combined_generation": "2500",
         "p_backup": "0",

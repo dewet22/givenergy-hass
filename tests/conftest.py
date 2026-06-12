@@ -10,6 +10,7 @@ from givenergy_modbus.model.inverter import (
     SINGLE_PHASE_SLOTS,
     BatteryPowerMode,
     BatteryType,
+    ChargeStatus,
     MeterType,
     Model,
     SinglePhaseInverter,
@@ -100,7 +101,7 @@ def mock_inverter() -> MagicMock:
     # Status / mode
     inv.inverter_errors = 0
     inv.charger_warning_code = 0
-    inv.charge_status = 1
+    inv.charge_status_label = ChargeStatus.CHARGING
     inv.system_mode = 1
     inv.battery_pause_mode = 0
     inv.battery_pause_slot_1 = TimeSlot(start=time(0, 0), end=time(0, 0))
