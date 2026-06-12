@@ -191,6 +191,18 @@ function makeHass(opts) {
     area_id: null,
   });
 
+  // caller-specified foreign entities (e.g. Octopus rate sensors and their
+  // day-rates event siblings) for the tariff-derivation tests
+  (opts.foreignEntities || []).forEach(function (eid, i) {
+    entities.push({
+      entity_id: eid,
+      platform: "other_integration",
+      device_id: "dev_other",
+      unique_id: "OTHER_foreign_" + i,
+      area_id: null,
+    });
+  });
+
   return {
     callWS: function (msg) {
       if (msg.type === "config/entity_registry/list") return Promise.resolve(entities);

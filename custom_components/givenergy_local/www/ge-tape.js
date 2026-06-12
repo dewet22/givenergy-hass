@@ -85,6 +85,26 @@
     return out;
   }
 
+  // Merge forward rates from several state objects - e.g. the Octopus
+  // integration's previous/current/next day-rates event entities, which is
+  // where recent versions carry the rates the current-rate sensor used to
+  // hold in its attributes. Sorted by start, duplicate band-starts dropped.
+  function collectRates(stateObjs) {
+    var all = [];
+    for (var i = 0; i < (stateObjs || []).length; i++) {
+      var s = stateObjs[i];
+      if (s && s.attributes) all = all.concat(parseForwardRates(s.attributes));
+    }
+    all.sort(function (a, b) {
+      return a.startMs - b.startMs;
+    });
+    var out = [];
+    for (var j = 0; j < all.length; j++) {
+      if (!out.length || out[out.length - 1].startMs !== all[j].startMs) out.push(all[j]);
+    }
+    return out;
+  }
+
   // Bucket each rate band relative to the median: <= 0.75x -> cheap,
   // >= 1.5x -> peak, else standard.
   function classifyRates(rates) {
@@ -267,6 +287,27 @@
     return seen ? total : null;
   }
 
+  // Solar forecast points (W) from one or more Solcast-style states carrying
+  // a detailedForecast attribute ([{period_start, pv_estimate (kW)}]) - the
+  // today + tomorrow sensors merge to cover a window that crosses midnight.
+  function forecastPoints(stateObjs, startMs, endMs) {
+    var pts = [];
+    for (var i = 0; i < (stateObjs || []).length; i++) {
+      var fc = stateObjs[i];
+      if (!fc || !fc.attributes) continue;
+      var det = fc.attributes.detailedForecast || fc.attributes.detailed_forecast || [];
+      for (var f = 0; f < det.length; f++) {
+        var t = Date.parse(det[f].period_start || det[f].period_end);
+        var v = parseFloat(det[f].pv_estimate);
+        if (!isNaN(t) && !isNaN(v) && t >= startMs && t <= endMs) pts.push([t, v * 1000]);
+      }
+    }
+    pts.sort(function (a, b) {
+      return a[0] - b[0];
+    });
+    return pts;
+  }
+
   function asPence(rate) {
     return rate > 2.5 ? rate : rate * 100; // tolerate pence- or pound-valued states
   }
@@ -284,7 +325,9 @@
     var rate = parseFloat(o.importState.state);
     if (isNaN(rate)) return "";
     var hint = "import " + asPence(rate).toFixed(0) + "p/kWh now";
-    var bands = classifyRates(parseForwardRates(o.importState.attributes));
+    // Classified bands may arrive pre-collected (day-rates event entities);
+    // fall back to the legacy on-sensor attributes shape.
+    var bands = o.forwardRates || classifyRates(parseForwardRates(o.importState.attributes));
     for (var b = 0; b < bands.length; b++) {
       if (bands[b].startMs > o.nowMs) {
         hint +=
@@ -333,6 +376,8 @@
     projectSoc: projectSoc,
     parseTimeOfDay: parseTimeOfDay,
     slotOccurrences: slotOccurrences,
+    collectRates: collectRates,
+    forecastPoints: forecastPoints,
     bandSplit: bandSplit,
     sumChange: sumChange,
     nextActionHint: nextActionHint,
@@ -556,10 +601,19 @@
 
           var svg = [];
 
-          // -- tariff bands (history behind, forward rates ahead)
+          // -- tariff bands: prefer the day-rates event entities (current
+          // Octopus shape, covers yesterday/today/tomorrow), fall back to
+          // rates carried on the rate sensor itself (legacy shape).
           var rateState = cfg.tariff_import && hass.states[cfg.tariff_import];
-          if (rateState) {
-            var bands = classifyRates(parseForwardRates(rateState.attributes));
+          var forward = collectRates(
+            (cfg.tariff_import_rates || []).map(function (id) {
+              return hass.states[id];
+            })
+          );
+          if (!forward.length && rateState) forward = collectRates([rateState]);
+          var importBands = classifyRates(forward);
+          if (importBands.length) {
+            var bands = importBands;
             for (var b = 0; b < bands.length; b++) {
               if (bands[b].band === "standard") continue;
               var bx0 = Math.max(0, timeToX(bands[b].startMs, win, W));
@@ -571,7 +625,7 @@
               );
             }
           } else if (cfg.tariff_import) {
-            notes.push("tariff entity unavailable - bands hidden");
+            notes.push("no forward rates found on the tariff entities - bands hidden");
           } else {
             notes.push("no tariff_import configured - bands hidden");
           }
@@ -598,26 +652,25 @@
             );
           }
 
-          // -- solar forecast (dashed, future)
-          var fc = cfg.solar_forecast && hass.states[cfg.solar_forecast];
-          var fcPts = [];
-          if (fc && fc.attributes) {
-            // Solcast-style detailed forecast: [{period_start, pv_estimate (kW)}].
-            var det =
-              fc.attributes.detailedForecast || fc.attributes.detailed_forecast || [];
-            for (var f = 0; f < det.length; f++) {
-              var ft = Date.parse(det[f].period_start || det[f].period_end);
-              var fv = parseFloat(det[f].pv_estimate);
-              if (!isNaN(ft) && !isNaN(fv) && ft >= now && ft <= win.endMs) {
-                fcPts.push([ft, fv * 1000]);
-              }
-            }
-            if (fcPts.length) {
-              svg.push(
-                '<path d="' + pathFrom(fcPts, win, yPower) + '" fill="none" stroke="' +
-                COLOURS.solarForecast + '" stroke-width="1.5" stroke-dasharray="5,4"/>'
-              );
-            }
+          // -- solar forecast (dashed, future); accepts one entity or a list
+          // (today + tomorrow) so the window survives crossing midnight
+          var fcIds = !cfg.solar_forecast
+            ? []
+            : Array.isArray(cfg.solar_forecast)
+              ? cfg.solar_forecast
+              : [cfg.solar_forecast];
+          var fcPts = forecastPoints(
+            fcIds.map(function (id) {
+              return hass.states[id];
+            }),
+            now,
+            win.endMs
+          );
+          if (fcPts.length) {
+            svg.push(
+              '<path d="' + pathFrom(fcPts, win, yPower) + '" fill="none" stroke="' +
+              COLOURS.solarForecast + '" stroke-width="1.5" stroke-dasharray="5,4"/>'
+            );
           } else if (cfg.solar_forecast) {
             notes.push("solar forecast unavailable");
           } else {
@@ -876,11 +929,17 @@
           });
           if (nowLines.length) tiles.push(["NOW", nowLines.join("  |  "), "tape"]);
 
+          var importForward = collectRates(
+            (cfg.tariff_import_rates || []).map(function (id) {
+              return hass.states[id];
+            })
+          );
           var hint = nextActionHint({
             nowMs: Date.now(),
             gridW: num(hass, cfg.grid),
             importState: cfg.tariff_import ? hass.states[cfg.tariff_import] : null,
             exportState: cfg.tariff_export ? hass.states[cfg.tariff_export] : null,
+            forwardRates: importForward.length ? classifyRates(importForward) : null,
           });
           tiles.push(["NEXT", hint || "no tariff data", "tape"]);
 
@@ -1008,11 +1067,18 @@
           return this._cfg.money[slot] ? num(this._hass, this._cfg.money[slot]) : null;
         }
 
-        _bandRows(label, series, rateEid) {
+        _bandRows(label, series, rateEid, ratesEids) {
           var hass = this._hass;
-          var state = rateEid && hass.states[rateEid];
-          if (!series || !series.length || !state) return "";
-          var bands = classifyRates(parseForwardRates(state.attributes));
+          if (!series || !series.length) return "";
+          var forward = collectRates(
+            (ratesEids || []).map(function (id) {
+              return hass.states[id];
+            })
+          );
+          if (!forward.length && rateEid && hass.states[rateEid]) {
+            forward = collectRates([hass.states[rateEid]]);
+          }
+          var bands = classifyRates(forward);
           if (!bands.length) return "";
           var split = bandSplit(series, bands);
           var rows = "";
@@ -1077,8 +1143,12 @@
               '<div style="display:flex;justify-content:space-between;color:#e6edf3;font-size:13px;line-height:1.9"><span>export earnings</span><span>' +
               gbp(exp) + "</span></div>";
           }
-          html += this._bandRows("import", data.importSeries, cfg.tariff_import);
-          html += this._bandRows("export", data.exportSeries, cfg.tariff_export);
+          html += this._bandRows(
+            "import", data.importSeries, cfg.tariff_import, cfg.tariff_import_rates
+          );
+          html += this._bandRows(
+            "export", data.exportSeries, cfg.tariff_export, cfg.tariff_export_rates
+          );
           html += "</div>";
 
           html +=
