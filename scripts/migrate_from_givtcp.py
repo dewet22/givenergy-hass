@@ -88,6 +88,7 @@ import sys
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
+from enum import Enum
 from typing import Any
 
 # `websockets` is imported lazily in HAWebSocket.connect() so this module stays
@@ -245,6 +246,28 @@ _IMPORT_CHUNK_ROWS = 1000
 _RETRY_ATTEMPTS = 5
 _RETRY_BASE_DELAY = 2.0  # seconds; linear backoff: delay * attempt
 _ENTITY_PAUSE_SECONDS = 0.5
+
+
+# ---------------------------------------------------------------------------
+# Entity reset-class classification
+# ---------------------------------------------------------------------------
+
+
+class ResetClass(Enum):
+    """How a counter is expected to reset, controlling reset-vs-corruption calls."""
+
+    DAILY = "daily"  # _today sensors: reset to 0 at local midnight
+    ANNUAL = "annual"  # _this_year sensors: reset at the year boundary
+    LIFETIME = "lifetime"  # _total sensors: never reset within the migration window
+
+
+def classify_entity(ge_suffix: str) -> ResetClass:
+    """Classify a givenergy_local sensor suffix by its expected reset cadence."""
+    if ge_suffix.endswith("_today"):
+        return ResetClass.DAILY
+    if ge_suffix.endswith("_this_year"):
+        return ResetClass.ANNUAL
+    return ResetClass.LIFETIME
 
 
 # ---------------------------------------------------------------------------
