@@ -3,8 +3,11 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from types import ModuleType
+from zoneinfo import ZoneInfo
 
 _MIGRATE_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "migrate_from_givtcp.py"
+
+_LONDON = ZoneInfo("Europe/London")
 
 
 def _load_migrate_module() -> ModuleType:
@@ -37,3 +40,23 @@ def test_adaptive_ceiling_rejects_fakes_keeps_genuine():
 
 def test_adaptive_ceiling_no_positive_deltas_is_unbounded():
     assert _MOD.adaptive_ceiling([0.0, 0.0, None]) == float("inf")
+
+
+def test_reset_boundary_daily_local_midnight():
+    rc = _MOD.ResetClass
+    # BST: local midnight is 23:00Z. Within tolerance -> reset boundary.
+    assert _MOD._is_reset_boundary("2026-05-20T23:00:00+00:00", rc.DAILY, _LONDON, 2.0)
+    # Mid-afternoon -> not a reset boundary (off-midnight corruption).
+    assert not _MOD._is_reset_boundary("2026-05-20T14:00:00+00:00", rc.DAILY, _LONDON, 2.0)
+
+
+def test_reset_boundary_lifetime_never():
+    rc = _MOD.ResetClass
+    assert not _MOD._is_reset_boundary("2026-01-01T00:00:00+00:00", rc.LIFETIME, _LONDON, 2.0)
+
+
+def test_reset_boundary_annual_year_start():
+    rc = _MOD.ResetClass
+    # GMT: 2026-01-01 00:00 local == 00:00Z.
+    assert _MOD._is_reset_boundary("2026-01-01T00:00:00+00:00", rc.ANNUAL, _LONDON, 2.0)
+    assert not _MOD._is_reset_boundary("2026-06-15T00:00:00+00:00", rc.ANNUAL, _LONDON, 2.0)

@@ -91,6 +91,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from typing import Any
+from zoneinfo import ZoneInfo
 
 # `websockets` is imported lazily in HAWebSocket.connect() so this module stays
 # importable (for unit-testing the pure helpers below) without the dependency.
@@ -297,6 +298,38 @@ def adaptive_ceiling(deltas: list[float | None]) -> float:
     mad = statistics.median([abs(d - median) for d in pos])
     spread = mad if mad > 0 else median
     return median + _CEILING_MAD_K * 1.4826 * spread
+
+
+# ---------------------------------------------------------------------------
+# Reset-boundary detection
+# ---------------------------------------------------------------------------
+
+
+def _is_reset_boundary(
+    start_iso: str,
+    reset_class: ResetClass,
+    tz: ZoneInfo,
+    tol_hours: float,
+) -> bool:
+    """True if a decrease at this timestamp is a legitimate counter reset.
+
+    DAILY counters reset within ``tol_hours`` of local midnight; ANNUAL counters
+    within ``tol_hours`` of local Jan-1 00:00; LIFETIME counters never reset.
+    Evaluated in local time so DST (London resets at 23:00Z in summer, 00:00Z in
+    winter) and inverter-clock lag are handled.
+    """
+    if reset_class is ResetClass.LIFETIME:
+        return False
+    local = datetime.fromisoformat(start_iso).astimezone(tz)
+    tol_minutes = tol_hours * 60
+    minutes_into_day = local.hour * 60 + local.minute
+    dist_to_midnight = min(minutes_into_day, 24 * 60 - minutes_into_day)
+    if reset_class is ResetClass.DAILY:
+        return dist_to_midnight <= tol_minutes
+    # ANNUAL: near midnight AND on Dec 31 / Jan 1.
+    near_midnight = dist_to_midnight <= tol_minutes
+    on_year_edge = (local.month, local.day) in {(1, 1), (12, 31)}
+    return near_midnight and on_year_edge
 
 
 # ---------------------------------------------------------------------------
