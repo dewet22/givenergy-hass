@@ -333,6 +333,62 @@ def _is_reset_boundary(
 
 
 # ---------------------------------------------------------------------------
+# Sum-column rebuild walk
+# ---------------------------------------------------------------------------
+
+
+def rebuild_sum_walk(
+    rows: list[dict[str, Any]],
+    reset_class: ResetClass,
+    ceiling: float,
+    tz: ZoneInfo,
+    midnight_tol_hours: float = 2.0,
+) -> list[dict[str, Any]]:
+    """Rebuild the ``sum`` column from ``state`` with reset/plausibility guards.
+
+    ``rows`` are normalised (ISO ``start``, numeric or None ``state``), sorted
+    ascending. Returns copies with ``sum`` set to a clean cumulative total:
+
+    - delta in [0, ceiling]            -> accept, advance running + last-good state
+    - delta < 0 at a reset boundary    -> reset: add post-reset state to running
+    - delta < 0 off-boundary           -> corruption: hold last-good (state + sum)
+    - delta > ceiling                  -> fake spike: hold last-good
+    - missing state (gap)              -> carry running forward
+
+    Holding last-good leaves ``prev_state`` at the last trusted reading, so the
+    recovery after a transient zero/spike is measured against it (a small,
+    accepted delta) instead of booking the bogus jump.
+    """
+    out: list[dict[str, Any]] = []
+    running = 0.0
+    prev_state: float | None = None
+    for row in rows:
+        r = dict(row)
+        state = row.get("state")
+        if state is None:
+            r["sum"] = round(running, 6)
+            out.append(r)
+            continue
+        if prev_state is None:
+            running = float(state)
+            prev_state = float(state)
+            r["sum"] = round(running, 6)
+            out.append(r)
+            continue
+        delta = state - prev_state
+        if 0 <= delta <= ceiling:
+            running += delta
+            prev_state = state
+        elif delta < 0 and _is_reset_boundary(r["start"], reset_class, tz, midnight_tol_hours):
+            running += state
+            prev_state = state
+        # else: corruption (off-boundary drop) or spike (> ceiling) -> hold last-good.
+        r["sum"] = round(running, 6)
+        out.append(r)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Home Assistant WebSocket client
 # ---------------------------------------------------------------------------
 

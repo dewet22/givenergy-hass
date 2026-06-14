@@ -60,3 +60,71 @@ def test_reset_boundary_annual_year_start():
     # GMT: 2026-01-01 00:00 local == 00:00Z.
     assert _MOD._is_reset_boundary("2026-01-01T00:00:00+00:00", rc.ANNUAL, _LONDON, 2.0)
     assert not _MOD._is_reset_boundary("2026-06-15T00:00:00+00:00", rc.ANNUAL, _LONDON, 2.0)
+
+
+def _row(start_iso: str, state: float | None) -> dict:
+    return {"start": start_iso, "state": state}
+
+
+def _sums(rows: list[dict]) -> list[float]:
+    return [r["sum"] for r in rows]
+
+
+def test_rebuild_walk_accumulates_genuine_deltas():
+    rows = [
+        _row("2026-05-20T08:00:00+00:00", 100.0),
+        _row("2026-05-20T09:00:00+00:00", 102.0),
+        _row("2026-05-20T10:00:00+00:00", 105.0),
+    ]
+    out = _MOD.rebuild_sum_walk(rows, _MOD.ResetClass.LIFETIME, 50.0, _LONDON)
+    assert _sums(out) == [100.0, 102.0, 105.0]
+
+
+def test_rebuild_walk_holds_through_fake_zero_and_recovery():
+    rows = [
+        _row("2026-05-20T12:00:00+00:00", 200.0),
+        _row("2026-05-20T13:00:00+00:00", 0.0),  # fake zero-read
+        _row("2026-05-20T14:00:00+00:00", 203.0),  # recovery
+    ]
+    out = _MOD.rebuild_sum_walk(rows, _MOD.ResetClass.LIFETIME, 50.0, _LONDON)
+    assert _sums(out) == [200.0, 200.0, 203.0]
+
+
+def test_rebuild_walk_rejects_spike_over_ceiling():
+    rows = [
+        _row("2026-05-20T12:00:00+00:00", 100.0),
+        _row("2026-05-20T13:00:00+00:00", 27496.1),  # fake spike
+        _row("2026-05-20T14:00:00+00:00", 101.0),
+    ]
+    out = _MOD.rebuild_sum_walk(rows, _MOD.ResetClass.LIFETIME, 50.0, _LONDON)
+    assert _sums(out) == [100.0, 100.0, 101.0]
+
+
+def test_rebuild_walk_accepts_daily_midnight_reset():
+    rows = [
+        _row("2026-05-20T22:00:00+00:00", 18.0),
+        _row("2026-05-20T23:00:00+00:00", 0.4),  # post-reset (BST midnight)
+        _row("2026-05-21T00:00:00+00:00", 0.9),
+    ]
+    out = _MOD.rebuild_sum_walk(rows, _MOD.ResetClass.DAILY, 10.0, _LONDON)
+    assert _sums(out) == [18.0, 18.4, 18.9]
+
+
+def test_rebuild_walk_rejects_offmidnight_drop_on_daily():
+    rows = [
+        _row("2026-05-20T12:00:00+00:00", 8.0),
+        _row("2026-05-20T13:00:00+00:00", 0.0),  # off-midnight -> corruption
+        _row("2026-05-20T14:00:00+00:00", 8.3),
+    ]
+    out = _MOD.rebuild_sum_walk(rows, _MOD.ResetClass.DAILY, 10.0, _LONDON)
+    assert _sums(out) == [8.0, 8.0, 8.3]
+
+
+def test_rebuild_walk_carries_sum_across_gap_rows():
+    rows = [
+        _row("2026-05-20T12:00:00+00:00", 100.0),
+        _row("2026-05-20T13:00:00+00:00", None),  # gap
+        _row("2026-05-20T14:00:00+00:00", 101.0),
+    ]
+    out = _MOD.rebuild_sum_walk(rows, _MOD.ResetClass.LIFETIME, 50.0, _LONDON)
+    assert _sums(out) == [100.0, 100.0, 101.0]
