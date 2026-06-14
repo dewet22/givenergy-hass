@@ -84,6 +84,7 @@ import argparse
 import asyncio
 import json
 import re
+import statistics
 import sys
 from collections import Counter
 from collections.abc import Callable
@@ -268,6 +269,34 @@ def classify_entity(ge_suffix: str) -> ResetClass:
     if ge_suffix.endswith("_this_year"):
         return ResetClass.ANNUAL
     return ResetClass.LIFETIME
+
+
+# ---------------------------------------------------------------------------
+# Adaptive plausibility ceiling
+# ---------------------------------------------------------------------------
+
+# Multiplier on the (normal-scaled) MAD for the plausibility ceiling. Tuned so
+# genuine inverter-clip hours pass while order-of-magnitude fake spikes are
+# rejected; pinned by the LTS-fixture acceptance test.
+_CEILING_MAD_K = 8.0
+
+
+def adaptive_ceiling(deltas: list[float | None]) -> float:
+    """Robust per-hour ceiling from an entity's positive state-deltas.
+
+    Uses median + K * 1.4826 * MAD over the positive, finite deltas. Both the
+    median and the MAD are resistant to a handful of giant outliers, so the
+    bound reflects genuine hourly behaviour even on a heavily corrupted series.
+    Returns +inf when there is nothing positive to anchor on (caller then can't
+    guard, and the walk accepts all non-negative deltas).
+    """
+    pos = sorted(d for d in deltas if d is not None and d > 0)
+    if not pos:
+        return float("inf")
+    median = statistics.median(pos)
+    mad = statistics.median([abs(d - median) for d in pos])
+    spread = mad if mad > 0 else median
+    return median + _CEILING_MAD_K * 1.4826 * spread
 
 
 # ---------------------------------------------------------------------------

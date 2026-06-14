@@ -25,3 +25,15 @@ def test_classify_entity_by_suffix():
     assert _MOD.classify_entity("pv_generation_total") is rc.LIFETIME
     assert _MOD.classify_entity("grid_import_total") is rc.LIFETIME
     assert _MOD.classify_entity("battery_discharge_this_year") is rc.ANNUAL
+
+
+def test_adaptive_ceiling_rejects_fakes_keeps_genuine():
+    # Genuine PV-like hourly deltas (0–6 kWh) with a few huge fake spikes.
+    genuine = [0.1, 0.5, 1.2, 2.0, 3.5, 5.0, 6.0, 0.7, 0.3, 4.4] * 30
+    fakes = [27396.1, 29671.9, 28660.0]
+    ceiling = _MOD.adaptive_ceiling(genuine + fakes)
+    assert max(genuine) <= ceiling < 100.0  # genuine peaks pass; fakes far above
+
+
+def test_adaptive_ceiling_no_positive_deltas_is_unbounded():
+    assert _MOD.adaptive_ceiling([0.0, 0.0, None]) == float("inf")
