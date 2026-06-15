@@ -46,12 +46,14 @@ when GivTCP actually stopped.
 Sum reconstruction (default): rather than copy GivTCP's `sum` column and rebase
 it at the join, the script concatenates the `state` timeline across the cut-over
 and walks it once to produce a single continuous `sum`. This removes the join
-seam entirely. The walk is plausibility-guarded (an adaptive per-entity ceiling
-rejects fake spikes) and reset-aware: a decrease in `state` only counts as a
-legitimate counter reset at that counter's natural boundary — `_today` sensors at
-local midnight, `_this_year` sensors at the year boundary, `_total` sensors never.
-Off-boundary drops and over-ceiling spikes hold the last good value instead of
-booking the bogus jump.
+seam entirely. The walk is plausibility-guarded and reset-aware: a decrease in
+`state` only counts as a legitimate counter reset at that counter's natural
+boundary — `_today` sensors at local midnight, `_this_year` sensors at the year
+boundary, `_total` sensors never. Off-boundary drops and over-ceiling spikes hold
+the last good value instead of booking the bogus jump. The plausibility ceiling is
+the user-declared --max-kw value (used directly as the authoritative bound under
+--apply) with the adaptive per-entity p99 estimate as the fallback for dry-run
+previews where no cap is given.
 
 Pass --trust-source-sums to restore the legacy behaviour (copy GivTCP's sum
 column verbatim and rebase at the join) for installs whose GivTCP sums are
@@ -334,18 +336,17 @@ def _apply_requires_cap(apply: bool, max_kw: float | None) -> bool:
 
 
 def effective_ceiling(adaptive: float | None, cap: float | None) -> float | None:
-    """Combine the adaptive estimate with an optional user-supplied hard cap.
+    """The ceiling the rebuild/validation guards against.
 
-    None means 'cannot guard' (refuse). cap bounds an inflated adaptive ceiling
-    and rescues sparse-data entities that have no adaptive estimate.
-    """
-    if adaptive is None and cap is None:
-        return None
-    if adaptive is None:
+    A user-declared cap (--max-kw) is the trusted bound and takes PRECEDENCE:
+    deltas up to it are legitimate by the user's declaration, so the rebuild
+    must not flatten them — even where the adaptive p99 estimate would sit lower.
+    The adaptive estimate is only the fallback when no cap is given (the dry-run
+    preview/report path; --apply requires --max-kw, so its rebuild always uses
+    the user-declared bound)."""
+    if cap is not None:
         return cap
-    if cap is None:
-        return adaptive
-    return min(adaptive, cap)
+    return adaptive
 
 
 # ---------------------------------------------------------------------------
@@ -1486,12 +1487,13 @@ def main() -> None:
         default=None,
         metavar="KW",
         help=(
-            "Upper bound on a plausible hourly energy change, in kW (= kWh per "
-            "hour), applied to every migrated counter. Set it above the largest "
-            "legitimate hourly delta any of your counters can see — grid import "
-            "and battery charging can exceed your inverter's PV output. Must be "
-            "positive. Caps the adaptive ceiling and lets entities with too little "
-            "history to self-estimate still rebuild safely. Required with --apply."
+            "Maximum legitimate hourly energy change, in kW (= kWh per hour), "
+            "applied to every migrated counter. Set it above the largest hourly "
+            "delta any of your counters can see — grid import and battery charging "
+            "can exceed your inverter's PV output. Under --apply this value is "
+            "used directly as the authoritative rebuild bound (the adaptive p99 "
+            "estimate is only the dry-run fallback). Must be positive. Required "
+            "with --apply."
         ),
     )
     p.add_argument(

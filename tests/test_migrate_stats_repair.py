@@ -99,9 +99,11 @@ def test_effective_ceiling_no_cap_uses_adaptive():
     assert _MOD.effective_ceiling(42.0, None) == 42.0
 
 
-def test_effective_ceiling_both_takes_min():
+def test_effective_ceiling_cap_takes_precedence():
+    # The user-declared cap is authoritative — used directly, even when the
+    # adaptive estimate is lower (which would otherwise flatten genuine peaks).
     assert _MOD.effective_ceiling(42.0, 7.0) == 7.0
-    assert _MOD.effective_ceiling(7.0, 42.0) == 7.0
+    assert _MOD.effective_ceiling(7.0, 42.0) == 42.0
 
 
 def test_reset_boundary_daily_local_midnight():
