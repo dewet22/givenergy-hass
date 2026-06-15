@@ -36,12 +36,25 @@ Typical workflow:
 
 The cut-over date is the boundary between GivTCP and givenergy_local history.
 GivTCP data strictly before midnight on that date is migrated; givenergy_local
-data from midnight on that date onwards is kept (and its running sum is rebased
-to continue from where GivTCP left off). Any givenergy_local data before that
-boundary is discarded — it will typically be partial or recorded in parallel with
-GivTCP. Choosing a day when both integrations were running means the full GivTCP
-history is captured and GE takes over from 00:00 that day regardless of when
-GivTCP actually stopped.
+data from midnight on that date onwards is kept. Any givenergy_local data before
+that boundary is discarded — it will typically be partial or recorded in parallel
+with GivTCP. Choosing a day when both integrations were running means the full
+GivTCP history is captured and GE takes over from 00:00 that day regardless of
+when GivTCP actually stopped.
+
+Sum reconstruction (default): rather than copy GivTCP's `sum` column and rebase
+it at the join, the script concatenates the `state` timeline across the cut-over
+and walks it once to produce a single continuous `sum`. This removes the join
+seam entirely. The walk is plausibility-guarded (an adaptive per-entity ceiling
+rejects fake spikes) and reset-aware: a decrease in `state` only counts as a
+legitimate counter reset at that counter's natural boundary — `_today` sensors at
+local midnight, `_this_year` sensors at the year boundary, `_total` sensors never.
+Off-boundary drops and over-ceiling spikes hold the last good value instead of
+booking the bogus jump.
+
+Pass --trust-source-sums to restore the legacy behaviour (copy GivTCP's sum
+column verbatim and rebase at the join) for installs whose GivTCP sums are
+known-good.
 
 Serials are auto-detected — no hard-coding needed. Multi-inverter and
 multi-battery setups are handled automatically.
@@ -75,6 +88,13 @@ Not migrated (no GivTCP equivalent, register-level gap, or incompatible type):
     sum column to rebase, and forcing it would corrupt the GE counter — so the
     pre-GE cycle history is not migrated. See BATTERY_PAIRS below.)
 
+Post-migration validation (automatic, read-only, runs in both dry-run and apply):
+  Re-reads each migrated sum series and flags residual implausible hours,
+  fake-reset shapes, duplicate series, and gaps. Exits non-zero on substantive
+  findings; gaps are reported informationally and do not affect the exit code.
+  Pass --repair-residue (only meaningful with --apply) to clear and re-import the
+  rebuilt series for sum entities that still show implausible hours.
+
 See docs/migration-from-givtcp.md for the full sensor catalogue and design notes.
 """
 
@@ -83,12 +103,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import re
+import statistics
 import sys
 from collections import Counter
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
+from enum import Enum
 from typing import Any
+from zoneinfo import ZoneInfo
 
 # `websockets` is imported lazily in HAWebSocket.connect() so this module stays
 # importable (for unit-testing the pure helpers below) without the dependency.
@@ -248,6 +272,173 @@ _ENTITY_PAUSE_SECONDS = 0.5
 
 
 # ---------------------------------------------------------------------------
+# Entity reset-class classification
+# ---------------------------------------------------------------------------
+
+
+class ResetClass(Enum):
+    """How a counter is expected to reset, controlling reset-vs-corruption calls."""
+
+    DAILY = "daily"  # _today sensors: reset to 0 at local midnight
+    ANNUAL = "annual"  # _this_year sensors: reset at the year boundary
+    LIFETIME = "lifetime"  # _total sensors: never reset within the migration window
+
+
+def classify_entity(ge_suffix: str) -> ResetClass:
+    """Classify a givenergy_local sensor suffix by its expected reset cadence."""
+    if ge_suffix.endswith("_today"):
+        return ResetClass.DAILY
+    if ge_suffix.endswith("_this_year"):
+        return ResetClass.ANNUAL
+    return ResetClass.LIFETIME
+
+
+# ---------------------------------------------------------------------------
+# Adaptive plausibility ceiling
+# ---------------------------------------------------------------------------
+
+# Multiplier on the (normal-scaled) MAD for the plausibility ceiling. Tuned so
+# genuine inverter-clip hours pass while order-of-magnitude fake spikes are
+# rejected; pinned by the LTS-fixture acceptance test.
+_CEILING_MAD_K = 8.0
+
+# Minimum positive-delta samples before a MAD-based ceiling is trusted. A day of
+# hourly points is a defensible floor for a robust estimate; below it the
+# median/MAD are too easily skewed (sparse data like [1, 9900] yields a ceiling
+# high enough to bless the spike). Fewer than this and adaptive_ceiling refuses.
+_CEILING_MIN_SAMPLES = 24
+
+
+def adaptive_ceiling(deltas: list[float | None]) -> float | None:
+    """Robust per-hour ceiling from an entity's positive state-deltas.
+
+    Uses median + K * 1.4826 * MAD over the positive, finite deltas. Both the
+    median and the MAD are resistant to a handful of giant outliers, so the
+    bound reflects genuine hourly behaviour even on a heavily corrupted series.
+    Returns None when there are fewer than ``_CEILING_MIN_SAMPLES`` positive
+    deltas to anchor on (this also covers the empty case) — the caller then
+    cannot self-estimate a guard and must fail closed or rely on a hard cap.
+    """
+    pos = sorted(d for d in deltas if d is not None and d > 0)
+    if len(pos) < _CEILING_MIN_SAMPLES:
+        return None
+    median = statistics.median(pos)
+    mad = statistics.median([abs(d - median) for d in pos])
+    spread = mad if mad > 0 else median
+    return median + _CEILING_MAD_K * 1.4826 * spread
+
+
+def effective_ceiling(adaptive: float | None, cap: float | None) -> float | None:
+    """Combine the adaptive estimate with an optional user-supplied hard cap.
+
+    None means 'cannot guard' (refuse). cap bounds an inflated adaptive ceiling
+    and rescues sparse-data entities that have no adaptive estimate.
+    """
+    if adaptive is None and cap is None:
+        return None
+    if adaptive is None:
+        return cap
+    if cap is None:
+        return adaptive
+    return min(adaptive, cap)
+
+
+# ---------------------------------------------------------------------------
+# Reset-boundary detection
+# ---------------------------------------------------------------------------
+
+
+def _is_reset_boundary(
+    start_iso: str,
+    reset_class: ResetClass,
+    tz: ZoneInfo,
+    tol_hours: float,
+) -> bool:
+    """True if a decrease at this timestamp is a legitimate counter reset.
+
+    DAILY counters reset within ``tol_hours`` of local midnight; ANNUAL counters
+    within ``tol_hours`` of local Jan-1 00:00; LIFETIME counters never reset.
+    Evaluated in local time so DST (London resets at 23:00Z in summer, 00:00Z in
+    winter) and inverter-clock lag are handled.
+    """
+    if reset_class is ResetClass.LIFETIME:
+        return False
+    local = datetime.fromisoformat(start_iso).astimezone(tz)
+    tol_minutes = tol_hours * 60
+    minutes_into_day = local.hour * 60 + local.minute
+    dist_to_midnight = min(minutes_into_day, 24 * 60 - minutes_into_day)
+    if reset_class is ResetClass.DAILY:
+        return dist_to_midnight <= tol_minutes
+    # ANNUAL: near midnight AND on Dec 31 / Jan 1.
+    near_midnight = dist_to_midnight <= tol_minutes
+    on_year_edge = (local.month, local.day) in {(1, 1), (12, 31)}
+    return near_midnight and on_year_edge
+
+
+# ---------------------------------------------------------------------------
+# Sum-column rebuild walk
+# ---------------------------------------------------------------------------
+
+
+def rebuild_sum_walk(
+    rows: list[dict[str, Any]],
+    reset_class: ResetClass,
+    ceiling: float,
+    tz: ZoneInfo,
+    midnight_tol_hours: float = 2.0,
+) -> list[dict[str, Any]]:
+    """Rebuild the ``sum`` column from ``state`` with reset/plausibility guards.
+
+    ``rows`` are normalised (ISO ``start``, numeric or None ``state``), sorted
+    ascending. Returns copies with ``sum`` set to a clean cumulative total:
+
+    - delta in [0, ceiling]            -> accept, advance running + last-good state
+    - delta < 0 at a reset boundary    -> reset: add post-reset state to running
+    - delta < 0 off-boundary           -> corruption: hold last-good (state + sum)
+    - delta > ceiling                  -> fake spike: hold last-good
+    - missing state (gap)              -> carry running forward
+
+    Holding last-good leaves ``prev_state`` at the last trusted reading, so the
+    recovery after a transient zero/spike is measured against it (a small,
+    accepted delta) instead of booking the bogus jump.
+    """
+    out: list[dict[str, Any]] = []
+    running = 0.0
+    prev_state: float | None = None
+    for row in rows:
+        r = dict(row)
+        state = row.get("state")
+        if state is None:
+            r["sum"] = round(running, 6)
+            out.append(r)
+            continue
+        if prev_state is None:
+            running = float(state)
+            prev_state = float(state)
+            r["sum"] = round(running, 6)
+            out.append(r)
+            continue
+        delta = state - prev_state
+        if 0 <= delta <= ceiling:
+            running += delta
+            prev_state = state
+        elif delta < 0 and _is_reset_boundary(r["start"], reset_class, tz, midnight_tol_hours):
+            running += state
+            prev_state = state
+        else:
+            # Corruption (off-boundary drop) or spike (> ceiling): hold last-good
+            # for BOTH sum and state. `r` is a copy of the corrupt row, so its
+            # `state` still carries the bogus 0/spike; overwrite it with the last
+            # trusted reading. Otherwise the imported state timeline stays
+            # corrupt and find_fake_reset_shapes keeps flagging it (and
+            # --repair-residue can't heal it).
+            r["state"] = prev_state
+        r["sum"] = round(running, 6)
+        out.append(r)
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Home Assistant WebSocket client
 # ---------------------------------------------------------------------------
 
@@ -332,17 +523,27 @@ class HAWebSocket:
         result = await self._call("config/device_registry/list")
         return result or []
 
+    async def get_timezone(self) -> ZoneInfo:
+        """Return the HA instance's configured local timezone (UTC fallback)."""
+        cfg = await self._call("get_config")
+        name = (cfg or {}).get("time_zone") or "UTC"
+        try:
+            return ZoneInfo(name)
+        except Exception:
+            return ZoneInfo("UTC")
+
     async def get_statistics(
         self,
         statistic_ids: list[str],
         start: datetime,
         end: datetime | None = None,
+        types: list[str] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         kwargs: dict[str, Any] = {
             "statistic_ids": statistic_ids,
             "start_time": start.isoformat(),
             "period": "hour",
-            "types": ["sum", "state"],
+            "types": types or ["sum", "state"],
         }
         if end is not None:
             kwargs["end_time"] = end.isoformat()
@@ -394,6 +595,129 @@ def _normalise(row: dict[str, Any]) -> dict[str, Any]:
     r = {k: v for k, v in row.items() if k != "end"}
     r["start"] = _as_iso(_to_utc(r["start"]))
     return r
+
+
+# ---------------------------------------------------------------------------
+# Validation checks (pure)
+# ---------------------------------------------------------------------------
+
+
+def find_implausible_hours(rows: list[dict[str, Any]], ceiling: float) -> list[dict[str, Any]]:
+    """Rows whose sum-change from the previous row exceeds the ceiling."""
+    flagged = []
+    for prev, cur in zip(rows, rows[1:]):
+        ps, cs = prev.get("sum"), cur.get("sum")
+        if ps is None or cs is None:
+            continue
+        if cs - ps > ceiling:
+            flagged.append({"start": cur["start"], "change": round(cs - ps, 3)})
+    return flagged
+
+
+def _dedup_series(
+    series_by_id: dict[str, list[dict[str, Any]]],
+    units_by_id: dict[str, str | None],
+) -> dict[str, list[dict[str, Any]]]:
+    """Restrict duplicate detection to sum entities.
+
+    ``find_duplicate_series`` keys on ``(start, sum)``.  Mean entities (power,
+    SOC, temperature) carry no sum, so their rows come back with ``sum=None`` and
+    two genuinely different mean series over the same hours collapse to identical
+    ``(start, None)`` key tuples — a false-positive duplicate.  Only sum entities
+    (those present in ``units_by_id`` — the same signal ``_repairable`` uses) are
+    candidates for duplicate detection.
+    """
+    return {sid: rows for sid, rows in series_by_id.items() if sid in units_by_id}
+
+
+def find_duplicate_series(series_by_id: dict[str, list[dict[str, Any]]]) -> list[tuple[str, str]]:
+    """Pairs of statistic ids whose (start, sum) sequences are byte-identical."""
+
+    def key(rows: list[dict[str, Any]]) -> tuple:
+        return tuple((r.get("start"), r.get("sum")) for r in rows)
+
+    seen: dict[tuple, str] = {}
+    dupes: list[tuple[str, str]] = []
+    for sid, rows in series_by_id.items():
+        k = key(rows)
+        if k in seen:
+            dupes.append((seen[k], sid))
+        else:
+            seen[k] = sid
+    return dupes
+
+
+def classify_gaps(
+    rows: list[dict[str, Any]], expected_step_minutes: int = 60
+) -> list[dict[str, Any]]:
+    """Contiguous missing spans (more than one expected step between rows)."""
+    gaps = []
+    step = timedelta(minutes=expected_step_minutes)
+    for prev, cur in zip(rows, rows[1:]):
+        delta = _to_utc(cur["start"]) - _to_utc(prev["start"])
+        missing = round(delta / step) - 1
+        if missing >= 1:
+            gaps.append({"after": prev["start"], "before": cur["start"], "hours": missing})
+    return gaps
+
+
+def find_fake_reset_shapes(rows: list[dict[str, Any]], ceiling: float) -> list[dict[str, Any]]:
+    """A drop to ~0 immediately followed by a huge positive jump (modbus zero-read)."""
+    shapes = []
+    for i in range(2, len(rows)):
+        a, b, c = rows[i - 2].get("state"), rows[i - 1].get("state"), rows[i].get("state")
+        if a is None or b is None or c is None:
+            continue
+        if a > 0 and b <= a * 0.05 and (c - b) > ceiling:
+            shapes.append({"start": rows[i]["start"], "recovery": round(c - b, 3)})
+    return shapes
+
+
+def format_validation_report(
+    findings: dict[str, dict[str, list]],
+    duplicates: list[tuple[str, str]],
+    applied: bool = True,
+) -> tuple[str, int]:
+    """Render the validation findings; return (text, exit_code).
+
+    exit_code is non-zero when substantive issues exist (implausible hours,
+    fake-reset shapes, or duplicate series). Gaps are reported informationally
+    and do not affect the exit code.
+
+    ``applied`` distinguishes a post-apply run from a dry-run.  On a dry run the
+    series read back are the *current* (pre-migration) series, so any findings
+    reflect pre-existing corruption rather than migration output — the header
+    says so.
+    """
+    header = (
+        "Validation report (post-migration)"
+        if applied
+        else "Validation report (dry-run: current series)"
+    )
+    lines = ["", header, "─" * 72]
+    substantive = False
+    for ge_id, f in findings.items():
+        impl = f.get("implausible", [])
+        fakes = f.get("fake_resets", [])
+        gaps = f.get("gaps", [])
+        if not (impl or fakes or gaps):
+            continue
+        lines.append(f"  {ge_id}")
+        for row in impl:
+            substantive = True
+            lines.append(f"    implausible +{row['change']} at {row['start']}")
+        for row in fakes:
+            substantive = True
+            lines.append(f"    fake-reset shape (+{row['recovery']}) at {row['start']}")
+        for g in gaps:
+            lines.append(f"    gap {g['hours']}h: {g['after']} -> {g['before']}")
+    for a, b in duplicates:
+        substantive = True
+        lines.append(f"  duplicate series: {a} == {b}")
+    if not substantive and not any(f.get("gaps") for f in findings.values()):
+        lines.append("  no issues found")
+    lines.append("─" * 72)
+    return "\n".join(lines), (1 if substantive else 0)
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +783,25 @@ def rebase_sum(stats: list[dict[str, Any]], base_sum: float) -> list[dict[str, A
     return result
 
 
+def build_merged_states(
+    givtcp_rows: list[dict[str, Any]],
+    ge_rows: list[dict[str, Any]],
+    cutover: datetime,
+) -> list[dict[str, Any]]:
+    """Concatenate the state timeline across the cut-over for a single entity.
+
+    GivTCP rows strictly before the cut-over, then givenergy_local rows from the
+    cut-over onward, each carrying ``state``. Sorted ascending by ``start``. This
+    is the input to ``rebuild_sum_walk`` — walking it produces one continuous
+    sum, so the join seam never exists.
+    """
+    pre = [r for r in givtcp_rows if _to_utc(r["start"]) < cutover]
+    post = [r for r in ge_rows if _to_utc(r["start"]) >= cutover]
+    merged = pre + post
+    merged.sort(key=lambda r: _to_utc(r["start"]))
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # Per-entity migration
 # ---------------------------------------------------------------------------
@@ -505,7 +848,11 @@ async def migrate_entity(
     ge_unit: str,
     apply: bool,
     ge_known: bool,
+    reset_class: ResetClass,
+    tz: ZoneInfo,
+    trust_source_sums: bool,
     warn_diverged: bool = False,
+    max_kwh: float | None = None,
 ) -> MigrationResult:
     r = MigrationResult(description, ge_id, warn_diverged)
 
@@ -547,11 +894,36 @@ async def migrate_entity(
     # but worth surfacing — flag it without blocking.
     r.warn_no_ge_pre = r.ge_pre_rows == 0
 
-    last_givtcp_sum = givtcp_stats[-1].get("sum") or 0.0
-    r.sum_at_cutover = last_givtcp_sum
-
-    rebased_post = rebase_sum(ge_post, last_givtcp_sum)
-    merged = givtcp_stats + rebased_post
+    if trust_source_sums:
+        # Legacy path: copy GivTCP sums + rebase GE-post (unchanged behaviour).
+        last_givtcp_sum = givtcp_stats[-1].get("sum") or 0.0
+        r.sum_at_cutover = last_givtcp_sum
+        rebased_post = rebase_sum(ge_post, last_givtcp_sum)
+        merged = givtcp_stats + rebased_post
+    else:
+        # Rebuild path (default): one continuous sum from the concatenated state
+        # timeline, plausibility- and reset-guarded.
+        merged_states = build_merged_states(givtcp_stats, ge_all, cutover)
+        deltas = [
+            (merged_states[i]["state"] - merged_states[i - 1]["state"])
+            for i in range(1, len(merged_states))
+            if merged_states[i].get("state") is not None
+            and merged_states[i - 1].get("state") is not None
+        ]
+        # Negative deltas (resets, spikes) are silently excluded inside
+        # adaptive_ceiling (it filters to `d > 0`), so passing the full list here
+        # is intentional — no pre-filtering needed.
+        adaptive = adaptive_ceiling(deltas)
+        ceiling = effective_ceiling(adaptive, max_kwh)
+        if ceiling is None:
+            # Too little clean data to estimate a guard and no --max-kw cap given:
+            # refuse rather than import an unguarded sum.
+            r.status = "insufficient_data"
+            return r
+        merged = rebuild_sum_walk(merged_states, reset_class, ceiling, tz)
+        r.sum_at_cutover = next(
+            (row["sum"] for row in merged if _to_utc(row["start"]) >= cutover), None
+        )
     r.merged_rows = len(merged)
 
     if not apply:
@@ -577,6 +949,134 @@ async def migrate_entity(
         r.error = str(exc)
 
     return r
+
+
+# ---------------------------------------------------------------------------
+# Post-migration validation + opt-in residue repair
+# ---------------------------------------------------------------------------
+
+
+def _repairable(ge_id: str, units_by_id: dict[str, str | None], implausible: list) -> bool:
+    """Return True only when *ge_id* is a sum entity AND has implausible findings.
+
+    Mean entities (power, SOC, temperature) are not present in ``units_by_id``
+    (which is built exclusively from the sum migration plan).  Admitting them to
+    the repair path would clear their mean series and re-import them as a sum
+    series, corrupting the data.  This guard is the single enforcement point.
+    """
+    return bool(implausible) and ge_id in units_by_id
+
+
+def _repair_reset_class(
+    ge_id: str,
+    reset_classes: dict[str, ResetClass] | None,
+) -> ResetClass:
+    """Reset class for residue repair: prefer the migration plan's authoritative
+    class (keyed by resolved ge_id), falling back to suffix inference. The plan
+    value survives user-renamed entity IDs that no longer carry a known suffix.
+    """
+    return (reset_classes or {}).get(ge_id) or classify_entity(ge_id)
+
+
+def _state_deltas(rows: list[dict[str, Any]]) -> list[float]:
+    """Positive-or-any consecutive state deltas, mirroring migrate_entity's pattern."""
+    return [
+        rows[i]["state"] - rows[i - 1]["state"]
+        for i in range(1, len(rows))
+        if rows[i].get("state") is not None and rows[i - 1].get("state") is not None
+    ]
+
+
+async def run_validation(
+    ws: HAWebSocket,
+    results: list[MigrationResult],
+    tz: ZoneInfo,
+    units_by_id: dict[str, str | None] | None = None,
+    reset_classes: dict[str, ResetClass] | None = None,
+    repair: bool = False,
+    applied: bool = True,
+    max_kwh: float | None = None,
+) -> int:
+    """Re-read each migrated/previewed sum series, report validation findings.
+
+    Read-only by default — runs in both dry-run and apply. In dry-run mode the
+    series read back are the *current* (unmigrated) HA series, not a
+    post-migration result.  When ``repair`` is set (only when --apply and
+    --repair-residue are both given), entities with residual implausible hours
+    have their rebuilt series cleared and re-imported; ``units_by_id`` supplies
+    the unit of measurement for the re-import metadata.  Only sum entities
+    (those present in ``units_by_id``) are eligible for repair — mean entities
+    are never touched.
+    Returns the validation exit code from ``format_validation_report``.
+    """
+    units_by_id = units_by_id or {}
+    findings: dict[str, dict[str, list]] = {}
+    series_by_id: dict[str, list[dict[str, Any]]] = {}
+    to_repair: list[str] = []
+
+    for r in results:
+        if r.status not in ("migrated", "dry_run"):
+            continue
+        try:
+            raw = await ws.get_statistics([r.ge_id], _EPOCH)
+        except Exception:  # nosec B112 — validation is best-effort; skip unreadable series
+            continue
+        rows = [_normalise(s) for s in raw.get(r.ge_id, [])]
+        if not rows:
+            continue
+        gaps = classify_gaps(rows)
+        ceiling = effective_ceiling(adaptive_ceiling(_state_deltas(rows)), max_kwh)
+        if ceiling is None:
+            # No guard derivable (too little clean data, no cap): record gaps but
+            # skip the ceiling-dependent checks rather than crash on a None bound.
+            findings[r.ge_id] = {"implausible": [], "fake_resets": [], "gaps": gaps}
+            series_by_id[r.ge_id] = rows
+            continue
+        implausible = find_implausible_hours(rows, ceiling)
+        fake_resets = find_fake_reset_shapes(rows, ceiling)
+        findings[r.ge_id] = {
+            "implausible": implausible,
+            "fake_resets": fake_resets,
+            "gaps": gaps,
+        }
+        series_by_id[r.ge_id] = rows
+        if repair and _repairable(r.ge_id, units_by_id, implausible):
+            to_repair.append(r.ge_id)
+
+    duplicates = find_duplicate_series(_dedup_series(series_by_id, units_by_id))
+    text, exit_code = format_validation_report(findings, duplicates, applied=applied)
+    print(text)
+
+    if repair and to_repair:
+        print()
+        print(
+            f"  Repairing {len(to_repair)} entit{'y' if len(to_repair) == 1 else 'ies'} with"
+            " residual implausible hours …"
+        )
+        for ge_id in to_repair:
+            rows = series_by_id[ge_id]
+            # to_repair is only populated when the ceiling was non-None above, so
+            # this re-derivation is also non-None; assert keeps mypy honest.
+            ceiling = effective_ceiling(adaptive_ceiling(_state_deltas(rows)), max_kwh)
+            assert ceiling is not None
+            rc = _repair_reset_class(ge_id, reset_classes)
+            rebuilt = rebuild_sum_walk(rows, rc, ceiling, tz)
+            unit = units_by_id.get(ge_id)
+            await ws.clear_statistics([ge_id])
+            await ws.import_statistics(
+                metadata={
+                    "has_mean": False,
+                    "has_sum": True,
+                    "name": None,
+                    "source": "recorder",
+                    "statistic_id": ge_id,
+                    "unit_of_measurement": unit,
+                },
+                stats=rebuilt,
+            )
+            print(f"    repaired {ge_id}")
+
+    return exit_code
 
 
 # ---------------------------------------------------------------------------
@@ -616,7 +1116,7 @@ def _build_plan(
     meta_by_id: dict[str, dict[str, Any]],
     include_charge_from_grid: bool,
     canonical_to_actual: dict[str, str],
-) -> list[tuple[str, str, str, str, bool, bool]]:
+) -> list[tuple[str, str, str, str, bool, ResetClass, bool]]:
     """Construct the per-entity migration plan from the detected serials.
 
     Each entry's final field records whether the canonical givenergy_local
@@ -624,9 +1124,11 @@ def _build_plan(
     `canonical_to_actual`). That is the only trustworthy proof the target maps to
     a real entity: a statistic merely present in the recorder is not — a prior
     run of the buggy area-prefix version may have left an orphan at the canonical
-    id. HA 2026.6 area prefixes and user renames are followed via the map.
+    id. HA 2026.6 area prefixes and user renames are followed via the map. The
+    penultimate field is the entity's `ResetClass`, derived from its
+    givenergy_local suffix, driving reset-vs-corruption calls in the sum rebuild.
     """
-    plan: list[tuple[str, str, str, str, bool, bool]] = []
+    plan: list[tuple[str, str, str, str, bool, ResetClass, bool]] = []
     for sn in inv_serials:
         for gt_sfx, ge_sfx, desc, default in INVERTER_PAIRS:
             if not default and not include_charge_from_grid:
@@ -636,7 +1138,8 @@ def _build_plan(
             resolved = canonical in canonical_to_actual
             ge_id = canonical_to_actual.get(canonical, canonical)
             unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or "kWh"
-            plan.append((givtcp_id, ge_id, desc, unit, not default, resolved))
+            reset_class = classify_entity(ge_sfx)
+            plan.append((givtcp_id, ge_id, desc, unit, not default, reset_class, resolved))
     for sn in batt_serials:
         for gt_sfx, ge_sfx, desc, fallback_unit in BATTERY_PAIRS:
             givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
@@ -644,12 +1147,13 @@ def _build_plan(
             resolved = canonical in canonical_to_actual
             ge_id = canonical_to_actual.get(canonical, canonical)
             unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or fallback_unit
-            plan.append((givtcp_id, ge_id, desc, unit, False, resolved))
+            reset_class = classify_entity(ge_sfx)
+            plan.append((givtcp_id, ge_id, desc, unit, False, reset_class, resolved))
     return plan
 
 
 def _systemic_resolution_failure(
-    plan: list[tuple[str, str, str, str, bool, bool]],
+    plan: list[tuple[str, str, str, str, bool, ResetClass, bool]],
 ) -> list[str]:
     """Return the targets to abort on iff the resolver mapped *none* of them.
 
@@ -692,9 +1196,11 @@ def _print_summary(results: list[MigrationResult], applying: bool) -> int:
     counts = Counter(r.status for r in results)
     errored = counts["error"]
     not_found = counts["ge_not_found"]
+    insufficient = counts["insufficient_data"]
     tail = (
         f"No GivTCP data: {counts['no_givtcp_data']}  |  "
-        f"GE not found: {not_found}  |  Errors: {errored}"
+        f"GE not found: {not_found}  |  Insufficient data: {insufficient}  |  "
+        f"Errors: {errored}"
     )
 
     if not applying:
@@ -713,8 +1219,18 @@ def _print_summary(results: list[MigrationResult], applying: bool) -> int:
                 "Skipped.",
                 file=sys.stderr,
             )
+        elif r.status == "insufficient_data":
+            print(
+                f"\n  ⚠️  {r.description}: too little clean history to estimate a "
+                "plausibility ceiling, and no --max-kw cap was given — skipped rather "
+                "than import an unguarded sum. Re-run with --max-kw <kW above the "
+                "largest legitimate hourly delta across all your counters — grid "
+                "import and battery charging can exceed PV output> (or "
+                "--trust-source-sums if the GivTCP sums are known-good).",
+                file=sys.stderr,
+            )
 
-    return 0 if (errored == 0 and not_found == 0) else 2
+    return 0 if (errored == 0 and not_found == 0 and insufficient == 0) else 2
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -733,6 +1249,9 @@ async def run(args: argparse.Namespace) -> int:
         print(f"FAILED\n{exc}", file=sys.stderr)
         return 1
     print("OK")
+
+    # Local timezone drives reset-boundary detection in the sum rebuild.
+    tz = await ws.get_timezone()
 
     # Discover serials
     all_meta = await ws.list_statistic_ids()
@@ -830,13 +1349,30 @@ async def run(args: argparse.Namespace) -> int:
 
     # Execute
     results: list[MigrationResult] = []
-    for idx, (givtcp_id, ge_id, desc, unit, warn, resolved) in enumerate(plan):
+    units_by_id: dict[str, str | None] = {}
+    # Authoritative reset cadence per target, straight from the plan — used by the
+    # residue-repair walk instead of re-deriving from the (renameable) ge_id.
+    reset_classes = {ge_id: reset_class for (_, ge_id, _, _, _, reset_class, _) in plan}
+    for idx, (givtcp_id, ge_id, desc, unit, warn, reset_class, resolved) in enumerate(plan):
+        units_by_id[ge_id] = unit
         verb = "Applying" if applying else "Previewing"
         print(f"  {verb}: {desc} …", end=" ", flush=True)
         # `resolved` (registry recognition), not recorder presence, is what makes
         # a target real — so an orphan from a prior broken run is never written.
         r = await migrate_entity(
-            ws, givtcp_id, ge_id, desc, cutover, unit, applying, resolved, warn
+            ws,
+            givtcp_id,
+            ge_id,
+            desc,
+            cutover,
+            unit,
+            applying,
+            resolved,
+            reset_class,
+            tz,
+            args.trust_source_sums,
+            warn,
+            max_kwh=args.max_kw,
         )
         results.append(r)
         print(r.status)
@@ -844,9 +1380,32 @@ async def run(args: argparse.Namespace) -> int:
         if applying and idx < len(plan) - 1:
             await asyncio.sleep(_ENTITY_PAUSE_SECONDS)
 
+    summary_code = _print_summary(results, applying)
+
+    # Read-only validation of the resulting sum series, in both dry-run and apply.
+    # Residue repair only fires when the user opted in with --apply --repair-residue.
+    validation_exit = await run_validation(
+        ws,
+        results,
+        tz,
+        units_by_id=units_by_id,
+        reset_classes=reset_classes,
+        repair=applying and args.repair_residue,
+        applied=applying,
+        max_kwh=args.max_kw,
+    )
+
     await ws.close()
 
-    return _print_summary(results, applying)
+    return max(summary_code, validation_exit)
+
+
+def _positive_float(value: str) -> float:
+    """argparse type: a strictly positive float (for --max-kw)."""
+    f = float(value)
+    if not math.isfinite(f) or f <= 0:
+        raise argparse.ArgumentTypeError("must be a positive, finite number of kW")
+    return f
 
 
 def main() -> None:
@@ -894,6 +1453,36 @@ def main() -> None:
             "Also migrate ac_charge_energy_total_kwh → charge_from_grid_total. "
             "⚠️  These sensors read different register blocks on some inverters — "
             "inspect the imported values in the Energy dashboard afterwards."
+        ),
+    )
+    p.add_argument(
+        "--trust-source-sums",
+        action="store_true",
+        help=(
+            "Copy GivTCP's sum column verbatim and rebase at the join, instead of "
+            "rebuilding sums from state. Use only if your GivTCP sums are known-good."
+        ),
+    )
+    p.add_argument(
+        "--max-kw",
+        type=_positive_float,
+        default=None,
+        metavar="KW",
+        help=(
+            "Upper bound on a plausible hourly energy change, in kW (= kWh per "
+            "hour), applied to every migrated counter. Set it above the largest "
+            "legitimate hourly delta any of your counters can see — grid import "
+            "and battery charging can exceed your inverter's PV output. Must be "
+            "positive. Caps the adaptive ceiling and lets entities with too little "
+            "history to self-estimate still rebuild safely."
+        ),
+    )
+    p.add_argument(
+        "--repair-residue",
+        action="store_true",
+        help=(
+            "After validation, clear + re-import the rebuilt series for entities "
+            "with residual implausible hours. Off by default (report only)."
         ),
     )
     args = p.parse_args()

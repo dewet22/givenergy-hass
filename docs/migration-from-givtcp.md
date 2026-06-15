@@ -394,13 +394,44 @@ Home Assistant's long-term statistics live in the recorder DB (SQLite/MariaDB/Po
 
 ### Things to get right
 
-1. **Sum-column rebase.** For `total_increasing` energy sensors, HA stores both `state` (instantaneous meter reading) and `sum` (cumulative integral, with monotonicity resets). Naively swapping `metadata_id` produces a visual cliff in the Energy dashboard. The migration must rebase the new sensor's `sum` so it continues from where the old one left off.
+1. **Sum reconstruction.** For `total_increasing` energy sensors, HA stores both `state` (instantaneous meter reading) and `sum` (cumulative integral, with monotonicity resets). Naively swapping `metadata_id` produces a visual cliff in the Energy dashboard. By default the migration no longer copies GivTCP's `sum` and rebases it at the join — it rebuilds the sum from `state` across the whole timeline (see [Sum reconstruction](#sum-reconstruction-rebuild-by-default) below), eliminating the seam. `--trust-source-sums` restores the copy-and-rebase behaviour for known-good source sums.
 2. **Unit alignment.** All verified pairs above use `kWh`. Older GivTCP versions reported some sensors in `Wh` — the migration tool must check `statistics_meta.unit_of_measurement` and either match or scale.
 3. **Backend coverage.** The schema is identical across SQLite/MariaDB/Postgres but quoting and transaction handling differ.
 4. **Overlap handling.** If both integrations were running in parallel during a cutover window, the user needs to choose a rule: prefer-old, prefer-new, or refuse-and-flag.
 5. **Reversibility.** Backup the recorder DB before any write. Dry-run mode that prints the planned diff is mandatory.
 6. **Multi-inverter / multi-battery.** Iterate per serial; serials are extracted from existing `statistic_id`s, not hard-coded.
 7. **Firmware-aware register order.** Per `givenergy-modbus/model/gateway.py`, AIO gateway energy-total registers swap high/low order between GA000009 and GA000010 firmware. Direct register-level migrations need to know which gateway firmware the user has — the entity-level approach used here side-steps this because both integrations already account for it.
+
+The behaviour built for points 1, 4 and 5 is detailed below; the full design rationale lives in [`docs/superpowers/specs/2026-06-14-givtcp-migration-stats-repair-design.md`](superpowers/specs/2026-06-14-givtcp-migration-stats-repair-design.md) (issue #162).
+
+### Sum reconstruction (rebuild by default)
+
+The historical pain point with re-pointing `metadata_id` was the join: GivTCP's `sum` and givenergy_local's `sum` are two independently-accumulated integrals, and stitching them produced cliffs, double-counting, or fake resets wherever the two series disagreed at the cut-over.
+
+Rather than copy GivTCP's `sum` and shift it to meet the GE series at the join, the migration now **rebuilds the sum from `state`**. It concatenates the `state` timeline — GivTCP rows strictly before the cut-over, givenergy_local rows from the cut-over onward — and walks it once, accumulating a single continuous `sum`. There is no seam to rebase because there is only ever one running total.
+
+The walk is guarded so source glitches do not leak into the rebuilt curve:
+
+- **Plausibility ceiling.** An adaptive, per-entity ceiling (derived from the robust spread of that entity's own hourly `state` deltas) caps how much the sum may advance in one hour. A delta above the ceiling is treated as a fake spike and the last good value is held.
+- **Reset awareness.** A *decrease* in `state` is only accepted as a genuine counter reset at that counter's natural boundary — `_today` (DAILY) sensors at local midnight, `_this_year` (ANNUAL) sensors at the year boundary, `_total` (LIFETIME) sensors never. An off-boundary drop is treated as corruption and the last good value is held.
+- **Gaps.** A missing `state` carries the running total forward rather than resetting it.
+
+Holding the last good value (both `state` and `sum`) means a transient zero or spike is absorbed: the recovery is measured against the last *trusted* reading, so it lands as a small accepted delta instead of booking the bogus jump.
+
+`--trust-source-sums` opts out of all of this and restores the legacy path: copy GivTCP's `sum` column verbatim and rebase it once at the join so it continues from where GivTCP left off. Use it only when the source sums are known to be clean — it reintroduces the seam-at-join semantics the rebuild was written to avoid.
+
+### Post-migration validation and residue repair
+
+After the migration plan is built — in both dry-run and `--apply` — the script re-reads each migrated sum series and prints a read-only **validation report**. It flags:
+
+- residual implausible hours (a sum jump still above the entity's ceiling),
+- fake-reset shapes (a near-zero dip followed by an implausible recovery),
+- duplicate series (two `statistic_id`s carrying the same values), and
+- gaps in coverage.
+
+The script exits non-zero when it finds substantive issues (implausible hours, fake resets, duplicates); gaps are reported for information only and do not change the exit code.
+
+`--repair-residue` (only meaningful together with `--apply`) acts on those findings: for any sum entity still showing implausible hours, it clears and re-imports the rebuilt series. It is off by default — without it the report is purely advisory.
 
 ### `battery_*_total_kwh` (charge/discharge) — open question
 

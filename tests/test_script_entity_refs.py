@@ -13,6 +13,7 @@ import importlib.util
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
+from zoneinfo import ZoneInfo
 
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -50,8 +51,10 @@ class _FakeWS:
 
     def __init__(self, series: dict[str, list[dict]]) -> None:
         self._series = series
+        self.calls: list[dict] = []
 
-    async def get_statistics(self, ids, start, end=None):  # noqa: ANN001 - mirrors real sig
+    async def get_statistics(self, ids, start, end=None, types=None):  # noqa: ANN001 - mirrors real sig
+        self.calls.append({"ids": list(ids), "types": types})
         return {i: self._series.get(i, []) for i in ids}
 
 
@@ -239,6 +242,7 @@ async def test_migrate_resolver_maps_area_prefixed_ids(hass, setup_integration):
 _CUTOVER = datetime(2026, 6, 7, tzinfo=UTC)
 _GIVTCP = "sensor.givtcp_x_pv_energy_today_kwh"
 _GE = "sensor.givenergy_inverter_x_pv_energy_today"
+_TZ = ZoneInfo("Europe/London")
 
 
 def test_systemic_resolution_failure_uses_registry_recognition():
@@ -251,9 +255,18 @@ def test_systemic_resolution_failure_uses_registry_recognition():
     only on the plan's registry-recognition flag, never consults).
     """
     mod = _load_migrate_module()
-    # plan tuple: (givtcp_id, ge_id, desc, unit, warn, resolved)
-    recognised = ("sensor.givtcp_x_import", "sensor.loft_x_import", "Import", "kWh", False, True)
-    unresolved = ("sensor.givtcp_x_pv", "sensor.ge_x_pv", "PV", "kWh", False, False)
+    # plan tuple: (givtcp_id, ge_id, desc, unit, warn, reset_class, resolved)
+    rc = mod.ResetClass.LIFETIME
+    recognised = (
+        "sensor.givtcp_x_import",
+        "sensor.loft_x_import",
+        "Import",
+        "kWh",
+        False,
+        rc,
+        True,
+    )
+    unresolved = ("sensor.givtcp_x_pv", "sensor.ge_x_pv", "PV", "kWh", False, rc, False)
 
     # At least one target recognised -> not systemic -> no abort.
     assert mod._systemic_resolution_failure([recognised, unresolved]) == []
@@ -272,7 +285,17 @@ async def test_migrate_entity_refuses_unknown_ge_target():
     mod = _load_migrate_module()
     ws = _FakeWS({_GIVTCP: [_stat_row(datetime(2026, 6, 5, tzinfo=UTC), 100.0)]})
     r = await mod.migrate_entity(
-        ws, _GIVTCP, _GE, "Solar generation today", _CUTOVER, "kWh", False, ge_known=False
+        ws,
+        _GIVTCP,
+        _GE,
+        "Solar generation today",
+        _CUTOVER,
+        "kWh",
+        False,
+        ge_known=False,
+        reset_class=mod.ResetClass.DAILY,
+        tz=_TZ,
+        trust_source_sums=False,
     )
     assert r.status == "ge_not_found"
 
@@ -293,11 +316,29 @@ async def test_migrate_entity_dry_run_with_overlap():
         }
     )
     r = await mod.migrate_entity(
-        ws, _GIVTCP, _GE, "Solar generation today", _CUTOVER, "kWh", False, ge_known=True
+        ws,
+        _GIVTCP,
+        _GE,
+        "Solar generation today",
+        _CUTOVER,
+        "kWh",
+        False,
+        ge_known=True,
+        reset_class=mod.ResetClass.DAILY,
+        tz=_TZ,
+        trust_source_sums=False,
+        max_kwh=50.0,  # sparse fixture (< min samples) needs a cap to rebuild
     )
     assert r.status == "dry_run"
     assert (r.ge_pre_rows, r.ge_post_rows) == (1, 1)
     assert r.warn_no_ge_pre is False
+    # The sum path must read the default sum/state series — it must NOT request
+    # mean/min/max (that's the mean path's contract). get_statistics passes no
+    # `types`, so every recorded call has types=None; assert the sum path never
+    # asked for mean kinds.
+    assert ws.calls, "migrate_entity made no get_statistics calls"
+    assert all(c["types"] is None for c in ws.calls)
+    assert all(c["types"] != ["mean", "min", "max"] for c in ws.calls)
 
 
 async def test_migrate_entity_flags_missing_overlap():
@@ -310,8 +351,96 @@ async def test_migrate_entity_flags_missing_overlap():
         }
     )
     r = await mod.migrate_entity(
-        ws, _GIVTCP, _GE, "Solar generation today", _CUTOVER, "kWh", False, ge_known=True
+        ws,
+        _GIVTCP,
+        _GE,
+        "Solar generation today",
+        _CUTOVER,
+        "kWh",
+        False,
+        ge_known=True,
+        reset_class=mod.ResetClass.DAILY,
+        tz=_TZ,
+        trust_source_sums=False,
+        max_kwh=50.0,  # sparse fixture (< min samples) needs a cap to rebuild
     )
     assert r.status == "dry_run"
     assert r.ge_pre_rows == 0
     assert r.warn_no_ge_pre is True
+
+
+async def test_migrate_entity_insufficient_data_without_cap():
+    """Sparse GivTCP data and no --max-kw cap must yield insufficient_data.
+
+    With too few clean deltas to self-estimate a plausibility ceiling and no hard
+    cap to fall back on, migrate_entity fails closed rather than importing an
+    unguarded sum.
+    """
+    mod = _load_migrate_module()
+    ws = _FakeWS(
+        {
+            _GIVTCP: [
+                _stat_row(datetime(2026, 6, 5, tzinfo=UTC), 100.0),
+                _stat_row(datetime(2026, 6, 6, tzinfo=UTC), 110.0),
+            ],
+            _GE: [
+                _stat_row(datetime(2026, 6, 7, 1, tzinfo=UTC), 6.0),
+            ],
+        }
+    )
+    r = await mod.migrate_entity(
+        ws,
+        _GIVTCP,
+        _GE,
+        "Solar generation today",
+        _CUTOVER,
+        "kWh",
+        False,
+        ge_known=True,
+        reset_class=mod.ResetClass.DAILY,
+        tz=_TZ,
+        trust_source_sums=False,
+        max_kwh=None,
+    )
+    assert r.status == "insufficient_data"
+
+
+async def test_migrate_entity_trust_source_sums_legacy_path():
+    """trust_source_sums=True copies GivTCP sums and rebases GE-post from them.
+
+    The escape hatch (--trust-source-sums flag) must use the GivTCP last sum as
+    the rebase anchor rather than a rebuilt-from-state value, so sum_at_cutover
+    equals the last GivTCP sum row directly.
+    """
+    mod = _load_migrate_module()
+    ws = _FakeWS(
+        {
+            _GIVTCP: [
+                _stat_row(datetime(2026, 6, 5, tzinfo=UTC), 100.0),
+                _stat_row(datetime(2026, 6, 6, tzinfo=UTC), 115.0),
+            ],
+            _GE: [
+                _stat_row(datetime(2026, 6, 5, tzinfo=UTC), 5.0),
+                _stat_row(datetime(2026, 6, 7, 1, tzinfo=UTC), 6.0),
+            ],
+        }
+    )
+    r = await mod.migrate_entity(
+        ws,
+        _GIVTCP,
+        _GE,
+        "Solar generation today",
+        _CUTOVER,
+        "kWh",
+        False,
+        ge_known=True,
+        reset_class=mod.ResetClass.DAILY,
+        tz=_TZ,
+        trust_source_sums=True,
+    )
+    assert r.status == "dry_run"
+    # Legacy path: sum_at_cutover is exactly the last GivTCP sum row, not a
+    # state-derived figure.
+    assert r.sum_at_cutover == 115.0
+    # merged = 2 givtcp rows + 1 ge_post row (the pre-cutover GE row is dropped)
+    assert r.merged_rows == 3
