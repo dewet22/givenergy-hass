@@ -277,3 +277,31 @@ def test_repairable_mean_entity_excluded_when_units_by_id_empty():
     mod = _load_migrate_module()
     implausible = [{"start": "2026-05-20T13:00:00+00:00", "change": 99999.0}]
     assert mod._repairable("sensor.ge_pv_power", {}, implausible) is False
+
+
+def test_acceptance_rebuild_heals_documented_corruption():
+    """Reproduce the LTS-report shapes and assert rebuild + validation handle them.
+
+    Shapes covered (from .remember/lts-corruption-report-2026-06-12.md):
+      - genuine steady climb on a lifetime counter
+      - an off-midnight zero-read + recovery (held, not double-counted)
+      - a +27,396 kWh fake-reset spike (rejected)
+    """
+    rc = _MOD.ResetClass
+    rows = [
+        {"start": "2026-06-07T13:00:00+00:00", "state": 1000.0},
+        {"start": "2026-06-07T14:00:00+00:00", "state": 1003.0},
+        {"start": "2026-06-07T15:00:00+00:00", "state": 0.0},  # zero-read
+        {"start": "2026-06-07T16:00:00+00:00", "state": 27396.1},  # fake spike/recovery
+        {"start": "2026-06-07T17:00:00+00:00", "state": 1006.0},  # back to reality
+    ]
+    ceiling = _MOD.adaptive_ceiling([3.0, 2.0, 4.0, 3.0, 2.5] * 20)
+    out = _MOD.rebuild_sum_walk(rows, rc.LIFETIME, ceiling, _LONDON)
+    sums = [r["sum"] for r in out]
+    # Monotonic non-decreasing, and no +50 jump anywhere.
+    assert sums == sorted(sums)
+    assert max(b - a for a, b in zip(sums, sums[1:])) < 50.0
+    # Final sum reflects only genuine accumulation (1000 -> ~1006), not the spike.
+    assert sums[-1] < 1010.0
+    # Validation on the rebuilt series finds nothing implausible.
+    assert _MOD.find_implausible_hours(out, ceiling) == []
