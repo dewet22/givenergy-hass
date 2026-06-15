@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import importlib.util
 from pathlib import Path
 from types import ModuleType
 from zoneinfo import ZoneInfo
+
+import pytest
 
 _MIGRATE_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "migrate_from_givtcp.py"
 
@@ -425,3 +428,15 @@ def test_acceptance_rebuild_heals_documented_corruption():
     out_states = [r["state"] for r in out]
     assert 0.0 not in out_states  # the zero-read was overwritten with last-good
     assert 27396.1 not in out_states  # the fake spike was overwritten too
+
+
+def test_positive_float_accepts_positive():
+    assert _MOD._positive_float("6") == 6.0
+    assert _MOD._positive_float("0.5") == 0.5
+
+
+def test_positive_float_rejects_zero_and_negative():
+    with pytest.raises(argparse.ArgumentTypeError):
+        _MOD._positive_float("0")
+    with pytest.raises(argparse.ArgumentTypeError):
+        _MOD._positive_float("-3")

@@ -1397,6 +1397,14 @@ async def run(args: argparse.Namespace) -> int:
     return max(summary_code, validation_exit)
 
 
+def _positive_float(value: str) -> float:
+    """argparse type: a strictly positive float (for --max-kw)."""
+    f = float(value)
+    if f <= 0:
+        raise argparse.ArgumentTypeError("must be a positive number of kW")
+    return f
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         description="Migrate GivTCP long-term energy statistics to givenergy_local.",
@@ -1454,13 +1462,16 @@ def main() -> None:
     )
     p.add_argument(
         "--max-kw",
-        type=float,
+        type=_positive_float,
         default=None,
         metavar="KW",
         help=(
-            "Your inverter's peak output in kW. Hourly energy deltas above this "
-            "are treated as implausible — it caps the adaptive ceiling and lets "
-            "entities with too little history to self-estimate still rebuild safely."
+            "Upper bound on a plausible hourly energy change, in kW (= kWh per "
+            "hour), applied to every migrated counter. Set it above the largest "
+            "legitimate hourly delta any of your counters can see — grid import "
+            "and battery charging can exceed your inverter's PV output. Must be "
+            "positive. Caps the adaptive ceiling and lets entities with too little "
+            "history to self-estimate still rebuild safely."
         ),
     )
     p.add_argument(
