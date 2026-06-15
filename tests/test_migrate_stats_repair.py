@@ -47,9 +47,44 @@ def test_adaptive_ceiling_no_positive_deltas_returns_none():
 
 
 def test_adaptive_ceiling_below_min_samples_returns_none():
-    # Sparse data: too few positive deltas for a robust MAD estimate. Returning a
-    # value here would let the median/MAD bless an order-of-magnitude spike.
+    # Sparse data: too few positive deltas. Returning a value here would let the
+    # p99 estimate bless an order-of-magnitude spike.
     assert _MOD.adaptive_ceiling([1.0, 9900.0]) is None
+
+
+def test_percentile_floor():
+    vals = [1.0, 2.0, 3.0, 4.0]
+    assert _MOD._percentile(vals, 50) == 2.0
+    assert _MOD._percentile(vals, 0) == 1.0
+    assert _MOD._percentile(vals, 100) == 4.0
+
+
+def test_adaptive_ceiling_small_n_single_outlier_rejected():
+    # 23 genuine deltas (<=6) + 1 huge outlier = 24 positive (the min-samples floor).
+    # Floor-index p99 must land on a genuine value, so the outlier is rejected.
+    genuine = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0] + [3.0] * 17
+    ceiling = _MOD.adaptive_ceiling(genuine + [27000.0])
+    assert ceiling is not None
+    assert ceiling < 27000.0  # outlier rejected, not blessed
+    assert ceiling >= 6.0  # genuine peak still passes
+
+
+def test_apply_requires_cap_logic():
+    assert _MOD._apply_requires_cap(True, None) is True
+    assert _MOD._apply_requires_cap(True, 6.0) is False
+    assert _MOD._apply_requires_cap(False, None) is False
+
+
+def test_adaptive_ceiling_tolerates_diurnal_peaks_rejects_fakes():
+    """Realistic diurnal distribution: many overnight lows plus genuine peaks,
+    plus a couple of huge fakes. Genuine peaks (<=6 kWh/h) must pass; the
+    order-of-magnitude fakes (27k) must be rejected."""
+    diurnal = ([0.1, 0.2, 0.3, 0.5, 0.7] * 40) + ([3.0, 4.0, 5.0, 6.0] * 20) + [27396.1, 29724.7]
+    ceiling = _MOD.adaptive_ceiling(diurnal)
+    assert ceiling is not None
+    assert ceiling >= 6.0  # genuine midday/evening peaks (<=6) are NOT flagged
+    assert ceiling < 50.0  # but the order-of-magnitude fakes are
+    assert 27396.1 > ceiling and 6.0 <= ceiling
 
 
 def test_effective_ceiling_both_none_is_none():
@@ -64,9 +99,11 @@ def test_effective_ceiling_no_cap_uses_adaptive():
     assert _MOD.effective_ceiling(42.0, None) == 42.0
 
 
-def test_effective_ceiling_both_takes_min():
+def test_effective_ceiling_cap_takes_precedence():
+    # The user-declared cap is authoritative — used directly, even when the
+    # adaptive estimate is lower (which would otherwise flatten genuine peaks).
     assert _MOD.effective_ceiling(42.0, 7.0) == 7.0
-    assert _MOD.effective_ceiling(7.0, 42.0) == 7.0
+    assert _MOD.effective_ceiling(7.0, 42.0) == 42.0
 
 
 def test_reset_boundary_daily_local_midnight():

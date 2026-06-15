@@ -32,7 +32,8 @@ Typical workflow:
         --ha-url http://homeassistant.local:8123 \\
         --token eyJhbGc... \\
         --cutover 2024-10-31 \\
-        --apply
+        --apply \\
+        --max-kw 10
 
 The cut-over date is the boundary between GivTCP and givenergy_local history.
 GivTCP data strictly before midnight on that date is migrated; givenergy_local
@@ -45,12 +46,14 @@ when GivTCP actually stopped.
 Sum reconstruction (default): rather than copy GivTCP's `sum` column and rebase
 it at the join, the script concatenates the `state` timeline across the cut-over
 and walks it once to produce a single continuous `sum`. This removes the join
-seam entirely. The walk is plausibility-guarded (an adaptive per-entity ceiling
-rejects fake spikes) and reset-aware: a decrease in `state` only counts as a
-legitimate counter reset at that counter's natural boundary — `_today` sensors at
-local midnight, `_this_year` sensors at the year boundary, `_total` sensors never.
-Off-boundary drops and over-ceiling spikes hold the last good value instead of
-booking the bogus jump.
+seam entirely. The walk is plausibility-guarded and reset-aware: a decrease in
+`state` only counts as a legitimate counter reset at that counter's natural
+boundary — `_today` sensors at local midnight, `_this_year` sensors at the year
+boundary, `_total` sensors never. Off-boundary drops and over-ceiling spikes hold
+the last good value instead of booking the bogus jump. The plausibility ceiling is
+the user-declared --max-kw value (used directly as the authoritative bound under
+--apply) with the adaptive per-entity p99 estimate as the fallback for dry-run
+previews where no cap is given.
 
 Pass --trust-source-sums to restore the legacy behaviour (copy GivTCP's sum
 column verbatim and rebase at the join) for installs whose GivTCP sums are
@@ -105,7 +108,6 @@ import asyncio
 import json
 import math
 import re
-import statistics
 import sys
 from collections import Counter
 from collections.abc import Callable
@@ -297,50 +299,54 @@ def classify_entity(ge_suffix: str) -> ResetClass:
 # Adaptive plausibility ceiling
 # ---------------------------------------------------------------------------
 
-# Multiplier on the (normal-scaled) MAD for the plausibility ceiling. Tuned so
-# genuine inverter-clip hours pass while order-of-magnitude fake spikes are
-# rejected; pinned by the LTS-fixture acceptance test.
-_CEILING_MAD_K = 8.0
-
-# Minimum positive-delta samples before a MAD-based ceiling is trusted. A day of
-# hourly points is a defensible floor for a robust estimate; below it the
-# median/MAD are too easily skewed (sparse data like [1, 9900] yields a ceiling
-# high enough to bless the spike). Fewer than this and adaptive_ceiling refuses.
 _CEILING_MIN_SAMPLES = 24
+_CEILING_PERCENTILE = 99.0
+_CEILING_FACTOR = 1.5
+
+
+def _percentile(sorted_vals: list[float], p: float) -> float:
+    """Nearest-rank (floor-index) percentile of an ascending-sorted, non-empty
+    list. Uses the floor index rather than linear interpolation so a single
+    order-of-magnitude outlier near the top cannot drag the percentile up toward
+    itself on small samples (which would let the spike bless itself through the
+    ceiling)."""
+    return sorted_vals[int((len(sorted_vals) - 1) * p / 100.0)]
 
 
 def adaptive_ceiling(deltas: list[float | None]) -> float | None:
-    """Robust per-hour ceiling from an entity's positive state-deltas.
+    """Per-hour plausibility ceiling from an entity's positive state-deltas.
 
-    Uses median + K * 1.4826 * MAD over the positive, finite deltas. Both the
-    median and the MAD are resistant to a handful of giant outliers, so the
-    bound reflects genuine hourly behaviour even on a heavily corrupted series.
-    Returns None when there are fewer than ``_CEILING_MIN_SAMPLES`` positive
-    deltas to anchor on (this also covers the empty case) — the caller then
-    cannot self-estimate a guard and must fail closed or rely on a hard cap.
+    Genuine hourly deltas are bounded by the hardware (inverter clip, battery
+    subsystem rate); corruption sits orders of magnitude higher as a tiny (<1%)
+    tail. The 99th percentile tracks the real physical limit without being pulled
+    up by the rare fakes; the 1.5x factor adds headroom for legitimate peaks
+    while still rejecting order-of-magnitude spikes. Returns None below
+    _CEILING_MIN_SAMPLES (and on empty) so the caller fails closed rather than
+    guessing a bound from too little data.
     """
     pos = sorted(d for d in deltas if d is not None and d > 0)
     if len(pos) < _CEILING_MIN_SAMPLES:
         return None
-    median = statistics.median(pos)
-    mad = statistics.median([abs(d - median) for d in pos])
-    spread = mad if mad > 0 else median
-    return median + _CEILING_MAD_K * 1.4826 * spread
+    return _percentile(pos, _CEILING_PERCENTILE) * _CEILING_FACTOR
+
+
+def _apply_requires_cap(apply: bool, max_kw: float | None) -> bool:
+    """True when an --apply run is missing the required --max-kw bound."""
+    return apply and max_kw is None
 
 
 def effective_ceiling(adaptive: float | None, cap: float | None) -> float | None:
-    """Combine the adaptive estimate with an optional user-supplied hard cap.
+    """The ceiling the rebuild/validation guards against.
 
-    None means 'cannot guard' (refuse). cap bounds an inflated adaptive ceiling
-    and rescues sparse-data entities that have no adaptive estimate.
-    """
-    if adaptive is None and cap is None:
-        return None
-    if adaptive is None:
+    A user-declared cap (--max-kw) is the trusted bound and takes PRECEDENCE:
+    deltas up to it are legitimate by the user's declaration, so the rebuild
+    must not flatten them — even where the adaptive p99 estimate would sit lower.
+    The adaptive estimate is only the fallback when no cap is given (the dry-run
+    preview/report path; --apply requires --max-kw, so its rebuild always uses
+    the user-declared bound)."""
+    if cap is not None:
         return cap
-    if cap is None:
-        return adaptive
-    return min(adaptive, cap)
+    return adaptive
 
 
 # ---------------------------------------------------------------------------
@@ -1241,6 +1247,17 @@ async def run(args: argparse.Namespace) -> int:
     print(f"Mode           : {mode}")
     print()
 
+    if _apply_requires_cap(applying, args.max_kw):
+        print(
+            "\n  ✋ --apply requires --max-kw. The destructive rebuild needs a "
+            "trusted upper bound on a plausible hourly delta (kW) — the adaptive "
+            "ceiling alone can be skewed by heavy corruption. Run a dry-run first "
+            "to see the plan, then re-run with --apply --max-kw <kW above your "
+            "largest legitimate hourly delta across all counters>.",
+            file=sys.stderr,
+        )
+        return 2
+
     print("Connecting …", end=" ", flush=True)
     ws = HAWebSocket(args.ha_url, args.token)
     try:
@@ -1443,7 +1460,8 @@ def main() -> None:
         action="store_true",
         help=(
             "Write changes to Home Assistant. Without this flag the script runs in "
-            "dry-run mode and prints a preview without modifying anything."
+            "dry-run mode and prints a preview without modifying anything. "
+            "Requires --max-kw."
         ),
     )
     p.add_argument(
@@ -1469,12 +1487,13 @@ def main() -> None:
         default=None,
         metavar="KW",
         help=(
-            "Upper bound on a plausible hourly energy change, in kW (= kWh per "
-            "hour), applied to every migrated counter. Set it above the largest "
-            "legitimate hourly delta any of your counters can see — grid import "
-            "and battery charging can exceed your inverter's PV output. Must be "
-            "positive. Caps the adaptive ceiling and lets entities with too little "
-            "history to self-estimate still rebuild safely."
+            "Maximum legitimate hourly energy change, in kW (= kWh per hour), "
+            "applied to every migrated counter. Set it above the largest hourly "
+            "delta any of your counters can see — grid import and battery charging "
+            "can exceed your inverter's PV output. Under --apply this value is "
+            "used directly as the authoritative rebuild bound (the adaptive p99 "
+            "estimate is only the dry-run fallback). Must be positive. Required "
+            "with --apply."
         ),
     )
     p.add_argument(
