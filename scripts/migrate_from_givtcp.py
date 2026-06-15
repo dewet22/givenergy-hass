@@ -1042,6 +1042,13 @@ class MigrationResult:
         "merged_rows",
         "sum_at_cutover",
         "error",
+        "rebuilt_rows",
+        "events",
+        "source_movement",
+        "upward_offsets",
+        "post_movement",
+        "ge_post_movement",
+        "metadata",
     )
 
     def __init__(self, description: str, ge_id: str, warn_diverged: bool = False) -> None:
@@ -1056,6 +1063,14 @@ class MigrationResult:
         self.merged_rows = 0
         self.sum_at_cutover: float | None = None
         self.error: str | None = None
+        # Candidate payload (built in migrate_entity, written in Phase B).
+        self.rebuilt_rows: list[dict[str, Any]] | None = None
+        self.events: dict[str, list] | None = None
+        self.source_movement: float = 0.0
+        self.upward_offsets: float = 0.0
+        self.post_movement: float = 0.0
+        self.ge_post_movement: float = 0.0
+        self.metadata: dict[str, Any] | None = None
 
 
 _EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
@@ -1116,12 +1131,23 @@ async def migrate_entity(
     # but worth surfacing — flag it without blocking.
     r.warn_no_ge_pre = r.ge_pre_rows == 0
 
+    metadata = {
+        "has_mean": False,
+        "has_sum": True,
+        "name": None,
+        "source": "recorder",
+        "statistic_id": ge_id,
+        "unit_of_measurement": ge_unit,
+    }
+
     if trust_source_sums:
         # Legacy path: copy GivTCP sums + rebase GE-post (unchanged behaviour).
         last_givtcp_sum = givtcp_stats[-1].get("sum") or 0.0
         r.sum_at_cutover = last_givtcp_sum
         rebased_post = rebase_sum(ge_post, last_givtcp_sum)
         merged = givtcp_stats + rebased_post
+        r.rebuilt_rows = merged
+        r.metadata = metadata
     else:
         # Rebuild path (default): one continuous sum from the concatenated state
         # timeline, plausibility- and reset-guarded.
@@ -1142,34 +1168,26 @@ async def migrate_entity(
             # refuse rather than import an unguarded sum.
             r.status = "insufficient_data"
             return r
-        merged = rebuild_sum_walk(merged_states, reset_class, ceiling, tz)
+        events: dict[str, list] = {}
+        merged = rebuild_sum_walk(merged_states, reset_class, ceiling, tz, events=events)
+        r.rebuilt_rows = merged
+        r.events = events
+        # reset-aware source movement over the pre-cutover window, the UPWARD
+        # offsets the rebuild suppressed (cleaned comparison), and the rebuilt
+        # movement over the post-cutover window (GE-preservation check)
+        pre = [s for s in merged_states if _to_utc(s["start"]) < cutover]
+        r.source_movement = _reset_aware_movement(pre, reset_class, tz)
+        r.upward_offsets = sum(e["offset"] for e in events.get("rebaseline", []) if e["offset"] > 0)
+        post = [s for s in merged if _to_utc(s["start"]) >= cutover]
+        r.post_movement = _reset_aware_movement(post, reset_class, tz)
+        # original GE rows over the SAME post-cutover window, for preservation check
+        r.ge_post_movement = _reset_aware_movement(ge_post, reset_class, tz)
         r.sum_at_cutover = next(
             (row["sum"] for row in merged if _to_utc(row["start"]) >= cutover), None
         )
+        r.metadata = metadata
     r.merged_rows = len(merged)
-
-    if not apply:
-        r.status = "dry_run"
-        return r
-
-    try:
-        await ws.clear_statistics([ge_id])
-        await ws.import_statistics(
-            metadata={
-                "has_mean": False,
-                "has_sum": True,
-                "name": None,
-                "source": "recorder",
-                "statistic_id": ge_id,
-                "unit_of_measurement": ge_unit,
-            },
-            stats=merged,
-        )
-        r.status = "migrated"
-    except Exception as exc:
-        r.status = "error"
-        r.error = str(exc)
-
+    r.status = "candidate"  # built, not yet validated/written
     return r
 
 

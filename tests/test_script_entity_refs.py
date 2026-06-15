@@ -329,9 +329,13 @@ async def test_migrate_entity_dry_run_with_overlap():
         trust_source_sums=False,
         max_kwh=50.0,  # sparse fixture (< min samples) needs a cap to rebuild
     )
-    assert r.status == "dry_run"
+    assert r.status == "candidate"
     assert (r.ge_pre_rows, r.ge_post_rows) == (1, 1)
     assert r.warn_no_ge_pre is False
+    # The candidate carries the rebuilt rows and an events dict (no write yet).
+    assert r.rebuilt_rows, "rebuild path must populate rebuilt_rows"
+    assert r.events is not None
+    assert r.metadata and r.metadata["statistic_id"] == _GE
     # The sum path must read the default sum/state series — it must NOT request
     # mean/min/max (that's the mean path's contract). get_statistics passes no
     # `types`, so every recorded call has types=None; assert the sum path never
@@ -364,7 +368,7 @@ async def test_migrate_entity_flags_missing_overlap():
         trust_source_sums=False,
         max_kwh=50.0,  # sparse fixture (< min samples) needs a cap to rebuild
     )
-    assert r.status == "dry_run"
+    assert r.status == "candidate"
     assert r.ge_pre_rows == 0
     assert r.warn_no_ge_pre is True
 
@@ -438,9 +442,13 @@ async def test_migrate_entity_trust_source_sums_legacy_path():
         tz=_TZ,
         trust_source_sums=True,
     )
-    assert r.status == "dry_run"
+    assert r.status == "candidate"
     # Legacy path: sum_at_cutover is exactly the last GivTCP sum row, not a
     # state-derived figure.
     assert r.sum_at_cutover == 115.0
     # merged = 2 givtcp rows + 1 ge_post row (the pre-cutover GE row is dropped)
     assert r.merged_rows == 3
+    # trust path builds a candidate too (rows + metadata, no events).
+    assert r.rebuilt_rows and len(r.rebuilt_rows) == 3
+    assert r.events is None
+    assert r.metadata and r.metadata["statistic_id"] == _GE
