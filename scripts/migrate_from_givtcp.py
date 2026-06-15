@@ -611,6 +611,22 @@ def find_implausible_hours(rows: list[dict[str, Any]], ceiling: float) -> list[d
     return flagged
 
 
+def _dedup_series(
+    series_by_id: dict[str, list[dict[str, Any]]],
+    units_by_id: dict[str, str | None],
+) -> dict[str, list[dict[str, Any]]]:
+    """Restrict duplicate detection to sum entities.
+
+    ``find_duplicate_series`` keys on ``(start, sum)``.  Mean entities (power,
+    SOC, temperature) carry no sum, so their rows come back with ``sum=None`` and
+    two genuinely different mean series over the same hours collapse to identical
+    ``(start, None)`` key tuples — a false-positive duplicate.  Only sum entities
+    (those present in ``units_by_id`` — the same signal ``_repairable`` uses) are
+    candidates for duplicate detection.
+    """
+    return {sid: rows for sid, rows in series_by_id.items() if sid in units_by_id}
+
+
 def find_duplicate_series(series_by_id: dict[str, list[dict[str, Any]]]) -> list[tuple[str, str]]:
     """Pairs of statistic ids whose (start, sum) sequences are byte-identical."""
 
@@ -649,7 +665,7 @@ def find_fake_reset_shapes(rows: list[dict[str, Any]], ceiling: float) -> list[d
         a, b, c = rows[i - 2].get("state"), rows[i - 1].get("state"), rows[i].get("state")
         if a is None or b is None or c is None:
             continue
-        if b <= a * 0.05 and (c - b) > ceiling:
+        if a > 0 and b <= a * 0.05 and (c - b) > ceiling:
             shapes.append({"start": rows[i]["start"], "recovery": round(c - b, 3)})
     return shapes
 
@@ -657,14 +673,25 @@ def find_fake_reset_shapes(rows: list[dict[str, Any]], ceiling: float) -> list[d
 def format_validation_report(
     findings: dict[str, dict[str, list]],
     duplicates: list[tuple[str, str]],
+    applied: bool = True,
 ) -> tuple[str, int]:
-    """Render the post-migration validation findings; return (text, exit_code).
+    """Render the validation findings; return (text, exit_code).
 
     exit_code is non-zero when substantive issues exist (implausible hours,
     fake-reset shapes, or duplicate series). Gaps are reported informationally
     and do not affect the exit code.
+
+    ``applied`` distinguishes a post-apply run from a dry-run.  On a dry run the
+    series read back are the *current* (pre-migration) series, so any findings
+    reflect pre-existing corruption rather than migration output — the header
+    says so.
     """
-    lines = ["", "Validation report", "─" * 72]
+    header = (
+        "Validation report (post-migration)"
+        if applied
+        else "Validation report (dry-run: current series)"
+    )
+    lines = ["", header, "─" * 72]
     substantive = False
     for ge_id, f in findings.items():
         impl = f.get("implausible", [])
@@ -1003,6 +1030,7 @@ async def run_validation(
     tz: ZoneInfo,
     units_by_id: dict[str, str | None] | None = None,
     repair: bool = False,
+    applied: bool = True,
 ) -> int:
     """Re-read each migrated/previewed sum series, report validation findings.
 
@@ -1044,8 +1072,8 @@ async def run_validation(
         if repair and _repairable(r.ge_id, units_by_id, implausible):
             to_repair.append(r.ge_id)
 
-    duplicates = find_duplicate_series(series_by_id)
-    text, exit_code = format_validation_report(findings, duplicates)
+    duplicates = find_duplicate_series(_dedup_series(series_by_id, units_by_id))
+    text, exit_code = format_validation_report(findings, duplicates, applied=applied)
     print(text)
 
     if repair and to_repair:
@@ -1423,6 +1451,7 @@ async def run(args: argparse.Namespace) -> int:
         tz,
         units_by_id=units_by_id,
         repair=applying and args.repair_residue,
+        applied=applying,
     )
 
     await ws.close()

@@ -210,6 +210,45 @@ def test_find_duplicate_series_detects_identical():
     assert all("c" not in pair for pair in dupes)
 
 
+def test_dedup_series_excludes_mean_entities():
+    """Two distinct mean series (sum=None, absent from units_by_id) sharing the
+    same start timestamps must NOT be eligible for duplicate detection, while two
+    truly-identical sum series (present in units_by_id) must remain eligible."""
+    # Mean series: identical (start, None) key tuples but genuinely different data.
+    mean_a = [
+        {"start": "t1", "sum": None, "state": 100.0},
+        {"start": "t2", "sum": None, "state": 200.0},
+    ]
+    mean_b = [
+        {"start": "t1", "sum": None, "state": 50.0},
+        {"start": "t2", "sum": None, "state": 25.0},
+    ]
+    # Sum series: byte-identical (start, sum) tuples — genuine duplicates.
+    sum_a = [{"start": "t1", "sum": 1.0}, {"start": "t2", "sum": 2.0}]
+    sum_b = [{"start": "t1", "sum": 1.0}, {"start": "t2", "sum": 2.0}]
+    series_by_id = {
+        "sensor.ge_pv_power": mean_a,
+        "sensor.ge_soc": mean_b,
+        "sensor.ge_pv_energy_today": sum_a,
+        "sensor.ge_pv_energy_today_dup": sum_b,
+    }
+    units_by_id = {
+        "sensor.ge_pv_energy_today": "kWh",
+        "sensor.ge_pv_energy_today_dup": "kWh",
+    }
+    deduped = _MOD._dedup_series(series_by_id, units_by_id)
+    # Mean entities dropped entirely from the dedup candidate set.
+    assert set(deduped) == {"sensor.ge_pv_energy_today", "sensor.ge_pv_energy_today_dup"}
+    dupes = _MOD.find_duplicate_series(deduped)
+    # The two identical sum series ARE flagged …
+    assert ("sensor.ge_pv_energy_today", "sensor.ge_pv_energy_today_dup") in dupes or (
+        "sensor.ge_pv_energy_today_dup",
+        "sensor.ge_pv_energy_today",
+    ) in dupes
+    # … and the two distinct mean series are NOT.
+    assert all("sensor.ge_pv_power" not in pair and "sensor.ge_soc" not in pair for pair in dupes)
+
+
 def test_classify_gaps_marks_contiguous_missing():
     rows = [
         {"start": "2026-05-20T12:00:00+00:00", "state": 1.0},
@@ -230,6 +269,20 @@ def test_find_fake_reset_shapes_detects_drop_then_spike():
     assert shapes and shapes[0]["start"] == "t3"
 
 
+def test_find_fake_reset_shapes_ignores_negative_baseline():
+    """A negative baseline (a < 0) must not invert the `b <= a * 0.05` test and
+    spuriously flag a normal climb as a fake reset."""
+    # With a negative baseline, `b <= a * 0.05` inverts: b=-10 <= -100*0.05=-5
+    # is True, so an unguarded heuristic would falsely flag the t2->t3 climb.
+    rows = [
+        {"start": "t1", "state": -100.0},  # negative baseline
+        {"start": "t2", "state": -10.0},
+        {"start": "t3", "state": 30000.0},  # huge positive
+    ]
+    shapes = _MOD.find_fake_reset_shapes(rows, ceiling=50.0)
+    assert shapes == []
+
+
 def test_format_validation_report_summarises_findings():
     mod = _load_migrate_module()
     findings = {
@@ -239,10 +292,20 @@ def test_format_validation_report_summarises_findings():
             "gaps": [{"after": "a", "before": "b", "hours": 2}],
         }
     }
-    text, exit_code = mod.format_validation_report(findings, duplicates=[("a", "b")])
+    text, exit_code = mod.format_validation_report(findings, duplicates=[("a", "b")], applied=True)
     assert "sensor.x" in text
     assert "27396" in text
     assert exit_code != 0  # substantive findings -> non-zero
+
+
+def test_format_validation_report_header_distinguishes_mode():
+    mod = _load_migrate_module()
+    findings: dict = {}
+    dry_text, _ = mod.format_validation_report(findings, duplicates=[], applied=False)
+    applied_text, _ = mod.format_validation_report(findings, duplicates=[], applied=True)
+    assert "dry-run" in dry_text and "current series" in dry_text
+    assert "post-migration" in applied_text
+    assert "dry-run" not in applied_text
 
 
 # ---------------------------------------------------------------------------
