@@ -703,7 +703,7 @@ def test_format_validation_report_summarises_findings():
             "gaps": [{"after": "a", "before": "b", "hours": 2}],
         }
     }
-    text, exit_code = mod.format_validation_report(findings, duplicates=[("a", "b")], applied=True)
+    text, exit_code = mod.format_validation_report(findings, duplicates=[("a", "b")])
     assert "sensor.x" in text
     assert "27396" in text
     assert exit_code != 0  # substantive findings -> non-zero
@@ -712,9 +712,13 @@ def test_format_validation_report_summarises_findings():
 def test_format_validation_report_header_distinguishes_mode():
     mod = _load_migrate_module()
     findings: dict = {}
-    dry_text, _ = mod.format_validation_report(findings, duplicates=[], applied=False)
-    applied_text, _ = mod.format_validation_report(findings, duplicates=[], applied=True)
+    dry_text, _ = mod.format_validation_report(findings, duplicates=[], mode="dry-run")
+    apply_text, _ = mod.format_validation_report(findings, duplicates=[], mode="candidates")
+    applied_text, _ = mod.format_validation_report(findings, duplicates=[], mode="post-migration")
     assert "dry-run" in dry_text and "current series" in dry_text
+    # Apply mode: not a dry-run, and it's the candidates about to be written.
+    assert "candidates to write" in apply_text
+    assert "dry-run" not in apply_text and "current series" not in apply_text
     assert "post-migration" in applied_text
     assert "dry-run" not in applied_text
 
@@ -940,7 +944,6 @@ def test_run_validation_does_not_reread_ha_for_candidate():
             [r],
             _LONDON,
             units_by_id={"sensor.ge_x": "kWh"},
-            applied=False,
             cutover=late_cutover,
             max_kwh=50.0,
         )
@@ -960,13 +963,11 @@ def test_run_validation_unexplained_flat_is_blocking():
             [r],
             _LONDON,
             units_by_id={"sensor.ge_x": "kWh"},
-            applied=False,
             cutover=_CUTOVER_DT,
             max_kwh=50.0,
         )
     )
     assert blocking is True
-    assert r.ge_id in [k for k in [r.ge_id]]
 
 
 def test_run_validation_flat_covered_by_gap_undercount_not_blocking():
@@ -985,7 +986,6 @@ def test_run_validation_flat_covered_by_gap_undercount_not_blocking():
             [r],
             _LONDON,
             units_by_id={"sensor.ge_x": "kWh"},
-            applied=False,
             cutover=_CUTOVER_DT,
             max_kwh=50.0,
         )
@@ -1009,7 +1009,6 @@ def test_run_validation_long_flat_with_short_covered_gap_still_blocking():
             [r],
             _LONDON,
             units_by_id={"sensor.ge_x": "kWh"},
-            applied=False,
             cutover=_CUTOVER_DT,
             max_kwh=50.0,
         )
@@ -1031,7 +1030,6 @@ def test_run_validation_unresolved_event_is_blocking():
             [r],
             _LONDON,
             units_by_id={"sensor.ge_x": "kWh"},
-            applied=False,
             cutover=_CUTOVER_DT,
             max_kwh=50.0,
         )
@@ -1056,7 +1054,6 @@ def test_run_validation_source_divergence_is_blocking():
             [r],
             _LONDON,
             units_by_id={"sensor.ge_x": "kWh"},
-            applied=False,
             cutover=late_cutover,
             max_kwh=200.0,
         )
@@ -1084,7 +1081,6 @@ def test_run_validation_ge_preservation_divergence_is_blocking():
             [r],
             _LONDON,
             units_by_id={"sensor.ge_x": "kWh"},
-            applied=False,
             cutover=_CUTOVER_DT,
             max_kwh=50.0,
         )
@@ -1092,31 +1088,355 @@ def test_run_validation_ge_preservation_divergence_is_blocking():
     assert blocking is True
 
 
-def test_run_validation_repair_runs_against_candidate():
-    # A candidate with implausible residue + repair=True clears+imports using the
-    # candidate rows, not a re-read.
+def test_apply_residue_repair_mutates_candidate_in_place_no_write():
+    # A candidate with implausible residue is re-walked against the candidate rows
+    # and r.rebuilt_rows is replaced IN PLACE — with NO WebSocket write. Phase B is
+    # the sole writer, so repair must touch neither clear nor import.
     rows = [
         {"start": "2026-05-20T08:00:00+00:00", "sum": 100.0, "state": 100.0},
         {"start": "2026-05-20T09:00:00+00:00", "sum": 27496.0, "state": 27496.0},
         {"start": "2026-05-20T10:00:00+00:00", "sum": 27497.0, "state": 27497.0},
     ]
     r = _candidate("sensor.ge_pv_energy_today", rows, source_movement=0.0)
-    ws = _RecordingWS()
-    asyncio.run(
-        _MOD.run_validation(
-            ws,
+    repaired = asyncio.run(
+        _MOD.apply_residue_repair(
             [r],
+            {"sensor.ge_pv_energy_today": "kWh"},
+            {"sensor.ge_pv_energy_today": _MOD.ResetClass.DAILY},
             _LONDON,
-            units_by_id={"sensor.ge_pv_energy_today": "kWh"},
-            reset_classes={"sensor.ge_pv_energy_today": _MOD.ResetClass.DAILY},
-            repair=True,
-            applied=True,
-            cutover=_CUTOVER_DT,
             max_kwh=50.0,
         )
     )
-    assert ws.clear_calls == [["sensor.ge_pv_energy_today"]]
+    assert repaired == ["sensor.ge_pv_energy_today"]
+    # rows mutated in place: the implausible 27496 spike is gone from the candidate.
+    assert r.rebuilt_rows is not rows
+    assert max(row["sum"] for row in r.rebuilt_rows) < 27496.0
+
+
+# ---------------------------------------------------------------------------
+# Two-phase apply: validate-all-then-write-all-or-abort (Task 9)
+# ---------------------------------------------------------------------------
+
+
+class _ApplyWS:
+    """Fake WS driving run()'s apply path. Records clear/import/get calls and lets
+    a test configure import failures (by ge_id) and the Phase-C read-back."""
+
+    def __init__(
+        self,
+        read_back: dict[str, list[dict]] | None = None,
+        import_fail_on: str | None = None,
+    ) -> None:
+        self.read_back = read_back or {}
+        self.import_fail_on = import_fail_on
+        self.clear_calls: list[list[str]] = []
+        self.import_calls: list[dict] = []
+        self.get_calls: list[list[str]] = []
+        self.closed = False
+
+    async def connect(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def get_timezone(self):
+        return _LONDON
+
+    async def list_statistic_ids(self, statistic_type: str = "sum"):
+        # One inverter serial so run() doesn't bail on "no GivTCP data".
+        return [{"statistic_id": "sensor.givtcp_ab1234c5_pv_energy_today_kwh"}]
+
+    async def list_entity_registry(self):
+        return []
+
+    async def list_device_registry(self):
+        return []
+
+    async def clear_statistics(self, ids):  # noqa: ANN001
+        self.clear_calls.append(list(ids))
+
+    async def import_statistics(self, metadata, stats):  # noqa: ANN001
+        ge_id = metadata["statistic_id"]
+        if self.import_fail_on is not None and ge_id == self.import_fail_on:
+            raise RuntimeError("simulated import failure")
+        self.import_calls.append({"metadata": metadata, "stats": stats})
+
+    async def get_statistics(self, ids, start, end=None, types=None):  # noqa: ANN001
+        self.get_calls.append(list(ids))
+        return {i: self.read_back.get(i, []) for i in ids}
+
+
+def _apply_args() -> argparse.Namespace:
+    return argparse.Namespace(
+        ha_url="ws://test",
+        token="t",
+        cutover="2026-05-20",
+        apply=True,
+        include_charge_from_grid=False,
+        trust_source_sums=False,
+        max_kw=50.0,
+        repair_residue=False,
+    )
+
+
+def _plan_entry(ge_id: str) -> tuple:
+    # (givtcp_id, ge_id, desc, unit, warn, reset_class, resolved)
+    return (f"sensor.givtcp_{ge_id}", ge_id, ge_id, "kWh", False, _MOD.ResetClass.LIFETIME, True)
+
+
+def _patch_apply_path(
+    monkeypatch: pytest.MonkeyPatch,
+    ws: _ApplyWS,
+    candidates_by_id: dict[str, object],
+    plan_ids: list[str],
+) -> None:
+    """Wire run() to use the fake WS, a fixed plan, and pre-built candidates."""
+    monkeypatch.setattr(_MOD, "HAWebSocket", lambda *a, **k: ws)
+    monkeypatch.setattr(_MOD, "_ENTITY_PAUSE_SECONDS", 0.0)
+    monkeypatch.setattr(_MOD, "_build_plan", lambda *a, **k: [_plan_entry(i) for i in plan_ids])
+    # run() asks for interactive confirmation under --apply; auto-confirm it.
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "yes")
+
+    async def fake_migrate(ws_arg, givtcp_id, ge_id, *a, **k):  # noqa: ANN001
+        return candidates_by_id[ge_id]
+
+    monkeypatch.setattr(_MOD, "migrate_entity", fake_migrate)
+
+
+def test_phase_b_aborts_on_blocking_candidate(monkeypatch, capsys):
+    # Two candidates; the second holds an unresolved event -> blocking. The gate
+    # must refuse BEFORE Phase B: no clear/import calls at all, non-zero exit.
+    clean = _candidate(
+        "sensor.ge_a",
+        [
+            {"start": "2026-05-19T08:00:00+00:00", "sum": 10.0, "state": 10.0},
+            {"start": "2026-05-19T09:00:00+00:00", "sum": 12.0, "state": 12.0},
+        ],
+        source_movement=2.0,
+    )
+    blocked = _candidate(
+        "sensor.ge_b",
+        [
+            {"start": "2026-05-19T08:00:00+00:00", "sum": 20.0, "state": 20.0},
+            {"start": "2026-05-19T09:00:00+00:00", "sum": 22.0, "state": 22.0},
+        ],
+        events={"unresolved": [{"start": "2026-05-19T09:00:00+00:00", "count": 2}]},
+        source_movement=2.0,
+    )
+    ws = _ApplyWS()
+    _patch_apply_path(
+        monkeypatch,
+        ws,
+        {"sensor.ge_a": clean, "sensor.ge_b": blocked},
+        ["sensor.ge_a", "sensor.ge_b"],
+    )
+
+    code = asyncio.run(_MOD.run(_apply_args()))
+
+    assert code != 0
+    assert ws.clear_calls == []
+    assert ws.import_calls == []
+    assert "Refusing to --apply" in capsys.readouterr().err
+
+
+def test_phase_b_mid_failure_reports_and_stops(monkeypatch, capsys):
+    # import_statistics raises on the 2nd entity. Entity 1 fully written; entity 2
+    # cleared (mid-write); entity 3 never touched. Loop stops; report names each
+    # bucket and points to the backup. Non-zero exit.
+    def clean(ge_id: str) -> object:
+        return _candidate(
+            ge_id,
+            [
+                {"start": "2026-05-19T08:00:00+00:00", "sum": 10.0, "state": 10.0},
+                {"start": "2026-05-19T09:00:00+00:00", "sum": 12.0, "state": 12.0},
+            ],
+            source_movement=2.0,
+        )
+
+    cands = {i: clean(i) for i in ("sensor.ge_a", "sensor.ge_b", "sensor.ge_c")}
+    ws = _ApplyWS(import_fail_on="sensor.ge_b")
+    _patch_apply_path(monkeypatch, ws, cands, ["sensor.ge_a", "sensor.ge_b", "sensor.ge_c"])
+
+    code = asyncio.run(_MOD.run(_apply_args()))
+
+    assert code != 0
+    # ge_a written; ge_b cleared then import raised; ge_c never reached.
+    assert ws.clear_calls == [["sensor.ge_a"], ["sensor.ge_b"]]
+    assert [c["metadata"]["statistic_id"] for c in ws.import_calls] == ["sensor.ge_a"]
+    err = capsys.readouterr().err
+    assert "sensor.ge_a" in err  # fully written
+    assert "sensor.ge_b" in err  # mid-write
+    assert "sensor.ge_c" in err  # not touched
+    assert "backup" in err.lower()
+
+
+def test_phase_c_detects_stored_mismatch(monkeypatch, capsys):
+    # (a) altered sum on read-back -> verify fails.
+    rows = [
+        {"start": "2026-05-19T08:00:00+00:00", "sum": 10.0, "state": 10.0},
+        {"start": "2026-05-19T09:00:00+00:00", "sum": 12.0, "state": 12.0},
+    ]
+    cand = _candidate("sensor.ge_a", rows, source_movement=2.0)
+    altered = [
+        {"start": "2026-05-19T08:00:00+00:00", "sum": 10.0},
+        {"start": "2026-05-19T09:00:00+00:00", "sum": 99.0},  # sum differs
+    ]
+    ws = _ApplyWS(read_back={"sensor.ge_a": altered})
+    _patch_apply_path(monkeypatch, ws, {"sensor.ge_a": cand}, ["sensor.ge_a"])
+
+    code = asyncio.run(_MOD.run(_apply_args()))
+
+    assert code != 0
+    assert cand.status != "migrated"
+    err = capsys.readouterr().err
+    assert "verification FAILED" in err
+    assert "backup" in err.lower()
+
+
+def test_phase_c_detects_shifted_timestamps(monkeypatch, capsys):
+    # (b) SAME sums but shifted timestamps -> verify must still fail (compares start).
+    rows = [
+        {"start": "2026-05-19T08:00:00+00:00", "sum": 10.0, "state": 10.0},
+        {"start": "2026-05-19T09:00:00+00:00", "sum": 12.0, "state": 12.0},
+    ]
+    cand = _candidate("sensor.ge_a", rows, source_movement=2.0)
+    shifted = [
+        {"start": "2026-05-19T08:00:00+00:00", "sum": 10.0},
+        {"start": "2026-05-19T10:00:00+00:00", "sum": 12.0},  # same sum, later hour
+    ]
+    ws = _ApplyWS(read_back={"sensor.ge_a": shifted})
+    _patch_apply_path(monkeypatch, ws, {"sensor.ge_a": cand}, ["sensor.ge_a"])
+
+    code = asyncio.run(_MOD.run(_apply_args()))
+
+    assert code != 0
+    assert cand.status != "migrated"
+    assert "verification FAILED" in capsys.readouterr().err
+
+
+def test_phase_c_passes_on_matching_read_back(monkeypatch, capsys):
+    # Happy path: read-back matches the candidate -> migrated, zero exit.
+    rows = [
+        {"start": "2026-05-19T08:00:00+00:00", "sum": 10.0, "state": 10.0},
+        {"start": "2026-05-19T09:00:00+00:00", "sum": 12.0, "state": 12.0},
+    ]
+    cand = _candidate("sensor.ge_a", rows, source_movement=2.0)
+    ws = _ApplyWS(read_back={"sensor.ge_a": [dict(r) for r in rows]})
+    _patch_apply_path(monkeypatch, ws, {"sensor.ge_a": cand}, ["sensor.ge_a"])
+
+    code = asyncio.run(_MOD.run(_apply_args()))
+
+    assert code == 0
+    assert cand.status == "migrated"
+    assert ws.clear_calls == [["sensor.ge_a"]]
     assert len(ws.import_calls) == 1
+
+
+def test_phase_c_read_failure_aborts(monkeypatch, capsys):
+    # get_statistics raises during Phase C -> the distinct "FAILED to re-read"
+    # message fires, status stays un-migrated, non-zero exit.
+    rows = [
+        {"start": "2026-05-19T08:00:00+00:00", "sum": 10.0, "state": 10.0},
+        {"start": "2026-05-19T09:00:00+00:00", "sum": 12.0, "state": 12.0},
+    ]
+    cand = _candidate("sensor.ge_a", rows, source_movement=2.0)
+    ws = _ApplyWS(read_back={"sensor.ge_a": [dict(r) for r in rows]})
+
+    async def boom(ids, start, end=None, types=None):  # noqa: ANN001
+        raise RuntimeError("simulated read failure")
+
+    ws.get_statistics = boom
+    _patch_apply_path(monkeypatch, ws, {"sensor.ge_a": cand}, ["sensor.ge_a"])
+
+    code = asyncio.run(_MOD.run(_apply_args()))
+
+    assert code != 0
+    assert cand.status != "migrated"
+    err = capsys.readouterr().err
+    assert "FAILED to re-read" in err
+    assert "backup" in err.lower()
+
+
+def test_repair_residue_suppressed_when_another_candidate_blocks(monkeypatch, capsys):
+    # One candidate is repairable (implausible residue), another is blocking
+    # (unresolved event). Under --apply --repair-residue, the gate must fire FIRST:
+    # NO clear/import of any kind, non-zero exit. The repair write must not run
+    # before the gate proves the whole set clean.
+    repairable = _candidate(
+        "sensor.ge_a",
+        [
+            {"start": "2026-05-20T08:00:00+00:00", "sum": 100.0, "state": 100.0},
+            {"start": "2026-05-20T09:00:00+00:00", "sum": 27496.0, "state": 27496.0},
+            {"start": "2026-05-20T10:00:00+00:00", "sum": 27497.0, "state": 27497.0},
+        ],
+        source_movement=0.0,
+    )
+    blocked = _candidate(
+        "sensor.ge_b",
+        [
+            {"start": "2026-05-19T08:00:00+00:00", "sum": 20.0, "state": 20.0},
+            {"start": "2026-05-19T09:00:00+00:00", "sum": 22.0, "state": 22.0},
+        ],
+        events={"unresolved": [{"start": "2026-05-19T09:00:00+00:00", "count": 2}]},
+        source_movement=2.0,
+    )
+    ws = _ApplyWS()
+    _patch_apply_path(
+        monkeypatch,
+        ws,
+        {"sensor.ge_a": repairable, "sensor.ge_b": blocked},
+        ["sensor.ge_a", "sensor.ge_b"],
+    )
+    args = _apply_args()
+    args.repair_residue = True
+
+    code = asyncio.run(_MOD.run(args))
+
+    assert code != 0
+    # No writes of any kind — repair stayed behind the (failed) gate.
+    assert ws.clear_calls == []
+    assert ws.import_calls == []
+    assert "Refusing to --apply" in capsys.readouterr().err
+
+
+def test_repair_residue_writes_repaired_entity_exactly_once(monkeypatch, capsys):
+    # Clean --apply --repair-residue run: a single repairable candidate is re-walked
+    # in place (mutate-only) then written by Phase B. The repaired entity must appear
+    # EXACTLY ONCE in clear_calls and import_calls (no duplicate second writer), and
+    # the imported rows must be the repaired ones (implausible spike gone).
+    spike_rows = [
+        {"start": "2026-05-20T08:00:00+00:00", "sum": 100.0, "state": 100.0},
+        {"start": "2026-05-20T09:00:00+00:00", "sum": 27496.0, "state": 27496.0},
+        {"start": "2026-05-20T10:00:00+00:00", "sum": 27497.0, "state": 27497.0},
+    ]
+    repairable = _candidate("sensor.ge_a", spike_rows, source_movement=0.0)
+    ws = _ApplyWS()
+    # Phase C re-reads: feed back whatever Phase B imported so verify passes.
+    original_import = ws.import_statistics
+
+    async def record_then_feed_back(metadata, stats):  # noqa: ANN001
+        await original_import(metadata, stats)
+        ws.read_back[metadata["statistic_id"]] = [dict(s) for s in stats]
+
+    ws.import_statistics = record_then_feed_back
+    _patch_apply_path(monkeypatch, ws, {"sensor.ge_a": repairable}, ["sensor.ge_a"])
+    args = _apply_args()
+    args.repair_residue = True
+
+    asyncio.run(_MOD.run(args))
+
+    # The candidate was written and verified (the non-zero report exit merely
+    # reflects the advisory pre-repair "implausible" finding, not a write failure).
+    assert repairable.status == "migrated"
+    # Exactly one clear and one import for the repaired entity — Phase B is the
+    # sole writer; repair no longer issues its own write.
+    assert ws.clear_calls == [["sensor.ge_a"]]
+    imports_for_a = [c for c in ws.import_calls if c["metadata"]["statistic_id"] == "sensor.ge_a"]
+    assert len(imports_for_a) == 1
+    # The written rows are the repaired ones: the implausible spike is gone.
+    written = imports_for_a[0]["stats"]
+    assert max(row["sum"] for row in written) < 27496.0
 
 
 def test_positive_float_accepts_positive():

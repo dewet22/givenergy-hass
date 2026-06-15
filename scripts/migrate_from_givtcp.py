@@ -943,10 +943,17 @@ def find_fake_reset_shapes(rows: list[dict[str, Any]], ceiling: float) -> list[d
     return shapes
 
 
+_REPORT_HEADERS = {
+    "dry-run": "Validation report (dry-run: current series)",
+    "candidates": "Validation report (candidates to write)",
+    "post-migration": "Validation report (post-migration)",
+}
+
+
 def format_validation_report(
     findings: dict[str, dict[str, list]],
     duplicates: list[tuple[str, str]],
-    applied: bool = True,
+    mode: str = "dry-run",
 ) -> tuple[str, int]:
     """Render the validation findings; return (text, exit_code).
 
@@ -954,16 +961,19 @@ def format_validation_report(
     fake-reset shapes, or duplicate series). Gaps are reported informationally
     and do not affect the exit code.
 
-    ``applied`` distinguishes a post-apply run from a dry-run.  On a dry run the
-    series read back are the *current* (pre-migration) series, so any findings
-    reflect pre-existing corruption rather than migration output — the header
-    says so.
+    ``mode`` selects the header and names what was validated:
+
+    - ``"dry-run"`` — the in-memory candidate series the script would write,
+      previewed without touching the recorder; findings reflect what migration
+      *would* produce.
+    - ``"candidates"`` — same in-memory candidates, validated under ``--apply``
+      just before Phase B writes them (the apply gate reads this).
+    - ``"post-migration"`` — series re-read from the recorder after a write.
+
+    In every mode the findings are computed against the rebuilt candidate, never
+    the pre-migration series.
     """
-    header = (
-        "Validation report (post-migration)"
-        if applied
-        else "Validation report (dry-run: current series)"
-    )
+    header = _REPORT_HEADERS[mode]
     lines = ["", header, "─" * 72]
     substantive = False
     for ge_id, f in findings.items():
@@ -1131,7 +1141,6 @@ async def migrate_entity(
     description: str,
     cutover: datetime,
     ge_unit: str,
-    apply: bool,
     ge_known: bool,
     reset_class: ResetClass,
     tz: ZoneInfo,
@@ -1289,14 +1298,51 @@ def _gap_undercount_intervals(events: dict[str, list] | None) -> list[tuple[str,
     return out
 
 
+async def apply_residue_repair(
+    results: list[MigrationResult],
+    units_by_id: dict[str, str | None] | None,
+    reset_classes: dict[str, ResetClass] | None,
+    tz: ZoneInfo,
+    max_kwh: float | None = None,
+) -> list[str]:
+    """Re-walk any sum candidate that still carries implausible hours, MUTATE-ONLY.
+
+    Only sum entities with residual implausible findings are touched
+    (``_repairable``). The re-walked rows REPLACE ``r.rebuilt_rows`` in place, so
+    the candidate that Phase B's :func:`write_candidate` later writes (and Phase C
+    verifies) is the repaired one. This performs NO WebSocket writes itself —
+    Phase B remains the sole writer, keeping the two-phase gate's invariant that a
+    single gated write path exists. The caller must invoke this ONLY after the
+    apply gate has proven the whole candidate set non-blocking. Returns the
+    repaired ids.
+    """
+    units_by_id = units_by_id or {}
+    repaired: list[str] = []
+    for r in results:
+        if r.status != "candidate":
+            continue
+        rows = r.rebuilt_rows or []
+        if not rows:
+            continue
+        ceiling = effective_ceiling(adaptive_ceiling(_state_deltas(rows)), max_kwh)
+        if ceiling is None:
+            continue
+        implausible = find_implausible_hours(rows, ceiling)
+        if not _repairable(r.ge_id, units_by_id, implausible):
+            continue
+        rc = _repair_reset_class(r.ge_id, reset_classes)
+        r.rebuilt_rows = rebuild_sum_walk(rows, rc, ceiling, tz)
+        repaired.append(r.ge_id)
+    return repaired
+
+
 async def run_validation(
     ws: HAWebSocket,
     results: list[MigrationResult],
     tz: ZoneInfo,
     units_by_id: dict[str, str | None] | None = None,
     reset_classes: dict[str, ResetClass] | None = None,
-    repair: bool = False,
-    applied: bool = True,
+    applying: bool = False,
     max_kwh: float | None = None,
     cutover: datetime | None = None,
 ) -> tuple[int, bool]:
@@ -1312,11 +1358,13 @@ async def run_validation(
     movement; and the raw rebuild ``events`` (``rebaseline``/``smear``/
     ``gap_undercount`` are accepted, ``unresolved`` blocks).
 
-    When ``repair`` is set (only under --apply --repair-residue), candidates with
-    residual implausible hours are cleared and re-imported from the rebuilt rows;
-    ``units_by_id`` supplies the unit for the re-import metadata. Only sum
-    entities (present in ``units_by_id``) are eligible — mean entities are never
-    touched.
+    ``applying`` selects the report header: under ``--apply`` the findings describe
+    the candidates about to be written ("candidates to write"); otherwise they are
+    a dry-run preview of the current series.
+
+    This is a read-only validation pass: residue repair is a separate, gated step
+    (:func:`apply_residue_repair`) the caller runs *after* the apply gate, so no
+    write of any kind ever precedes the gate.
 
     Returns ``(exit_code, blocking)``: the report exit code, and a blocking flag
     true when any candidate has an unexplained flat >= threshold, a flagged
@@ -1326,7 +1374,6 @@ async def run_validation(
     units_by_id = units_by_id or {}
     findings: dict[str, dict[str, list]] = {}
     series_by_id: dict[str, list[dict[str, Any]]] = {}
-    to_repair: list[str] = []
     blocking = False
 
     for r in results:
@@ -1384,43 +1431,36 @@ async def run_validation(
             "unresolved": unresolved,
         }
         series_by_id[r.ge_id] = rows
-        if repair and _repairable(r.ge_id, units_by_id, implausible):
-            to_repair.append(r.ge_id)
 
     duplicates = find_duplicate_series(_dedup_series(series_by_id, units_by_id))
-    text, exit_code = format_validation_report(findings, duplicates, applied=applied)
+    mode = "candidates" if applying else "dry-run"
+    text, exit_code = format_validation_report(findings, duplicates, mode=mode)
     print(text)
 
-    if repair and to_repair:
-        print()
-        print(
-            f"  Repairing {len(to_repair)} entit{'y' if len(to_repair) == 1 else 'ies'} with"
-            " residual implausible hours …"
-        )
-        for ge_id in to_repair:
-            rows = series_by_id[ge_id]
-            # to_repair is only populated when the ceiling was non-None above, so
-            # this re-derivation is also non-None; assert keeps mypy honest.
-            ceiling = effective_ceiling(adaptive_ceiling(_state_deltas(rows)), max_kwh)
-            assert ceiling is not None
-            rc = _repair_reset_class(ge_id, reset_classes)
-            rebuilt = rebuild_sum_walk(rows, rc, ceiling, tz)
-            unit = units_by_id.get(ge_id)
-            await ws.clear_statistics([ge_id])
-            await ws.import_statistics(
-                metadata={
-                    "has_mean": False,
-                    "has_sum": True,
-                    "name": None,
-                    "source": "recorder",
-                    "statistic_id": ge_id,
-                    "unit_of_measurement": unit,
-                },
-                stats=rebuilt,
-            )
-            print(f"    repaired {ge_id}")
-
     return exit_code, blocking
+
+
+async def write_candidate(ws: HAWebSocket, r: MigrationResult) -> None:
+    """Phase B: clear + import one approved candidate. Not transactional across
+    entities — the caller aborts + reports on the first failure (backup recovers)."""
+    await ws.clear_statistics([r.ge_id])
+    await ws.import_statistics(metadata=r.metadata, stats=r.rebuilt_rows)
+
+
+async def verify_written(ws: HAWebSocket, r: MigrationResult) -> bool:
+    """Phase C: re-read the stored series and confirm it matches the approved
+    candidate — row count, per-row normalized `start` timestamp, AND per-row sum
+    within epsilon (equal sums with shifted/reordered timestamps must NOT pass)."""
+    raw = await ws.get_statistics([r.ge_id], _EPOCH)
+    stored = [_normalise(s) for s in raw.get(r.ge_id, [])]
+    rebuilt = r.rebuilt_rows or []
+    if len(stored) != len(rebuilt):
+        return False
+    return all(
+        a["start"] == b["start"]
+        and abs((a.get("sum") or 0.0) - (b.get("sum") or 0.0)) <= _FLAT_EPSILON
+        for a, b in zip(stored, rebuilt)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1702,16 +1742,15 @@ async def run(args: argparse.Namespace) -> int:
 
     print()
 
-    # Execute
+    # ── Phase A: build every candidate (no writes yet) ──────────────────────
     results: list[MigrationResult] = []
     units_by_id: dict[str, str | None] = {}
     # Authoritative reset cadence per target, straight from the plan — used by the
     # residue-repair walk instead of re-deriving from the (renameable) ge_id.
     reset_classes = {ge_id: reset_class for (_, ge_id, _, _, _, reset_class, _) in plan}
-    for idx, (givtcp_id, ge_id, desc, unit, warn, reset_class, resolved) in enumerate(plan):
+    for givtcp_id, ge_id, desc, unit, warn, reset_class, resolved in plan:
         units_by_id[ge_id] = unit
-        verb = "Applying" if applying else "Previewing"
-        print(f"  {verb}: {desc} …", end=" ", flush=True)
+        print(f"  Building: {desc} …", end=" ", flush=True)
         # `resolved` (registry recognition), not recorder presence, is what makes
         # a target real — so an orphan from a prior broken run is never written.
         r = await migrate_entity(
@@ -1721,7 +1760,6 @@ async def run(args: argparse.Namespace) -> int:
             desc,
             cutover,
             unit,
-            applying,
             resolved,
             reset_class,
             tz,
@@ -1731,28 +1769,123 @@ async def run(args: argparse.Namespace) -> int:
         )
         results.append(r)
         print(r.status)
-        # Pace writes so the single-threaded recorder can drain between entities.
-        if applying and idx < len(plan) - 1:
-            await asyncio.sleep(_ENTITY_PAUSE_SECONDS)
 
-    summary_code = _print_summary(results, applying)
-
-    # Read-only validation of the resulting sum series, in both dry-run and apply.
-    # Residue repair only fires when the user opted in with --apply --repair-residue.
-    # NOTE: run_validation now returns (exit_code, blocking). The two-phase apply
-    # gate (Task 9) will consume `blocking`; here we keep the dry-run/legacy flow
-    # importable by surfacing the exit code only.
-    validation_exit, _blocking = await run_validation(
+    # Validate the in-memory candidates and print the findings report. This drives
+    # both the dry-run preview and the Phase-A apply gate from the SAME findings.
+    # Validation is read-only, so no write of any kind precedes the gate below —
+    # residue repair (if opted in) happens in Phase B, only once the set is clean.
+    validation_exit, blocking = await run_validation(
         ws,
         results,
         tz,
         units_by_id=units_by_id,
         reset_classes=reset_classes,
-        repair=applying and args.repair_residue,
-        applied=applying,
+        applying=applying,
         max_kwh=args.max_kw,
         cutover=cutover,
     )
+
+    # Apply gate: if any candidate has a blocking finding, write NOTHING.
+    if applying and blocking:
+        print(
+            "\n  ✋ Refusing to --apply — validation found blocking issues above "
+            "(unexplained flat span, source-movement divergence, post-cutover "
+            "GE-divergence, or an unresolved rebuild run). Nothing was written. "
+            "Investigate the flagged entities, then re-run.",
+            file=sys.stderr,
+        )
+        await ws.close()
+        return max(2, validation_exit)
+
+    candidates = [r for r in results if r.status == "candidate"]
+
+    # Dry-run stops here: the candidates were never meant to be written.
+    if not applying:
+        for r in candidates:
+            r.status = "dry_run"
+        summary_code = _print_summary(results, applying)
+        await ws.close()
+        return max(summary_code, validation_exit)
+
+    # ── Phase B: write all approved candidates, or abort on the first failure ──
+    # Gated residue repair: only now, with the whole set proven non-blocking, do we
+    # re-walk the repairable candidates IN PLACE (no write). The Phase B loop below
+    # then writes each repaired candidate exactly once, so Phase B is the sole
+    # writer and never runs ahead of the gate (the invariant Task 9 protects).
+    if args.repair_residue:
+        repaired = await apply_residue_repair(
+            results, units_by_id, reset_classes, tz, max_kwh=args.max_kw
+        )
+        if repaired:
+            print(
+                f"  Repaired {len(repaired)} entit{'y' if len(repaired) == 1 else 'ies'} with"
+                " residual implausible hours: " + ", ".join(repaired)
+            )
+
+    written: list[str] = []
+    for idx, r in enumerate(candidates):
+        try:
+            await write_candidate(ws, r)
+        except Exception as exc:
+            still_clean = [r2.ge_id for r2 in candidates[idx + 1 :]]
+            print(
+                f"\n  ✋ Write FAILED on {r.ge_id}: {exc}",
+                file=sys.stderr,
+            )
+            print(
+                "     Fully written : " + (", ".join(written) or "(none)"),
+                file=sys.stderr,
+            )
+            print(
+                f"     Mid-write     : {r.ge_id} (cleared, import may be incomplete)",
+                file=sys.stderr,
+            )
+            print(
+                "     Not touched   : " + (", ".join(still_clean) or "(none)"),
+                file=sys.stderr,
+            )
+            print(
+                "     Restore your recorder database from the backup you took "
+                "before --apply, then investigate before re-running.",
+                file=sys.stderr,
+            )
+            await ws.close()
+            return 1
+        written.append(r.ge_id)
+        # Pace writes so the single-threaded recorder can drain between entities.
+        if idx < len(candidates) - 1:
+            await asyncio.sleep(_ENTITY_PAUSE_SECONDS)
+
+    # ── Phase C: re-read each stored series and confirm it matches the candidate ──
+    for r in candidates:
+        try:
+            ok = await verify_written(ws, r)
+        except Exception as exc:
+            print(
+                f"\n  ✋ Post-write verification FAILED to re-read {r.ge_id}: {exc}\n"
+                "     The series were written but could not be verified. Restore your "
+                "recorder database from the backup you took before --apply and "
+                "investigate before re-running.",
+                file=sys.stderr,
+            )
+            await ws.close()
+            return 1
+        if not ok:
+            print(
+                f"\n  ✋ Post-write verification FAILED for {r.ge_id}: the stored "
+                "series does not match the approved candidate. Restore your recorder "
+                "database from the backup you took before --apply and investigate "
+                "before re-running.",
+                file=sys.stderr,
+            )
+            await ws.close()
+            return 1
+
+    # Only now is the write proven good.
+    for r in candidates:
+        r.status = "migrated"
+
+    summary_code = _print_summary(results, applying)
 
     await ws.close()
 
