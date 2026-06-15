@@ -626,6 +626,42 @@ def find_fake_reset_shapes(rows: list[dict[str, Any]], ceiling: float) -> list[d
     return shapes
 
 
+def format_validation_report(
+    findings: dict[str, dict[str, list]],
+    duplicates: list[tuple[str, str]],
+) -> tuple[str, int]:
+    """Render the post-migration validation findings; return (text, exit_code).
+
+    exit_code is non-zero when substantive issues exist (implausible hours,
+    fake-reset shapes, or duplicate series). Gaps are reported informationally
+    and do not affect the exit code.
+    """
+    lines = ["", "Validation report", "─" * 72]
+    substantive = False
+    for ge_id, f in findings.items():
+        impl = f.get("implausible", [])
+        fakes = f.get("fake_resets", [])
+        gaps = f.get("gaps", [])
+        if not (impl or fakes or gaps):
+            continue
+        lines.append(f"  {ge_id}")
+        for row in impl:
+            substantive = True
+            lines.append(f"    implausible +{row['change']} at {row['start']}")
+        for row in fakes:
+            substantive = True
+            lines.append(f"    fake-reset shape (+{row['recovery']}) at {row['start']}")
+        for g in gaps:
+            lines.append(f"    gap {g['hours']}h: {g['after']} -> {g['before']}")
+    for a, b in duplicates:
+        substantive = True
+        lines.append(f"  duplicate series: {a} == {b}")
+    if not substantive and not any(f.get("gaps") for f in findings.values()):
+        lines.append("  no issues found")
+    lines.append("─" * 72)
+    return "\n".join(lines), (1 if substantive else 0)
+
+
 # ---------------------------------------------------------------------------
 # Cut-over date detection
 # ---------------------------------------------------------------------------
@@ -903,6 +939,97 @@ async def migrate_mean_entity(
         r.status = "error"
         r.error = str(exc)
     return r
+
+
+# ---------------------------------------------------------------------------
+# Post-migration validation + opt-in residue repair
+# ---------------------------------------------------------------------------
+
+
+def _state_deltas(rows: list[dict[str, Any]]) -> list[float | None]:
+    """Positive-or-any consecutive state deltas, mirroring migrate_entity's pattern."""
+    return [
+        rows[i]["state"] - rows[i - 1]["state"]
+        for i in range(1, len(rows))
+        if rows[i].get("state") is not None and rows[i - 1].get("state") is not None
+    ]
+
+
+async def run_validation(
+    ws: HAWebSocket,
+    results: list[MigrationResult],
+    tz: ZoneInfo,
+    units_by_id: dict[str, str | None] | None = None,
+    repair: bool = False,
+) -> int:
+    """Re-read each migrated/previewed sum series, report validation findings.
+
+    Read-only by default — runs in both dry-run and apply. When ``repair`` is
+    set (only when --apply and --repair-residue are both given), entities with
+    residual implausible hours have their rebuilt series cleared and re-imported;
+    ``units_by_id`` supplies the unit of measurement for the re-import metadata.
+    Returns the validation exit code from ``format_validation_report``.
+    """
+    units_by_id = units_by_id or {}
+    findings: dict[str, dict[str, list]] = {}
+    series_by_id: dict[str, list[dict[str, Any]]] = {}
+    to_repair: list[str] = []
+
+    for r in results:
+        if r.status not in ("migrated", "dry_run"):
+            continue
+        try:
+            raw = await ws.get_statistics([r.ge_id], _EPOCH)
+        except Exception:  # nosec B112 — validation is best-effort; skip unreadable series
+            continue
+        rows = [_normalise(s) for s in raw.get(r.ge_id, [])]
+        if not rows:
+            continue
+        ceiling = adaptive_ceiling(_state_deltas(rows))
+        implausible = find_implausible_hours(rows, ceiling)
+        fake_resets = find_fake_reset_shapes(rows, ceiling)
+        gaps = classify_gaps(rows)
+        findings[r.ge_id] = {
+            "implausible": implausible,
+            "fake_resets": fake_resets,
+            "gaps": gaps,
+        }
+        series_by_id[r.ge_id] = rows
+        if repair and implausible:
+            to_repair.append(r.ge_id)
+
+    duplicates = find_duplicate_series(series_by_id)
+    text, exit_code = format_validation_report(findings, duplicates)
+    print(text)
+
+    if repair and to_repair:
+        print()
+        print(
+            f"  Repairing {len(to_repair)} entit{'y' if len(to_repair) == 1 else 'ies'} with"
+            " residual implausible hours …"
+        )
+        for ge_id in to_repair:
+            rows = series_by_id[ge_id]
+            ceiling = adaptive_ceiling(_state_deltas(rows))
+            # classify_entity keys off the suffix via endswith, so the full
+            # resolved ge_id (…_today / …_total / …_this_year) classifies correctly.
+            rebuilt = rebuild_sum_walk(rows, classify_entity(ge_id), ceiling, tz)
+            unit = units_by_id.get(ge_id)
+            await ws.clear_statistics([ge_id])
+            await ws.import_statistics(
+                metadata={
+                    "has_mean": False,
+                    "has_sum": True,
+                    "name": None,
+                    "source": "recorder",
+                    "statistic_id": ge_id,
+                    "unit_of_measurement": unit,
+                },
+                stats=rebuilt,
+            )
+            print(f"    repaired {ge_id}")
+
+    return exit_code
 
 
 # ---------------------------------------------------------------------------
@@ -1197,7 +1324,9 @@ async def run(args: argparse.Namespace) -> int:
 
     # Execute
     results: list[MigrationResult] = []
+    units_by_id: dict[str, str | None] = {}
     for idx, (givtcp_id, ge_id, desc, unit, warn, reset_class, resolved) in enumerate(plan):
+        units_by_id[ge_id] = unit
         verb = "Applying" if applying else "Previewing"
         print(f"  {verb}: {desc} …", end=" ", flush=True)
         # `resolved` (registry recognition), not recorder presence, is what makes
@@ -1238,9 +1367,21 @@ async def run(args: argparse.Namespace) -> int:
             if applying and idx < len(mean_plan) - 1:
                 await asyncio.sleep(_ENTITY_PAUSE_SECONDS)
 
+    summary_code = _print_summary(results, applying)
+
+    # Read-only validation of the resulting sum series, in both dry-run and apply.
+    # Residue repair only fires when the user opted in with --apply --repair-residue.
+    validation_exit = await run_validation(
+        ws,
+        results,
+        tz,
+        units_by_id=units_by_id,
+        repair=applying and args.repair_residue,
+    )
+
     await ws.close()
 
-    return _print_summary(results, applying)
+    return max(summary_code, validation_exit)
 
 
 def main() -> None:
@@ -1302,6 +1443,14 @@ def main() -> None:
         "--skip-means",
         action="store_true",
         help="Skip back-porting mean-type series (power, SOC, temperatures).",
+    )
+    p.add_argument(
+        "--repair-residue",
+        action="store_true",
+        help=(
+            "After validation, clear + re-import the rebuilt series for entities "
+            "with residual implausible hours. Off by default (report only)."
+        ),
     )
     args = p.parse_args()
     sys.exit(asyncio.run(run(args)))

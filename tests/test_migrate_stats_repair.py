@@ -228,3 +228,18 @@ def test_find_fake_reset_shapes_detects_drop_then_spike():
     ]
     shapes = _MOD.find_fake_reset_shapes(rows, ceiling=50.0)
     assert shapes and shapes[0]["start"] == "t3"
+
+
+def test_format_validation_report_summarises_findings():
+    mod = _load_migrate_module()
+    findings = {
+        "sensor.x": {
+            "implausible": [{"start": "t", "change": 27396.0}],
+            "fake_resets": [],
+            "gaps": [{"after": "a", "before": "b", "hours": 2}],
+        }
+    }
+    text, exit_code = mod.format_validation_report(findings, duplicates=[("a", "b")])
+    assert "sensor.x" in text
+    assert "27396" in text
+    assert exit_code != 0  # substantive findings -> non-zero
