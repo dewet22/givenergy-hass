@@ -1,8 +1,8 @@
 # GivTCP migration: recover from sustained shifts (fix the rebuild flat-line)
 
 **Issue:** [#172](https://github.com/dewet22/givenergy-hass/issues/172)
-**Date:** 2026-06-15 (rev 3 — incorporates Codex review rounds 2 & 3)
-**Status:** design ready for implementation plan (Codex round-3 conditions met)
+**Date:** 2026-06-15 (rev 4 — incorporates Codex review rounds 2–4)
+**Status:** design cleared for implementation plan (Codex round 4: no further design concerns)
 **Touches:** `scripts/migrate_from_givtcp.py`, `tests/test_migrate_stats_repair.py`
 
 ## Problem
@@ -19,11 +19,17 @@ the checks only flag *large* changes, never flatness/under-counting.
 
 ## Decisions
 
-1. **Two-phase, whole-run gate.** Phase A: build and validate **every** candidate
-   in-memory (no writes). Phase B: only if the entire plan passes, perform the
-   `clear_statistics` + `import_statistics` for all entities. A late failure must
-   never leave earlier entities already cleared. Post-apply validation re-reads
-   and confirms each stored series matches its approved candidate.
+1. **Two-phase, whole-run gate (validate-all-before-any-write).** Phase A: build
+   and validate **every** candidate in-memory (no writes). Phase B: only if the
+   entire plan passes, perform `clear_statistics` + `import_statistics` for all
+   entities. This stops *validation*-driven partial writes, but Phase B is **not
+   transactional** — a recorder/API failure on entity N can still leave 1..N-1
+   rewritten and N cleared. So on any Phase-B error: abort immediately, report
+   exactly which entities were written/cleared, and point to the **mandatory
+   pre-apply backup** (the `mysqldump` of the statistics tables) for deterministic
+   recovery — restore is the proven net; there is no auto-rollback. Post-apply
+   validation re-reads and confirms each stored series matches its approved
+   candidate.
 2. **Confirm a coherent segment; offset bidirectional, internals non-negative.**
    Buffer held readings; re-baseline only when they form a coherent cumulative
    segment: the initial **offset** (old level → new segment) may be either
@@ -84,11 +90,17 @@ State: `running` (clean cumulative), `prev_state` (last trusted raw state),
 Per row with numeric `state`: `elapsed = max(1, hours(prev_start→start))`,
 `bound = ceiling × elapsed`, `delta = state − prev_state`.
 
+- **Reset-crossing gap (checked FIRST, before any delta-sign branch)** — if
+  `elapsed > 1` and a DAILY/ANNUAL reset boundary lies within `(prev_start,
+  start)` with no intermediate rows: not reconstructable from endpoints. Carry
+  `running` flat, record a `gap_undercount` event, advance
+  `prev_state`/`prev_start` to the resume `state` — **regardless of the endpoint
+  delta's sign** (a DAILY midnight gap is typically a *negative* delta, so it must
+  not fall through to `held`/segment confirmation as a downward rebase). Flush
+  any held buffer as transient first.
 - **Accept** (`0 ≤ delta ≤ bound`): genuine accumulation; flush any held buffer
-  as transient first. If `elapsed > 1`: if the gap crosses a reset for this
-  `reset_class` → carry flat + `gap_undercount` event (do not book invented
-  energy); else **smear** across the gap days. Otherwise add `delta`. Advance;
-  emit normalized state.
+  as transient first. If `elapsed > 1` (a gap that does **not** cross a reset) →
+  **smear** across the gap days; else add `delta`. Advance; emit normalized state.
 - **Boundary reset** (`delta < 0` at the natural boundary): `running += state`;
   flush held as transient; advance.
 - **Otherwise** (over-bound / off-boundary drop): append to `held`, emit last-good
@@ -144,14 +156,19 @@ Covering Codex's expanded fixture and round-3 cases:
 - **Confirmed segment internal increments retained** (`+2.7, +2.4` booked).
 - **Transient spike**: held, no re-baseline.
 - **LIFETIME gap (no reset)**: smeared per day; totals preserved.
-- **DAILY gap crossing midnight**: carry-flat + `gap_undercount` (accepted/warn);
-  not smeared; not aborting.
+- **DAILY gap crossing midnight, negative endpoint delta** (`23:00=8` →
+  `02:00=2`): classified as reset-crossing *before* the delta-sign branch →
+  `gap_undercount` (carry-flat, accepted/warn), **not** misread as a downward
+  rebase; not smeared; not aborting.
 - **Unresolved held tail at EOF/cutover**: recorded → refused.
 - **Output state continuous** across holds and re-baselines.
 - Validation: unexplained flat span / divergence / unresolved held → Phase-A
   abort (no writes); recorded gap_undercount → warn, proceed. Whole-run gate:
   one blocking candidate aborts all. Dry-run validates the candidate even when
   the mocked current HA series is healthy.
+- **Mid-Phase-B failure** (simulated import error on the Nth entity): aborts
+  immediately, reports which entities were written/cleared, points to the backup,
+  and does not continue writing.
 
 ## Verification (post-merge, backed up, live)
 
@@ -170,11 +187,13 @@ flattened.
   under-count beats leaving the rest unfixed).
 - **CodeRabbit:** count-based hold tracking, flat-line detection, source-
   comparison + dry-run-validates-rebuilt direction.
-- **Codex (rounds 2–3):** gate-before-write → two-phase whole-run gate; coherent
+- **Codex (rounds 2–4):** gate-before-write → two-phase whole-run gate; coherent
   bidirectional-offset / non-negative-internal segment confirmation; book
   in-segment / suppress offset; normalized state; offset-excluded reset-aware
   movement comparison; DAILY-crossing un-reconstructability; unresolved-held
-  refusal.
+  refusal. Round 4: classify reset-crossing gaps *before* the delta-sign branch;
+  Phase B documented as validate-all-before-any-write (non-transactional) with
+  backup-based recovery + a simulated mid-Phase-B-failure test.
 
 ## Out of scope
 
