@@ -247,6 +247,125 @@ def test_smear_gap_zero_or_negative_span_empty():
     )
 
 
+def _walk(rows, rc, ceiling, events=None):
+    return _MOD.rebuild_sum_walk(rows, rc, ceiling, _LONDON, events=events)
+
+
+def test_walk_accepts_genuine_climb():
+    rows = [
+        _row("2026-05-20T08:00:00+00:00", 100.0),
+        _row("2026-05-20T09:00:00+00:00", 102.0),
+        _row("2026-05-20T10:00:00+00:00", 105.0),
+    ]
+    assert _sums(_walk(rows, _MOD.ResetClass.LIFETIME, 50.0)) == [100.0, 102.0, 105.0]
+
+
+def test_walk_transient_spike_held():
+    rows = [
+        _row("2026-05-20T12:00:00+00:00", 200.0),
+        _row("2026-05-20T13:00:00+00:00", 9999.0),  # 1-reading spike
+        _row("2026-05-20T14:00:00+00:00", 203.0),
+    ]
+    out = _walk(rows, _MOD.ResetClass.LIFETIME, 50.0)
+    assert _sums(out) == [200.0, 200.0, 203.0]
+    assert [r["state"] for r in out] == [200.0, 200.0, 203.0]  # held state = last-good
+
+
+def test_walk_sustained_upward_rebase_recovers_and_books_internal():
+    # The live failure: climb, an ~8000 artifact jump, then genuine +2.7/+2.4 climb.
+    rows = [
+        _row("2026-05-20T10:00:00+00:00", 1000.0),
+        _row("2026-05-20T11:00:00+00:00", 1003.0),
+        _row("2026-05-20T12:00:00+00:00", 9003.0),  # +8000 artifact (offset)
+        _row("2026-05-20T13:00:00+00:00", 9005.7),  # +2.7 internal
+        _row("2026-05-20T14:00:00+00:00", 9008.1),  # +2.4 internal
+        _row("2026-05-20T15:00:00+00:00", 9010.0),
+    ]  # +1.9 post-segment
+    events = {}
+    out = _walk(rows, _MOD.ResetClass.LIFETIME, 25.0, events=events)
+    sums = _sums(out)
+    assert sums == sorted(sums)  # monotonic, NOT flat
+    assert max(b - a for a, b in zip(sums, sums[1:])) < 25.0  # offset suppressed
+    # genuine accumulation retained: 1003 -> ~1003+2.7+2.4+1.9 = 1010.0
+    assert abs(sums[-1] - 1010.0) < 0.01
+    assert events.get("rebaseline")  # a re-baseline was recorded
+
+
+def test_walk_sustained_downward_rebase_recovers():
+    rows = [
+        _row("2026-05-20T10:00:00+00:00", 9000.0),
+        _row("2026-05-20T11:00:00+00:00", 9002.0),
+        _row("2026-05-20T12:00:00+00:00", 10.0),  # downward meter reset (offset)
+        _row("2026-05-20T13:00:00+00:00", 12.0),  # +2 internal
+        _row("2026-05-20T14:00:00+00:00", 14.0),
+    ]  # +2 internal
+    out = _walk(rows, _MOD.ResetClass.LIFETIME, 25.0)
+    sums = _sums(out)
+    assert sums == sorted(sums)  # still monotonic (offset suppressed)
+    assert abs((sums[-1] - sums[1]) - 4.0) < 0.01  # only the +2+2 booked after the climb
+
+
+def test_walk_three_corrupt_highs_then_recovery_not_a_segment():
+    # corrupt highs that are NOT a coherent climb, then return to real lower value
+    rows = [
+        _row("2026-05-20T10:00:00+00:00", 1000.0),
+        _row("2026-05-20T11:00:00+00:00", 9000.0),  # corrupt
+        _row("2026-05-20T12:00:00+00:00", 200.0),  # corrupt (internal delta -8800)
+        _row("2026-05-20T13:00:00+00:00", 9000.0),  # corrupt
+        _row("2026-05-20T14:00:00+00:00", 1002.0),
+    ]  # back to real
+    out = _walk(rows, _MOD.ResetClass.LIFETIME, 25.0)
+    # never re-baselined to a corrupt level; recovers against last-good 1000 -> 1002
+    assert _sums(out) == [1000.0, 1000.0, 1000.0, 1000.0, 1002.0]
+
+
+def test_walk_smears_lifetime_gap():
+    # 12h gap with a +6 genuine delta (<= 25*12); LIFETIME -> smear daily
+    rows = [_row("2026-05-20T12:00:00+00:00", 100.0), _row("2026-05-21T00:00:00+00:00", 106.0)]
+    events = {}
+    out = _walk(rows, _MOD.ResetClass.LIFETIME, 25.0, events=events)
+    assert _sums(out)[-1] == 106.0
+    assert events.get("smear")
+    # at least one synthesised intermediate row between the two
+    assert len(out) > len(rows)
+
+
+def test_walk_daily_midnight_gap_negative_delta_is_gap_undercount():
+    # DAILY counter, gap crosses midnight, negative endpoint delta (8 -> 2)
+    rows = [
+        _row("2026-05-20T22:00:00+00:00", 8.0),  # 23:00 local
+        _row("2026-05-21T02:00:00+00:00", 2.0),
+    ]  # next day, after reset
+    events = {}
+    out = _walk(rows, _MOD.ResetClass.DAILY, 25.0, events=events)
+    # carry flat across the gap (under-count), do NOT treat as rebase/segment
+    assert _sums(out) == [8.0, 8.0]
+    assert events.get("gap_undercount")
+    assert not events.get("rebaseline")
+
+
+def test_walk_unresolved_held_tail_recorded():
+    # a short over-bound run at EOF that never confirms or reverts
+    rows = [
+        _row("2026-05-20T10:00:00+00:00", 100.0),
+        _row("2026-05-20T11:00:00+00:00", 9000.0),
+        _row("2026-05-20T12:00:00+00:00", 9002.0),
+    ]  # only 2 held (< K=3), then EOF
+    events = {}
+    out = _walk(rows, _MOD.ResetClass.LIFETIME, 25.0, events=events)
+    assert events.get("unresolved")  # tail flagged
+    assert _sums(out) == [100.0, 100.0, 100.0]  # emitted last-good (flat) but FLAGGED
+
+
+def test_walk_carries_gap_rows_none_state():
+    rows = [
+        _row("2026-05-20T12:00:00+00:00", 100.0),
+        _row("2026-05-20T13:00:00+00:00", None),
+        _row("2026-05-20T14:00:00+00:00", 101.0),
+    ]
+    assert _sums(_walk(rows, _MOD.ResetClass.LIFETIME, 50.0)) == [100.0, 100.0, 101.0]
+
+
 def test_find_flat_line_spans_duration_from_timestamps():
     # 8 hourly rows 00:00..07:00 == 7 hours of flat, not 8
     rows = [{"start": f"2026-05-20T{h:02d}:00:00+00:00", "sum": 100.0} for h in range(8)]

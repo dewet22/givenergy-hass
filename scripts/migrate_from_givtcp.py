@@ -459,55 +459,107 @@ def rebuild_sum_walk(
     ceiling: float,
     tz: ZoneInfo,
     midnight_tol_hours: float = 2.0,
+    events: dict[str, list] | None = None,
 ) -> list[dict[str, Any]]:
-    """Rebuild the ``sum`` column from ``state`` with reset/plausibility guards.
+    """Rebuild a clean cumulative ``sum`` from ``state``; recover from sustained
+    shifts instead of flat-lining. See the design spec for the full rationale.
 
-    ``rows`` are normalised (ISO ``start``, numeric or None ``state``), sorted
-    ascending. Returns copies with ``sum`` set to a clean cumulative total:
-
-    - delta in [0, ceiling]            -> accept, advance running + last-good state
-    - delta < 0 at a reset boundary    -> reset: add post-reset state to running
-    - delta < 0 off-boundary           -> corruption: hold last-good (state + sum)
-    - delta > ceiling                  -> fake spike: hold last-good
-    - missing state (gap)              -> carry running forward
-
-    Holding last-good leaves ``prev_state`` at the last trusted reading, so the
-    recovery after a transient zero/spike is measured against it (a small,
-    accepted delta) instead of booking the bogus jump.
+    ``events`` (if given) accumulates lists under keys: ``rebaseline``, ``smear``,
+    ``gap_undercount``, ``unresolved`` — surfaced by validation.
     """
+
+    def _ev(key: str, payload: dict) -> None:
+        if events is not None:
+            events.setdefault(key, []).append(payload)
+
     out: list[dict[str, Any]] = []
     running = 0.0
     prev_state: float | None = None
+    prev_start: str | None = None
+    held: list[tuple[str, float]] = []  # (start, state) buffered, not yet emitted
+
+    def _emit(start: str, sum_val: float, state_val: float) -> None:
+        out.append({"start": start, "sum": round(sum_val, 6), "state": round(state_val, 6)})
+
+    def _flush_transient() -> None:
+        # The held run was a transient spike: emit each as last-good (flat).
+        for s, _st in held:
+            _emit(s, running, prev_state)
+        held.clear()
+
+    def _flush_segment() -> None:
+        nonlocal running, prev_state, prev_start
+        base = held[0][1]
+        # offset (held[0] - prev_state) is suppressed; internal deltas are booked.
+        for s, st in held:
+            _emit(s, running + (st - base), running + (st - base))
+        _ev(
+            "rebaseline",
+            {"start": held[0][0], "offset": round(base - prev_state, 3), "held": len(held)},
+        )
+        running += held[-1][1] - base
+        prev_state = held[-1][1]
+        prev_start = held[-1][0]
+        held.clear()
+
     for row in rows:
-        r = dict(row)
         state = row.get("state")
+        start = row["start"]
         if state is None:
-            r["sum"] = round(running, 6)
-            out.append(r)
+            # gap row: carry running forward (do not resolve held on a None row).
+            _emit(start, running, prev_state if prev_state is not None else running)
             continue
         if prev_state is None:
             running = float(state)
             prev_state = float(state)
-            r["sum"] = round(running, 6)
-            out.append(r)
+            prev_start = start
+            _emit(start, running, running)
             continue
+
+        elapsed = _elapsed_hours(prev_start, start)
+        bound = ceiling * elapsed
+        # (1) Reset-crossing gap FIRST, before any delta-sign branch.
+        if elapsed > 1 and _gap_crosses_reset(prev_start, start, reset_class, tz):
+            _flush_transient()
+            _emit(start, running, running)  # carry flat across the gap
+            _ev("gap_undercount", {"start": start, "from": prev_start})
+            prev_state = float(state)
+            prev_start = start
+            continue
+
         delta = state - prev_state
-        if 0 <= delta <= ceiling:
+        # (2) Accept genuine (possibly multi-hour) accumulation.
+        if 0 <= delta <= bound:
+            _flush_transient()
+            if elapsed > 1:
+                out.extend(_smear_gap(running, delta, prev_start, start, tz))
+                _ev(
+                    "smear",
+                    {"start": start, "energy": round(delta, 3), "hours": round(elapsed, 1)},
+                )
             running += delta
-            prev_state = state
-        elif delta < 0 and _is_reset_boundary(r["start"], reset_class, tz, midnight_tol_hours):
+            prev_state = float(state)
+            prev_start = start
+            _emit(start, running, running)
+            continue
+        # (3) Boundary reset (intra-reading, no gap).
+        if delta < 0 and _is_reset_boundary(start, reset_class, tz, midnight_tol_hours):
+            _flush_transient()
             running += state
-            prev_state = state
-        else:
-            # Corruption (off-boundary drop) or spike (> ceiling): hold last-good
-            # for BOTH sum and state. `r` is a copy of the corrupt row, so its
-            # `state` still carries the bogus 0/spike; overwrite it with the last
-            # trusted reading. Otherwise the imported state timeline stays
-            # corrupt and find_fake_reset_shapes keeps flagging it (and
-            # --repair-residue can't heal it).
-            r["state"] = prev_state
-        r["sum"] = round(running, 6)
-        out.append(r)
+            prev_state = float(state)
+            prev_start = start
+            _emit(start, running, running)
+            continue
+        # (4) Otherwise: buffer as held; try to confirm a coherent segment.
+        #     Coherence bounds each held pair by its OWN elapsed time (passes the
+        #     (start, state) tuples + ceiling), not the single cumulative `bound`.
+        held.append((start, float(state)))
+        if len(held) >= _REBASELINE_HOLDS and _segment_coherent(held, ceiling, tz):
+            _flush_segment()
+
+    if held:
+        _ev("unresolved", {"start": held[0][0], "count": len(held)})
+        _flush_transient()  # emit last-good; the recorded event makes the gate refuse
     return out
 
 
