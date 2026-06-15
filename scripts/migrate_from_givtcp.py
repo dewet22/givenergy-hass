@@ -946,7 +946,18 @@ async def migrate_mean_entity(
 # ---------------------------------------------------------------------------
 
 
-def _state_deltas(rows: list[dict[str, Any]]) -> list[float | None]:
+def _repairable(ge_id: str, units_by_id: dict[str, str | None], implausible: list) -> bool:
+    """Return True only when *ge_id* is a sum entity AND has implausible findings.
+
+    Mean entities (power, SOC, temperature) are not present in ``units_by_id``
+    (which is built exclusively from the sum migration plan).  Admitting them to
+    the repair path would clear their mean series and re-import them as a sum
+    series, corrupting the data.  This guard is the single enforcement point.
+    """
+    return bool(implausible) and ge_id in units_by_id
+
+
+def _state_deltas(rows: list[dict[str, Any]]) -> list[float]:
     """Positive-or-any consecutive state deltas, mirroring migrate_entity's pattern."""
     return [
         rows[i]["state"] - rows[i - 1]["state"]
@@ -964,10 +975,14 @@ async def run_validation(
 ) -> int:
     """Re-read each migrated/previewed sum series, report validation findings.
 
-    Read-only by default — runs in both dry-run and apply. When ``repair`` is
-    set (only when --apply and --repair-residue are both given), entities with
-    residual implausible hours have their rebuilt series cleared and re-imported;
-    ``units_by_id`` supplies the unit of measurement for the re-import metadata.
+    Read-only by default — runs in both dry-run and apply. In dry-run mode the
+    series read back are the *current* (unmigrated) HA series, not a
+    post-migration result.  When ``repair`` is set (only when --apply and
+    --repair-residue are both given), entities with residual implausible hours
+    have their rebuilt series cleared and re-imported; ``units_by_id`` supplies
+    the unit of measurement for the re-import metadata.  Only sum entities
+    (those present in ``units_by_id``) are eligible for repair — mean entities
+    are never touched.
     Returns the validation exit code from ``format_validation_report``.
     """
     units_by_id = units_by_id or {}
@@ -995,7 +1010,7 @@ async def run_validation(
             "gaps": gaps,
         }
         series_by_id[r.ge_id] = rows
-        if repair and implausible:
+        if repair and _repairable(r.ge_id, units_by_id, implausible):
             to_repair.append(r.ge_id)
 
     duplicates = find_duplicate_series(series_by_id)

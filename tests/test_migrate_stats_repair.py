@@ -243,3 +243,37 @@ def test_format_validation_report_summarises_findings():
     assert "sensor.x" in text
     assert "27396" in text
     assert exit_code != 0  # substantive findings -> non-zero
+
+
+# ---------------------------------------------------------------------------
+# _repairable guard tests
+# ---------------------------------------------------------------------------
+
+
+def test_repairable_sum_entity_with_implausible_is_true():
+    mod = _load_migrate_module()
+    units_by_id = {"sensor.ge_pv_energy_today": "kWh"}
+    implausible = [{"start": "2026-05-20T13:00:00+00:00", "change": 27396.0}]
+    assert mod._repairable("sensor.ge_pv_energy_today", units_by_id, implausible) is True
+
+
+def test_repairable_sum_entity_without_implausible_is_false():
+    mod = _load_migrate_module()
+    units_by_id = {"sensor.ge_pv_energy_today": "kWh"}
+    assert mod._repairable("sensor.ge_pv_energy_today", units_by_id, []) is False
+
+
+def test_repairable_mean_entity_excluded_even_with_implausible():
+    """A mean entity (ge_id not in units_by_id) must never be queued for repair,
+    even if find_implausible_hours returns findings for it."""
+    mod = _load_migrate_module()
+    units_by_id = {"sensor.ge_pv_energy_today": "kWh"}  # only the sum entity
+    implausible = [{"start": "2026-05-20T13:00:00+00:00", "change": 99999.0}]
+    # mean entity ge_id is NOT in units_by_id
+    assert mod._repairable("sensor.ge_pv_power", units_by_id, implausible) is False
+
+
+def test_repairable_mean_entity_excluded_when_units_by_id_empty():
+    mod = _load_migrate_module()
+    implausible = [{"start": "2026-05-20T13:00:00+00:00", "change": 99999.0}]
+    assert mod._repairable("sensor.ge_pv_power", {}, implausible) is False
