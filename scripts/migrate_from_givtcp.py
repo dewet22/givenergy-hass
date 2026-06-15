@@ -792,6 +792,54 @@ def find_flat_line_spans(
     return spans
 
 
+def _unexplained_flat_portions(
+    span: dict[str, Any], covered_intervals: list[tuple[str, str]]
+) -> list[dict[str, Any]]:
+    """Subtract the covered (gap_undercount) intervals from a flat *span* and
+    return the residual contiguous pieces ``{start, end, hours}`` left unexplained.
+
+    A short accepted reset gap that merely touches a multi-day flat does NOT
+    exempt the whole span — only the overlapping slice is removed, so a residual
+    portion can still be long enough to block.
+    """
+    span_a = _to_utc(span["start"])
+    span_b = _to_utc(span["end"])
+    if span_b <= span_a:
+        return []
+    # Clip each covered interval to the span, keep non-empty overlaps, merge.
+    clipped: list[tuple[datetime, datetime]] = []
+    for cs, ce in covered_intervals:
+        lo = max(span_a, _to_utc(cs))
+        hi = min(span_b, _to_utc(ce))
+        if hi > lo:
+            clipped.append((lo, hi))
+    clipped.sort()
+    merged: list[tuple[datetime, datetime]] = []
+    for lo, hi in clipped:
+        if merged and lo <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+        else:
+            merged.append((lo, hi))
+    # Walk the gaps between the merged covered intervals.
+    residual: list[dict[str, Any]] = []
+    cursor = span_a
+    for lo, hi in merged:
+        if lo > cursor:
+            residual.append(_flat_piece(cursor, lo))
+        cursor = max(cursor, hi)
+    if span_b > cursor:
+        residual.append(_flat_piece(cursor, span_b))
+    return residual
+
+
+def _flat_piece(a: datetime, b: datetime) -> dict[str, Any]:
+    return {
+        "start": _as_iso(a),
+        "end": _as_iso(b),
+        "hours": round((b - a).total_seconds() / 3600.0, 6),
+    }
+
+
 def _reset_aware_movement(
     rows: list[dict[str, Any]], reset_class: ResetClass, tz: ZoneInfo
 ) -> float:
@@ -1227,6 +1275,20 @@ def _state_deltas(rows: list[dict[str, Any]]) -> list[float]:
     ]
 
 
+def _gap_undercount_intervals(events: dict[str, list] | None) -> list[tuple[str, str]]:
+    """The covered intervals for a candidate's accepted reset gaps.
+
+    Each ``gap_undercount`` event carries ``from`` (the prior reading's start) and
+    ``start`` (the post-gap reading); the carried-flat interval is ``[from, start]``.
+    """
+    out: list[tuple[str, str]] = []
+    for e in (events or {}).get("gap_undercount", []):
+        frm, start = e.get("from"), e.get("start")
+        if frm and start:
+            out.append((frm, start))
+    return out
+
+
 async def run_validation(
     ws: HAWebSocket,
     results: list[MigrationResult],
@@ -1236,48 +1298,90 @@ async def run_validation(
     repair: bool = False,
     applied: bool = True,
     max_kwh: float | None = None,
-) -> int:
-    """Re-read each migrated/previewed sum series, report validation findings.
+    cutover: datetime | None = None,
+) -> tuple[int, bool]:
+    """Validate each built **candidate** (``r.rebuilt_rows``) and report findings.
 
-    Read-only by default — runs in both dry-run and apply. In dry-run mode the
-    series read back are the *current* (unmigrated) HA series, not a
-    post-migration result.  When ``repair`` is set (only when --apply and
-    --repair-residue are both given), entities with residual implausible hours
-    have their rebuilt series cleared and re-imported; ``units_by_id`` supplies
-    the unit of measurement for the re-import metadata.  Only sum entities
-    (those present in ``units_by_id``) are eligible for repair — mean entities
-    are never touched.
-    Returns the validation exit code from ``format_validation_report``.
+    Operates on the in-memory candidate — it does NOT re-read HA — so the same
+    findings drive both the dry-run preview and the Phase-A apply gate. Per
+    candidate it records: ``gaps`` (informational); ``flat_lines`` clipped by the
+    accepted ``gap_undercount`` intervals to the residual *unexplained* portions
+    (a residual portion >= ``_FLAT_LINE_MIN_HOURS`` is blocking); a
+    ``source_comparison`` against the cleaned pre-cutover source movement; a
+    ``ge_preservation`` comparison of the post-cutover rebuilt vs GE-source
+    movement; and the raw rebuild ``events`` (``rebaseline``/``smear``/
+    ``gap_undercount`` are accepted, ``unresolved`` blocks).
+
+    When ``repair`` is set (only under --apply --repair-residue), candidates with
+    residual implausible hours are cleared and re-imported from the rebuilt rows;
+    ``units_by_id`` supplies the unit for the re-import metadata. Only sum
+    entities (present in ``units_by_id``) are eligible — mean entities are never
+    touched.
+
+    Returns ``(exit_code, blocking)``: the report exit code, and a blocking flag
+    true when any candidate has an unexplained flat >= threshold, a flagged
+    source comparison, a flagged GE-preservation comparison, or an unresolved
+    held run.
     """
     units_by_id = units_by_id or {}
     findings: dict[str, dict[str, list]] = {}
     series_by_id: dict[str, list[dict[str, Any]]] = {}
     to_repair: list[str] = []
+    blocking = False
 
     for r in results:
-        if r.status not in ("migrated", "dry_run"):
+        if r.status != "candidate":
             continue
-        try:
-            raw = await ws.get_statistics([r.ge_id], _EPOCH)
-        except Exception:  # nosec B112 — validation is best-effort; skip unreadable series
-            continue
-        rows = [_normalise(s) for s in raw.get(r.ge_id, [])]
+        rows = r.rebuilt_rows or []
         if not rows:
             continue
+        events = r.events or {}
         gaps = classify_gaps(rows)
+
+        # Residual unexplained flats: clip each flat span by the accepted
+        # gap_undercount intervals, keep contiguous residual >= threshold.
+        covered = _gap_undercount_intervals(events)
+        flat_lines: list[dict[str, Any]] = []
+        for span in find_flat_line_spans(rows):
+            for piece in _unexplained_flat_portions(span, covered):
+                if piece["hours"] >= _FLAT_LINE_MIN_HOURS:
+                    flat_lines.append(piece)
+
+        # Pre-cutover candidate movement vs cleaned source movement.
+        rc = _repair_reset_class(r.ge_id, reset_classes)
+        if cutover is not None:
+            pre = [s for s in rows if _to_utc(s["start"]) < cutover]
+        else:
+            pre = rows
+        candidate_pre_movement = _reset_aware_movement(pre, rc, tz)
+        source_comparison = compare_source_movement(
+            r.source_movement, candidate_pre_movement, r.upward_offsets
+        )
+
+        # Post-cutover GE-preservation: rebuilt movement must match GE source.
+        ge_preservation = compare_source_movement(r.ge_post_movement, r.post_movement, 0.0)
+
+        unresolved = events.get("unresolved", [])
+        candidate_blocking = bool(flat_lines or unresolved) or bool(
+            source_comparison["flagged"] or ge_preservation["flagged"]
+        )
+        blocking = blocking or candidate_blocking
+
         ceiling = effective_ceiling(adaptive_ceiling(_state_deltas(rows)), max_kwh)
-        if ceiling is None:
-            # No guard derivable (too little clean data, no cap): record gaps but
-            # skip the ceiling-dependent checks rather than crash on a None bound.
-            findings[r.ge_id] = {"implausible": [], "fake_resets": [], "gaps": gaps}
-            series_by_id[r.ge_id] = rows
-            continue
-        implausible = find_implausible_hours(rows, ceiling)
-        fake_resets = find_fake_reset_shapes(rows, ceiling)
+        implausible = find_implausible_hours(rows, ceiling) if ceiling is not None else []
+        fake_resets = find_fake_reset_shapes(rows, ceiling) if ceiling is not None else []
+
         findings[r.ge_id] = {
             "implausible": implausible,
             "fake_resets": fake_resets,
             "gaps": gaps,
+            "flat_lines": flat_lines,
+            "source_comparison": source_comparison,
+            "ge_preservation": ge_preservation,
+            "rebaseline": events.get("rebaseline", []),
+            "smear": events.get("smear", []),
+            "gap_undercount": events.get("gap_undercount", []),
+            "unresolved": unresolved,
         }
         series_by_id[r.ge_id] = rows
         if repair and _repairable(r.ge_id, units_by_id, implausible):
@@ -1316,7 +1420,7 @@ async def run_validation(
             )
             print(f"    repaired {ge_id}")
 
-    return exit_code
+    return exit_code, blocking
 
 
 # ---------------------------------------------------------------------------
@@ -1635,7 +1739,10 @@ async def run(args: argparse.Namespace) -> int:
 
     # Read-only validation of the resulting sum series, in both dry-run and apply.
     # Residue repair only fires when the user opted in with --apply --repair-residue.
-    validation_exit = await run_validation(
+    # NOTE: run_validation now returns (exit_code, blocking). The two-phase apply
+    # gate (Task 9) will consume `blocking`; here we keep the dry-run/legacy flow
+    # importable by surfacing the exit code only.
+    validation_exit, _blocking = await run_validation(
         ws,
         results,
         tz,
@@ -1644,6 +1751,7 @@ async def run(args: argparse.Namespace) -> int:
         repair=applying and args.repair_residue,
         applied=applying,
         max_kwh=args.max_kw,
+        cutover=cutover,
     )
 
     await ws.close()

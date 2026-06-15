@@ -818,6 +818,307 @@ def test_acceptance_rebuild_heals_documented_corruption():
     assert 27396.1 not in out_states  # the fake spike was overwritten too
 
 
+# ---------------------------------------------------------------------------
+# _unexplained_flat_portions tests
+# ---------------------------------------------------------------------------
+
+
+def test_unexplained_flat_portions_short_covered_gap_leaves_residual():
+    # A long flat (00:00..12:00 == 12h) containing one short covered gap
+    # (03:00..05:00) still yields residual contiguous pieces — the 00:00..03:00
+    # (3h) and 05:00..12:00 (7h) parts. The 7h part is >= the 6h threshold.
+    span = {
+        "start": "2026-05-20T00:00:00+00:00",
+        "end": "2026-05-20T12:00:00+00:00",
+        "hours": 12.0,
+    }
+    covered = [("2026-05-20T03:00:00+00:00", "2026-05-20T05:00:00+00:00")]
+    residual = _MOD._unexplained_flat_portions(span, covered)
+    hours = sorted(round(p["hours"], 6) for p in residual)
+    assert hours == [3.0, 7.0]
+    assert any(p["hours"] >= 6 for p in residual)  # 7h residual is blocking
+
+
+def test_unexplained_flat_portions_fully_covered_yields_nothing():
+    span = {
+        "start": "2026-05-20T00:00:00+00:00",
+        "end": "2026-05-20T08:00:00+00:00",
+        "hours": 8.0,
+    }
+    # gap interval spans the whole flat (with margin) -> no residual
+    covered = [("2026-05-19T23:00:00+00:00", "2026-05-20T09:00:00+00:00")]
+    assert _MOD._unexplained_flat_portions(span, covered) == []
+
+
+def test_unexplained_flat_portions_no_intervals_returns_whole_span():
+    span = {
+        "start": "2026-05-20T00:00:00+00:00",
+        "end": "2026-05-20T07:00:00+00:00",
+        "hours": 7.0,
+    }
+    residual = _MOD._unexplained_flat_portions(span, [])
+    assert len(residual) == 1
+    assert abs(residual[0]["hours"] - 7.0) < 1e-9
+    assert residual[0]["start"] == "2026-05-20T00:00:00+00:00"
+    assert residual[0]["end"] == "2026-05-20T07:00:00+00:00"
+
+
+# ---------------------------------------------------------------------------
+# run_validation candidate-based tests
+# ---------------------------------------------------------------------------
+
+
+class _RecordingWS:
+    """Records get_statistics/clear/import calls. read_back configures the
+    series get_statistics returns (keyed by id) for repair/verify paths."""
+
+    def __init__(self, read_back: dict[str, list[dict]] | None = None) -> None:
+        self.read_back = read_back or {}
+        self.get_calls: list[list[str]] = []
+        self.clear_calls: list[list[str]] = []
+        self.import_calls: list[dict] = []
+
+    async def get_statistics(self, ids, start, end=None, types=None):  # noqa: ANN001
+        self.get_calls.append(list(ids))
+        return {i: self.read_back.get(i, []) for i in ids}
+
+    async def clear_statistics(self, ids):  # noqa: ANN001
+        self.clear_calls.append(list(ids))
+
+    async def import_statistics(self, metadata, stats):  # noqa: ANN001
+        self.import_calls.append({"metadata": metadata, "stats": stats})
+
+
+def _candidate(ge_id: str, rebuilt_rows: list[dict], **kw) -> object:
+    r = _MOD.MigrationResult("desc", ge_id)
+    r.status = "candidate"
+    r.rebuilt_rows = rebuilt_rows
+    r.events = kw.get("events", {})
+    r.source_movement = kw.get("source_movement", 0.0)
+    r.upward_offsets = kw.get("upward_offsets", 0.0)
+    r.post_movement = kw.get("post_movement", 0.0)
+    r.ge_post_movement = kw.get("ge_post_movement", 0.0)
+    r.metadata = {
+        "has_mean": False,
+        "has_sum": True,
+        "name": None,
+        "source": "recorder",
+        "statistic_id": ge_id,
+        "unit_of_measurement": "kWh",
+    }
+    return r
+
+
+def _flat_rows(start_hour: int, count: int, value: float) -> list[dict]:
+    return [
+        {
+            "start": f"2026-05-20T{start_hour + h:02d}:00:00+00:00",
+            "sum": value,
+            "state": value,
+        }
+        for h in range(count)
+    ]
+
+
+_CUTOVER_DT = __import__("datetime").datetime(2026, 5, 20, tzinfo=__import__("datetime").UTC)
+
+
+def test_run_validation_does_not_reread_ha_for_candidate():
+    # A clean candidate validates without any get_statistics call.
+    rows = [
+        {"start": "2026-05-20T08:00:00+00:00", "sum": 100.0, "state": 100.0},
+        {"start": "2026-05-20T09:00:00+00:00", "sum": 102.0, "state": 102.0},
+        {"start": "2026-05-20T10:00:00+00:00", "sum": 105.0, "state": 105.0},
+    ]
+    # rows are pre-cutover (climb of +5 matches source_movement) -> no divergence.
+    late_cutover = __import__("datetime").datetime(2026, 5, 21, tzinfo=__import__("datetime").UTC)
+    r = _candidate("sensor.ge_x", rows, source_movement=5.0, post_movement=0.0)
+    ws = _RecordingWS()
+    exit_code, blocking = asyncio.run(
+        _MOD.run_validation(
+            ws,
+            [r],
+            _LONDON,
+            units_by_id={"sensor.ge_x": "kWh"},
+            applied=False,
+            cutover=late_cutover,
+            max_kwh=50.0,
+        )
+    )
+    assert ws.get_calls == []  # candidate path never re-reads HA
+    assert blocking is False
+
+
+def test_run_validation_unexplained_flat_is_blocking():
+    # A 12h flat span not covered by any gap_undercount -> blocking.
+    rows = _flat_rows(0, 13, 100.0)  # 00:00..12:00 == 12h flat
+    r = _candidate("sensor.ge_x", rows, source_movement=0.0)
+    ws = _RecordingWS()
+    exit_code, blocking = asyncio.run(
+        _MOD.run_validation(
+            ws,
+            [r],
+            _LONDON,
+            units_by_id={"sensor.ge_x": "kWh"},
+            applied=False,
+            cutover=_CUTOVER_DT,
+            max_kwh=50.0,
+        )
+    )
+    assert blocking is True
+    assert r.ge_id in [k for k in [r.ge_id]]
+
+
+def test_run_validation_flat_covered_by_gap_undercount_not_blocking():
+    # The whole 12h flat is covered by a recorded gap_undercount -> warned, not blocking.
+    rows = _flat_rows(0, 13, 100.0)  # 00:00..12:00
+    events = {
+        "gap_undercount": [
+            {"from": "2026-05-19T23:00:00+00:00", "start": "2026-05-20T13:00:00+00:00"}
+        ]
+    }
+    r = _candidate("sensor.ge_x", rows, events=events, source_movement=0.0)
+    ws = _RecordingWS()
+    exit_code, blocking = asyncio.run(
+        _MOD.run_validation(
+            ws,
+            [r],
+            _LONDON,
+            units_by_id={"sensor.ge_x": "kWh"},
+            applied=False,
+            cutover=_CUTOVER_DT,
+            max_kwh=50.0,
+        )
+    )
+    assert blocking is False
+
+
+def test_run_validation_long_flat_with_short_covered_gap_still_blocking():
+    # 12h flat with a 2h covered gap inside leaves a 7h+ residual -> blocking.
+    rows = _flat_rows(0, 13, 100.0)  # 00:00..12:00
+    events = {
+        "gap_undercount": [
+            {"from": "2026-05-20T03:00:00+00:00", "start": "2026-05-20T05:00:00+00:00"}
+        ]
+    }
+    r = _candidate("sensor.ge_x", rows, events=events, source_movement=0.0)
+    ws = _RecordingWS()
+    _exit, blocking = asyncio.run(
+        _MOD.run_validation(
+            ws,
+            [r],
+            _LONDON,
+            units_by_id={"sensor.ge_x": "kWh"},
+            applied=False,
+            cutover=_CUTOVER_DT,
+            max_kwh=50.0,
+        )
+    )
+    assert blocking is True
+
+
+def test_run_validation_unresolved_event_is_blocking():
+    rows = [
+        {"start": "2026-05-20T08:00:00+00:00", "sum": 100.0, "state": 100.0},
+        {"start": "2026-05-20T09:00:00+00:00", "sum": 102.0, "state": 102.0},
+    ]
+    events = {"unresolved": [{"start": "2026-05-20T09:00:00+00:00", "count": 2}]}
+    r = _candidate("sensor.ge_x", rows, events=events, source_movement=2.0)
+    ws = _RecordingWS()
+    _exit, blocking = asyncio.run(
+        _MOD.run_validation(
+            ws,
+            [r],
+            _LONDON,
+            units_by_id={"sensor.ge_x": "kWh"},
+            applied=False,
+            cutover=_CUTOVER_DT,
+            max_kwh=50.0,
+        )
+    )
+    assert blocking is True
+
+
+def test_run_validation_source_divergence_is_blocking():
+    # Candidate moved 60 pre-cutover but source claims 100 (no upward offsets) -> flagged.
+    rows = [
+        {"start": "2026-05-20T08:00:00+00:00", "sum": 100.0, "state": 100.0},
+        {"start": "2026-05-20T09:00:00+00:00", "sum": 160.0, "state": 160.0},
+    ]
+    # rows are post-cutover-ish; make pre-cutover window contain them by using a
+    # late cutover so the candidate pre-movement = 60 vs source 100.
+    late_cutover = __import__("datetime").datetime(2026, 5, 21, tzinfo=__import__("datetime").UTC)
+    r = _candidate("sensor.ge_x", rows, source_movement=100.0, upward_offsets=0.0)
+    ws = _RecordingWS()
+    _exit, blocking = asyncio.run(
+        _MOD.run_validation(
+            ws,
+            [r],
+            _LONDON,
+            units_by_id={"sensor.ge_x": "kWh"},
+            applied=False,
+            cutover=late_cutover,
+            max_kwh=200.0,
+        )
+    )
+    assert blocking is True
+
+
+def test_run_validation_ge_preservation_divergence_is_blocking():
+    # Post-cutover rebuilt movement diverges from the GE source movement -> blocking.
+    rows = [
+        {"start": "2026-05-21T08:00:00+00:00", "sum": 100.0, "state": 100.0},
+        {"start": "2026-05-21T09:00:00+00:00", "sum": 110.0, "state": 110.0},
+    ]
+    r = _candidate(
+        "sensor.ge_x",
+        rows,
+        source_movement=0.0,
+        post_movement=10.0,
+        ge_post_movement=40.0,  # GE source moved 40 post-cutover, rebuilt only 10
+    )
+    ws = _RecordingWS()
+    _exit, blocking = asyncio.run(
+        _MOD.run_validation(
+            ws,
+            [r],
+            _LONDON,
+            units_by_id={"sensor.ge_x": "kWh"},
+            applied=False,
+            cutover=_CUTOVER_DT,
+            max_kwh=50.0,
+        )
+    )
+    assert blocking is True
+
+
+def test_run_validation_repair_runs_against_candidate():
+    # A candidate with implausible residue + repair=True clears+imports using the
+    # candidate rows, not a re-read.
+    rows = [
+        {"start": "2026-05-20T08:00:00+00:00", "sum": 100.0, "state": 100.0},
+        {"start": "2026-05-20T09:00:00+00:00", "sum": 27496.0, "state": 27496.0},
+        {"start": "2026-05-20T10:00:00+00:00", "sum": 27497.0, "state": 27497.0},
+    ]
+    r = _candidate("sensor.ge_pv_energy_today", rows, source_movement=0.0)
+    ws = _RecordingWS()
+    asyncio.run(
+        _MOD.run_validation(
+            ws,
+            [r],
+            _LONDON,
+            units_by_id={"sensor.ge_pv_energy_today": "kWh"},
+            reset_classes={"sensor.ge_pv_energy_today": _MOD.ResetClass.DAILY},
+            repair=True,
+            applied=True,
+            cutover=_CUTOVER_DT,
+            max_kwh=50.0,
+        )
+    )
+    assert ws.clear_calls == [["sensor.ge_pv_energy_today"]]
+    assert len(ws.import_calls) == 1
+
+
 def test_positive_float_accepts_positive():
     assert _MOD._positive_float("6") == 6.0
     assert _MOD._positive_float("0.5") == 0.5
