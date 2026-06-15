@@ -473,6 +473,15 @@ class HAWebSocket:
         result = await self._call("config/device_registry/list")
         return result or []
 
+    async def get_timezone(self) -> ZoneInfo:
+        """Return the HA instance's configured local timezone (UTC fallback)."""
+        cfg = await self._call("get_config")
+        name = (cfg or {}).get("time_zone") or "UTC"
+        try:
+            return ZoneInfo(name)
+        except Exception:
+            return ZoneInfo("UTC")
+
     async def get_statistics(
         self,
         statistic_ids: list[str],

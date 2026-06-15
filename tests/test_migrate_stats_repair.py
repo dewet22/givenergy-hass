@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from pathlib import Path
 from types import ModuleType
@@ -128,3 +129,23 @@ def test_rebuild_walk_carries_sum_across_gap_rows():
     ]
     out = _MOD.rebuild_sum_walk(rows, _MOD.ResetClass.LIFETIME, 50.0, _LONDON)
     assert _sums(out) == [100.0, 100.0, 101.0]
+
+
+class _ConfigWS:
+    def __init__(self, tz: str) -> None:
+        self._tz = tz
+        self.calls: list[str] = []
+
+    async def _call(self, msg_type, **kwargs):
+        self.calls.append(msg_type)
+        if msg_type == "get_config":
+            return {"time_zone": self._tz}
+        raise AssertionError(msg_type)
+
+
+def test_get_timezone_reads_ha_config():
+    mod = _load_migrate_module()
+    ws = mod.HAWebSocket.__new__(mod.HAWebSocket)
+    ws._call = _ConfigWS("Europe/London")._call  # type: ignore[attr-defined]
+    tz = asyncio.run(mod.HAWebSocket.get_timezone(ws))
+    assert str(tz) == "Europe/London"
