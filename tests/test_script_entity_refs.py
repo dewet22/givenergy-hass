@@ -52,7 +52,7 @@ class _FakeWS:
     def __init__(self, series: dict[str, list[dict]]) -> None:
         self._series = series
 
-    async def get_statistics(self, ids, start, end=None):  # noqa: ANN001 - mirrors real sig
+    async def get_statistics(self, ids, start, end=None, types=None):  # noqa: ANN001 - mirrors real sig
         return {i: self._series.get(i, []) for i in ids}
 
 
@@ -356,3 +356,96 @@ async def test_migrate_entity_flags_missing_overlap():
     assert r.status == "dry_run"
     assert r.ge_pre_rows == 0
     assert r.warn_no_ge_pre is True
+
+
+async def test_migrate_entity_trust_source_sums_legacy_path():
+    """trust_source_sums=True copies GivTCP sums and rebases GE-post from them.
+
+    The escape hatch (--trust-source-sums flag) must use the GivTCP last sum as
+    the rebase anchor rather than a rebuilt-from-state value, so sum_at_cutover
+    equals the last GivTCP sum row directly.
+    """
+    mod = _load_migrate_module()
+    ws = _FakeWS(
+        {
+            _GIVTCP: [
+                _stat_row(datetime(2026, 6, 5, tzinfo=UTC), 100.0),
+                _stat_row(datetime(2026, 6, 6, tzinfo=UTC), 115.0),
+            ],
+            _GE: [
+                _stat_row(datetime(2026, 6, 5, tzinfo=UTC), 5.0),
+                _stat_row(datetime(2026, 6, 7, 1, tzinfo=UTC), 6.0),
+            ],
+        }
+    )
+    r = await mod.migrate_entity(
+        ws,
+        _GIVTCP,
+        _GE,
+        "Solar generation today",
+        _CUTOVER,
+        "kWh",
+        False,
+        ge_known=True,
+        reset_class=mod.ResetClass.DAILY,
+        tz=_TZ,
+        trust_source_sums=True,
+    )
+    assert r.status == "dry_run"
+    # Legacy path: sum_at_cutover is exactly the last GivTCP sum row, not a
+    # state-derived figure.
+    assert r.sum_at_cutover == 115.0
+    # merged = 2 givtcp rows + 1 ge_post row (the pre-cutover GE row is dropped)
+    assert r.merged_rows == 3
+
+
+_GIVTCP_MEAN = "sensor.givtcp_x_pv_power"
+_GE_MEAN = "sensor.givenergy_inverter_x_pv_power"
+
+
+def _mean_row(dt: datetime, mean: float) -> dict:
+    """A recorder statistics mean row (millisecond `start`, mean/min/max fields)."""
+    return {
+        "start": int(dt.timestamp() * 1000),
+        "mean": mean,
+        "min": mean * 0.8,
+        "max": mean * 1.2,
+    }
+
+
+async def test_migrate_mean_entity_dry_run():
+    """migrate_mean_entity previews a mean-type series without touching HA.
+
+    Provides GivTCP mean rows pre-cutover and a GE target series post-cutover;
+    asserts status=dry_run and that merged_rows equals givtcp_pre + ge_post.
+    """
+    mod = _load_migrate_module()
+    givtcp_pre = [
+        _mean_row(datetime(2026, 6, 5, tzinfo=UTC), 1500.0),
+        _mean_row(datetime(2026, 6, 6, tzinfo=UTC), 1200.0),
+    ]
+    ge_post = [
+        _mean_row(datetime(2026, 6, 7, 1, tzinfo=UTC), 1100.0),
+        _mean_row(datetime(2026, 6, 8, tzinfo=UTC), 950.0),
+    ]
+    # Add a GE pre-cutover row that should be excluded from merged output
+    ge_pre = [_mean_row(datetime(2026, 6, 5, tzinfo=UTC), 200.0)]
+    ws = _FakeWS(
+        {
+            _GIVTCP_MEAN: givtcp_pre,
+            _GE_MEAN: ge_pre + ge_post,
+        }
+    )
+    r = await mod.migrate_mean_entity(
+        ws,
+        _GIVTCP_MEAN,
+        _GE_MEAN,
+        "PV power",
+        _CUTOVER,
+        "W",
+        False,
+        ge_known=True,
+    )
+    assert r.status == "dry_run"
+    # merged = 2 givtcp pre-cutover rows + 2 ge post-cutover rows
+    assert r.merged_rows == len(givtcp_pre) + len(ge_post)

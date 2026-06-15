@@ -862,6 +862,9 @@ async def migrate_entity(
             if merged_states[i].get("state") is not None
             and merged_states[i - 1].get("state") is not None
         ]
+        # Negative deltas (resets, spikes) are silently excluded inside
+        # adaptive_ceiling (it filters to `d > 0`), so passing the full list here
+        # is intentional — no pre-filtering needed.
         ceiling = adaptive_ceiling(deltas)
         merged = rebuild_sum_walk(merged_states, reset_class, ceiling, tz)
         r.sum_at_cutover = next(
