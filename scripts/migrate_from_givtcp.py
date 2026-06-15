@@ -303,6 +303,10 @@ _CEILING_MIN_SAMPLES = 24
 _CEILING_PERCENTILE = 99.0
 _CEILING_FACTOR = 1.5
 
+_REBASELINE_HOLDS = 3  # consecutive coherent holds before re-baselining
+_FLAT_LINE_MIN_HOURS = 6  # min span for a flat-line finding
+_MOVEMENT_TOLERANCE_PCT = 5.0  # source-vs-rebuilt movement divergence tolerance
+
 
 def _percentile(sorted_vals: list[float], p: float) -> float:
     """Nearest-rank (floor-index) percentile of an ascending-sorted, non-empty
@@ -384,6 +388,69 @@ def _is_reset_boundary(
 # ---------------------------------------------------------------------------
 # Sum-column rebuild walk
 # ---------------------------------------------------------------------------
+
+
+def _elapsed_hours(prev_start: str, start: str) -> float:
+    """Whole-ish hours between two ISO timestamps, floored at 1 (so the per-hour
+    bound applies to adjacent readings and scales up across a gap)."""
+    delta = (_to_utc(start) - _to_utc(prev_start)).total_seconds() / 3600.0
+    return max(1.0, delta)
+
+
+def _gap_crosses_reset(prev_start: str, start: str, reset_class: ResetClass, tz: ZoneInfo) -> bool:
+    """True if a natural reset boundary for *reset_class* falls STRICTLY within
+    (prev_start, start), in local time. A reading exactly on the boundary is a
+    normal reset row, not a crossed gap. LIFETIME never resets."""
+    if reset_class is ResetClass.LIFETIME:
+        return False
+    a = _to_utc(prev_start).astimezone(tz)
+    b = _to_utc(start).astimezone(tz)
+    if b <= a:
+        return False
+    if reset_class is ResetClass.DAILY:
+        first_midnight = (a + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return first_midnight < b  # strictly before b
+    # ANNUAL: first Jan-1 boundary after a, strictly before b
+    first_jan1 = a.replace(
+        year=a.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    return first_jan1 < b
+
+
+def _segment_coherent(held: list[tuple[str, float]], ceiling: float, tz: ZoneInfo) -> bool:
+    """True if the held (start, state) readings form a monotonic cumulative
+    segment: every adjacent internal delta is in [0, ceiling × elapsed_pair].
+    The offset from the prior baseline to held[0] is evaluated by the caller
+    (it may be either direction)."""
+    for (sa, va), (sb, vb) in zip(held, held[1:]):
+        if not (0 <= vb - va <= ceiling * _elapsed_hours(sa, sb)):
+            return False
+    return True
+
+
+def _smear_gap(
+    prev_sum: float, total_delta: float, prev_start: str, end_start: str, tz: ZoneInfo
+) -> list[dict[str, Any]]:
+    """Daily-boundary rows climbing linearly from prev_sum across (prev_start,
+    end_start). The caller emits the real end row (carrying prev_sum+total_delta);
+    these fill the gap so each day shows a plausible share, not one spike."""
+    start_dt = _to_utc(prev_start)
+    end_dt = _to_utc(end_start)
+    total = (end_dt - start_dt).total_seconds()
+    if total <= 0:
+        return []
+    rows: list[dict[str, Any]] = []
+    local = start_dt.astimezone(tz)
+    day = (local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    while True:
+        boundary = day.astimezone(UTC)
+        if boundary >= end_dt:
+            break
+        frac = (boundary - start_dt).total_seconds() / total
+        s = round(prev_sum + total_delta * frac, 6)
+        rows.append({"start": _as_iso(boundary), "sum": s, "state": s})
+        day += timedelta(days=1)
+    return rows
 
 
 def rebuild_sum_walk(
@@ -618,6 +685,86 @@ def find_implausible_hours(rows: list[dict[str, Any]], ceiling: float) -> list[d
         if cs - ps > ceiling:
             flagged.append({"start": cur["start"], "change": round(cs - ps, 3)})
     return flagged
+
+
+_FLAT_EPSILON = 1e-6
+
+
+def find_flat_line_spans(
+    rows: list[dict[str, Any]], min_hours: int = _FLAT_LINE_MIN_HOURS
+) -> list[dict[str, Any]]:
+    """Maximal runs of consecutive equal-sum rows whose DURATION (from timestamps,
+    not row count) is >= min_hours. Epsilon comparison handles float/synthetic
+    sums. Returns {start, end, hours}; the caller exempts spans that overlap a
+    recorded gap_undercount interval."""
+    spans: list[dict[str, Any]] = []
+    run_start = 0
+    for i in range(1, len(rows) + 1):
+        changed = (
+            i == len(rows)
+            or abs((rows[i].get("sum") or 0.0) - (rows[i - 1].get("sum") or 0.0)) > _FLAT_EPSILON
+        )
+        if not changed:
+            continue
+        last = i - 1
+        if last > run_start:  # at least two rows in the run
+            duration = (
+                _to_utc(rows[last]["start"]) - _to_utc(rows[run_start]["start"])
+            ).total_seconds() / 3600.0
+            if duration >= min_hours:
+                spans.append(
+                    {
+                        "start": rows[run_start]["start"],
+                        "end": rows[last]["start"],
+                        "hours": round(duration, 6),
+                    }
+                )
+        run_start = i
+    return spans
+
+
+def _reset_aware_movement(
+    rows: list[dict[str, Any]], reset_class: ResetClass, tz: ZoneInfo
+) -> float:
+    """Genuine accumulation across *rows*: positive consecutive deltas, plus the
+    post-reset state at a legitimate reset boundary (a reset drops the raw value,
+    so max(0, Δ) would lose that day's pre-reset accumulation otherwise)."""
+    total = 0.0
+    prev = None
+    for r in rows:
+        st = r.get("state")
+        if st is None:
+            continue
+        if prev is not None:
+            if st < prev and _is_reset_boundary(r["start"], reset_class, tz, 2.0):
+                total += st  # post-reset accumulation
+            elif st >= prev:
+                total += st - prev  # genuine forward movement
+            # an off-boundary drop contributes nothing (corruption)
+        prev = st
+    return total
+
+
+def compare_source_movement(
+    source_movement: float,
+    rebuilt_movement: float,
+    upward_offsets: float,
+    tol_pct: float = _MOVEMENT_TOLERANCE_PCT,
+) -> dict[str, Any]:
+    """Compare rebuilt movement to *cleaned expected* = source movement minus the
+    recorded UPWARD rebase offsets the rebuild intentionally dropped. Downward
+    offsets were never in the positive source movement, so they are NOT
+    subtracted. Movements are reset-aware (see _reset_aware_movement) over the
+    same aligned window."""
+    expected = source_movement - upward_offsets
+    denom = abs(expected) if abs(expected) > 1e-9 else 1.0
+    diff_pct = abs(rebuilt_movement - expected) / denom * 100.0
+    return {
+        "expected": round(expected, 3),
+        "rebuilt": round(rebuilt_movement, 3),
+        "diff_pct": round(diff_pct, 2),
+        "flagged": diff_pct > tol_pct,
+    }
 
 
 def _dedup_series(

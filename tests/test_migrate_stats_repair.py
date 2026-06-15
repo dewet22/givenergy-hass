@@ -134,6 +134,197 @@ def _sums(rows: list[dict]) -> list[float]:
     return [r["sum"] for r in rows]
 
 
+def test_elapsed_hours():
+    assert _MOD._elapsed_hours("2026-05-20T08:00:00+00:00", "2026-05-20T09:00:00+00:00") == 1.0
+    assert _MOD._elapsed_hours("2026-05-20T08:00:00+00:00", "2026-05-20T13:00:00+00:00") == 5.0
+    # never below 1 (guards the per-hour bound)
+    assert _MOD._elapsed_hours("2026-05-20T08:00:00+00:00", "2026-05-20T08:30:00+00:00") == 1.0
+
+
+def test_gap_crosses_reset_daily():
+    rc = _MOD.ResetClass
+    # 20:00Z -> 06:00Z next day in BST: a local midnight (23:00Z) lies strictly inside
+    assert _MOD._gap_crosses_reset(
+        "2026-05-20T20:00:00+00:00", "2026-05-21T06:00:00+00:00", rc.DAILY, _LONDON
+    )
+    # same-day morning, no midnight between
+    assert not _MOD._gap_crosses_reset(
+        "2026-05-20T08:00:00+00:00", "2026-05-20T13:00:00+00:00", rc.DAILY, _LONDON
+    )
+
+
+def test_gap_crosses_reset_daily_endpoint_on_boundary_is_not_crossing():
+    rc = _MOD.ResetClass
+    # start exactly at local midnight (23:00Z BST): boundary is AT the endpoint,
+    # not strictly inside -> a normal reset row, not a gap_undercount
+    assert not _MOD._gap_crosses_reset(
+        "2026-05-20T20:00:00+00:00", "2026-05-20T23:00:00+00:00", rc.DAILY, _LONDON
+    )
+
+
+def test_gap_crosses_reset_lifetime_never():
+    assert not _MOD._gap_crosses_reset(
+        "2026-05-20T08:00:00+00:00", "2026-06-01T00:00:00+00:00", _MOD.ResetClass.LIFETIME, _LONDON
+    )
+
+
+def test_gap_crosses_reset_annual_year_end():
+    rc = _MOD.ResetClass
+    assert _MOD._gap_crosses_reset(
+        "2025-12-31T20:00:00+00:00", "2026-01-01T06:00:00+00:00", rc.ANNUAL, _LONDON
+    )
+    assert not _MOD._gap_crosses_reset(
+        "2026-03-01T00:00:00+00:00", "2026-03-05T00:00:00+00:00", rc.ANNUAL, _LONDON
+    )
+
+
+def test_gap_crosses_reset_annual_endpoint_on_boundary_is_not_crossing():
+    rc = _MOD.ResetClass
+    # start exactly at Jan-1 00:00 local (GMT): boundary AT endpoint, not inside
+    assert not _MOD._gap_crosses_reset(
+        "2025-12-31T20:00:00+00:00", "2026-01-01T00:00:00+00:00", rc.ANNUAL, _LONDON
+    )
+
+
+def test_segment_coherent_monotonic_within_bound():
+    held = [
+        ("2026-05-20T12:00:00+00:00", 1000.0),
+        ("2026-05-20T13:00:00+00:00", 1002.7),
+        ("2026-05-20T14:00:00+00:00", 1005.1),
+    ]  # +2.7, +2.4 over 1h each
+    assert _MOD._segment_coherent(held, 25.0, _LONDON)
+
+
+def test_segment_coherent_rejects_oscillation():
+    held = [
+        ("2026-05-20T12:00:00+00:00", 1000.0),
+        ("2026-05-20T13:00:00+00:00", 1010.0),
+        ("2026-05-20T14:00:00+00:00", 1001.0),
+    ]  # internal negative delta
+    assert not _MOD._segment_coherent(held, 25.0, _LONDON)
+
+
+def test_segment_coherent_per_pair_elapsed_bound():
+    # all hourly: a +60 internal delta over 1h exceeds 1*25 even though the
+    # cumulative span (3h) would permit 75 — must be rejected.
+    held = [
+        ("2026-05-20T12:00:00+00:00", 1000.0),
+        ("2026-05-20T13:00:00+00:00", 1002.0),
+        ("2026-05-20T14:00:00+00:00", 1062.0),
+    ]  # +60 over 1h
+    assert not _MOD._segment_coherent(held, 25.0, _LONDON)
+
+
+def test_segment_coherent_irregular_spacing_uses_each_gap():
+    # 5h between the last pair allows a larger (but still <= 25*5) delta
+    held = [
+        ("2026-05-20T12:00:00+00:00", 1000.0),
+        ("2026-05-20T13:00:00+00:00", 1002.0),
+        ("2026-05-20T18:00:00+00:00", 1100.0),
+    ]  # +98 over 5h <= 125
+    assert _MOD._segment_coherent(held, 25.0, _LONDON)
+
+
+def test_smear_gap_daily_boundaries_climb_linearly():
+    # 100 -> +60 over 2026-05-20T12:00Z .. 2026-05-23T12:00Z (3 days)
+    rows = _MOD._smear_gap(
+        100.0, 60.0, "2026-05-20T12:00:00+00:00", "2026-05-23T12:00:00+00:00", _LONDON
+    )
+    # local midnights strictly inside: 05-21, 05-22, 05-23 (00:00 local == 23:00Z prev day in BST)
+    assert len(rows) >= 2
+    sums = [r["sum"] for r in rows]
+    assert sums == sorted(sums)  # monotonic climb
+    assert all(100.0 < s < 160.0 for s in sums)  # strictly between start and end
+    assert all(r["state"] == r["sum"] for r in rows)
+
+
+def test_smear_gap_zero_or_negative_span_empty():
+    assert (
+        _MOD._smear_gap(
+            10.0, 5.0, "2026-05-20T12:00:00+00:00", "2026-05-20T12:00:00+00:00", _LONDON
+        )
+        == []
+    )
+
+
+def test_find_flat_line_spans_duration_from_timestamps():
+    # 8 hourly rows 00:00..07:00 == 7 hours of flat, not 8
+    rows = [{"start": f"2026-05-20T{h:02d}:00:00+00:00", "sum": 100.0} for h in range(8)]
+    spans = _MOD.find_flat_line_spans(rows, min_hours=6)
+    assert spans and abs(spans[0]["hours"] - 7.0) < 1e-9
+    assert spans[0]["start"] == "2026-05-20T00:00:00+00:00"
+    assert spans[0]["end"] == "2026-05-20T07:00:00+00:00"
+
+
+def test_find_flat_line_spans_ignores_short_flat():
+    # 00:00..03:00 == 3 hours < 6
+    rows = [{"start": f"2026-05-20T{h:02d}:00:00+00:00", "sum": 100.0} for h in range(4)]
+    assert _MOD.find_flat_line_spans(rows, min_hours=6) == []
+
+
+def test_find_flat_line_spans_epsilon_equality():
+    # sub-epsilon jitter counts as flat
+    rows = [{"start": f"2026-05-20T{h:02d}:00:00+00:00", "sum": 100.0 + h * 1e-9} for h in range(8)]
+    spans = _MOD.find_flat_line_spans(rows, min_hours=6)
+    assert spans and abs(spans[0]["hours"] - 7.0) < 1e-9
+
+
+def test_find_flat_line_spans_irregular_spacing():
+    # a single 8h-apart pair with equal sum is an 8h flat span
+    rows = [
+        {"start": "2026-05-20T00:00:00+00:00", "sum": 100.0},
+        {"start": "2026-05-20T08:00:00+00:00", "sum": 100.0},
+    ]
+    spans = _MOD.find_flat_line_spans(rows, min_hours=6)
+    assert spans and abs(spans[0]["hours"] - 8.0) < 1e-9
+
+
+def test_reset_aware_movement_counts_post_reset():
+    rc = _MOD.ResetClass
+    # DAILY: 2,5 then reset to 0,3 -> genuine movement = (5-2) + 3 = 6, not 3
+    rows = [
+        _row("2026-05-20T22:00:00+00:00", 2.0),
+        _row("2026-05-20T22:30:00+00:00", 5.0),
+        _row("2026-05-20T23:00:00+00:00", 0.0),  # local-midnight reset (BST)
+        _row("2026-05-21T00:00:00+00:00", 3.0),
+    ]
+    assert abs(_MOD._reset_aware_movement(rows, rc.DAILY, _LONDON) - 6.0) < 1e-6
+
+
+def test_reset_aware_movement_lifetime_is_positive_deltas():
+    rc = _MOD.ResetClass
+    rows = [
+        _row("2026-05-20T10:00:00+00:00", 100.0),
+        _row("2026-05-20T11:00:00+00:00", 103.0),
+        _row("2026-05-20T12:00:00+00:00", 105.0),
+    ]
+    assert abs(_MOD._reset_aware_movement(rows, rc.LIFETIME, _LONDON) - 5.0) < 1e-6
+
+
+def test_compare_source_movement_excludes_upward_offset_only():
+    # source moved 100 genuine + an 8000 upward rebase offset; rebuilt has 100
+    res = _MOD.compare_source_movement(
+        source_movement=8100.0, rebuilt_movement=100.0, upward_offsets=8000.0, tol_pct=5.0
+    )
+    assert res["flagged"] is False and abs(res["expected"] - 100.0) < 1e-9
+
+
+def test_compare_source_movement_downward_offset_not_subtracted():
+    # a downward rebase: its offset is negative and was never in positive movement,
+    # so upward_offsets is 0 -> expected stays 100, matches rebuilt 100
+    res = _MOD.compare_source_movement(
+        source_movement=100.0, rebuilt_movement=100.0, upward_offsets=0.0, tol_pct=5.0
+    )
+    assert res["flagged"] is False and res["expected"] == 100.0
+
+
+def test_compare_source_movement_flags_real_divergence():
+    res = _MOD.compare_source_movement(
+        source_movement=100.0, rebuilt_movement=60.0, upward_offsets=0.0, tol_pct=5.0
+    )
+    assert res["flagged"] is True and abs(res["expected"] - 100.0) < 1e-9
+
+
 def test_rebuild_walk_accumulates_genuine_deltas():
     rows = [
         _row("2026-05-20T08:00:00+00:00", 100.0),
