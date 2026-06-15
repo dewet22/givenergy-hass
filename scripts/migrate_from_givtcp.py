@@ -1223,8 +1223,10 @@ def _print_summary(results: list[MigrationResult], applying: bool) -> int:
             print(
                 f"\n  ⚠️  {r.description}: too little clean history to estimate a "
                 "plausibility ceiling, and no --max-kw cap was given — skipped rather "
-                "than import an unguarded sum. Re-run with --max-kw <your inverter's "
-                "peak kW> (or --trust-source-sums if the GivTCP sums are known-good).",
+                "than import an unguarded sum. Re-run with --max-kw <kW above the "
+                "largest legitimate hourly delta across all your counters — grid "
+                "import and battery charging can exceed PV output> (or "
+                "--trust-source-sums if the GivTCP sums are known-good).",
                 file=sys.stderr,
             )
 
