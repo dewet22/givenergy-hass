@@ -1749,9 +1749,9 @@ def test_e2e_unexplained_flat_candidate_blocks_gate_no_writes(monkeypatch, capsy
     gate refuses BEFORE Phase B — no clear/import of any kind, non-zero exit."""
     ge_id = "sensor.givenergy_inverter_ab1234c5_grid_import_total"  # LIFETIME
     # Oscillating corrupt highs that never form a coherent climbing segment (so the
-    # walk never re-baselines) and only recover at the end (so no unresolved tail):
-    # the rebuilt sum is held flat at last-good for >6h with no gap_undercount to
-    # explain it — an unexplained flat span, which blocks.
+    # walk never re-baselines): the held buffer is never confirmed as a real segment,
+    # so the walk emits an `unresolved` held run — a blocking finding that makes the
+    # gate refuse before any write.
     source = [_row("2026-05-20T00:00:00+00:00", 100.0)]
     source += [
         _row(f"2026-05-20T{h:02d}:00:00+00:00", 9000.0 if h % 2 else 200.0) for h in range(1, 9)

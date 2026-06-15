@@ -55,6 +55,22 @@ the user-declared --max-kw value (used directly as the authoritative bound under
 --apply) with the adaptive per-entity p99 estimate as the fallback for dry-run
 previews where no cap is given.
 
+Holding the last good value would flat-line indefinitely if the counter genuinely
+shifted to a new level, so the walk buffers a run of held readings and, once they
+form a coherent climbing segment, re-baselines onto it: the one-time offset from
+the old level to the new one is suppressed (not booked as energy), while the
+genuine accumulation *within* the segment is booked. A held run that never resolves
+into a coherent segment is emitted flat and flagged as `unresolved` — a blocking
+finding (see the apply gate below).
+
+Multi-hour gaps are handled by reset class. A gap that does not cross a counter
+reset is reconstructable from its endpoints, so the accumulated delta is smeared
+across the intervening hours (respecting day boundaries). A gap that crosses a
+DAILY or ANNUAL reset boundary is not reconstructable from the endpoints — the
+counter zeroed somewhere inside the gap — so the series is carried flat across it
+and flagged as `gap_undercount`. That knowingly under-counts the missing interval
+rather than fabricating a reading the data cannot support.
+
 Pass --trust-source-sums to restore the legacy behaviour (copy GivTCP's sum
 column verbatim and rebase at the join) for installs whose GivTCP sums are
 known-good.
@@ -97,6 +113,23 @@ Post-migration validation (automatic, read-only, runs in both dry-run and apply)
   findings; gaps are reported informationally and do not affect the exit code.
   Pass --repair-residue (only meaningful with --apply) to clear and re-import the
   rebuilt series for sum entities that still show implausible hours.
+
+--apply is a three-phase, validate-all-before-any-write sequence:
+  Phase A builds and validates EVERY candidate first. If any candidate carries a
+    blocking finding (an unexplained flat span, source-movement divergence,
+    post-cutover GE divergence, or an unresolved rebuild run), the whole run is
+    refused and nothing is written — a single bad entity cannot leave the recorder
+    half-migrated.
+  Phase B writes the approved set all-or-abort. It is NOT transactional: HA's
+    WebSocket import has no cross-entity rollback, so a failure partway through
+    leaves earlier entities written, the in-flight one cleared (import possibly
+    incomplete), and the rest untouched. The script reports exactly which fall in
+    each bucket and stops. The mandatory pre-apply backup of the recorder database
+    is the recovery mechanism — restore it and investigate before re-running.
+  Phase C re-reads each written series and confirms it matches the approved
+    candidate; a mismatch is reported and again points at the backup.
+
+--apply requires --max-kw (the authoritative plausibility ceiling).
 
 See docs/migration-from-givtcp.md for the full sensor catalogue and design notes.
 """
