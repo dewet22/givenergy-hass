@@ -1566,6 +1566,210 @@ def test_repair_residue_writes_repaired_entity_exactly_once(monkeypatch, capsys)
     assert max(row["sum"] for row in written) < 27496.0
 
 
+# ---------------------------------------------------------------------------
+# End-to-end acceptance: the live failure through the REAL build → gate → write
+# (Task 12). These differ from the Phase-B/C tests above by NOT patching
+# migrate_entity — run() builds each candidate itself via the real migrate_entity
+# from raw series the fake WS serves, so the whole candidate-build path (merged
+# states, adaptive/effective ceiling, rebuild_sum_walk, reset-aware movement) is
+# exercised end-to-end, then the real run_validation gate and Phase B/C.
+# ---------------------------------------------------------------------------
+
+
+# The live-failure source state timeline (cf.
+# test_walk_sustained_upward_rebase_recovers_and_books_internal): genuine climb,
+# an ~8000 artifact jump, then a coherent internal climb that re-baselines.
+_LIVE_FAILURE_SOURCE = [
+    _row("2026-05-20T10:00:00+00:00", 1000.0),
+    _row("2026-05-20T11:00:00+00:00", 1003.0),
+    _row("2026-05-20T12:00:00+00:00", 9003.0),  # +8000 artifact (offset)
+    _row("2026-05-20T13:00:00+00:00", 9005.7),  # +2.7 internal
+    _row("2026-05-20T14:00:00+00:00", 9008.1),  # +2.4 internal
+    _row("2026-05-20T15:00:00+00:00", 9010.0),  # +1.9 post-segment
+]
+
+
+def _e2e_plan_entry(ge_id: str, reset_class) -> tuple:
+    # As _plan_entry, but the GivTCP id matches the fake WS read-back key and the
+    # reset class is explicit. resolved=True so --apply doesn't bail ge_not_found.
+    return (f"sensor.givtcp_{ge_id}", ge_id, ge_id, "kWh", False, reset_class, True)
+
+
+# Captures the MigrationResult objects the REAL migrate_entity returns during a
+# run() (run() does not otherwise expose them), so tests can assert on the built
+# candidate's status/events. Reset by _patch_real_build_path.
+_LAST_RESULTS: list = []
+
+
+def _patch_real_build_path(
+    monkeypatch: pytest.MonkeyPatch,
+    ws: _ApplyWS,
+    plan: list[tuple],
+) -> None:
+    """Wire run() to the fake WS and a fixed plan but leave migrate_entity REAL,
+    so the candidate is built from the series the WS serves (not injected). A thin
+    recording shim around the real migrate_entity captures each result."""
+    monkeypatch.setattr(_MOD, "HAWebSocket", lambda *a, **k: ws)
+    monkeypatch.setattr(_MOD, "_ENTITY_PAUSE_SECONDS", 0.0)
+    monkeypatch.setattr(_MOD, "_build_plan", lambda *a, **k: plan)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "yes")
+
+    _LAST_RESULTS.clear()
+    real_migrate_entity = _MOD.migrate_entity
+
+    async def recording_migrate_entity(*a, **k):  # noqa: ANN002, ANN003
+        r = await real_migrate_entity(*a, **k)
+        _LAST_RESULTS.append(r)
+        return r
+
+    monkeypatch.setattr(_MOD, "migrate_entity", recording_migrate_entity)
+
+
+def _feed_back_on_import(ws: _ApplyWS) -> None:
+    """Make Phase C see exactly what Phase B wrote: each import populates the
+    read-back for that id with the imported rows (normalised by get_statistics)."""
+    original = ws.import_statistics
+
+    async def record_then_feed_back(metadata, stats):  # noqa: ANN001
+        await original(metadata, stats)
+        ws.read_back[metadata["statistic_id"]] = [dict(s) for s in stats]
+
+    ws.import_statistics = record_then_feed_back
+
+
+def _e2e_args() -> argparse.Namespace:
+    # cutover 2026-05-21: the whole 2026-05-20 source series is pre-cutover, so
+    # build_merged_states keeps it all and there is no post-cutover GE window.
+    a = _apply_args()
+    a.cutover = "2026-05-21"
+    return a
+
+
+def test_e2e_live_failure_rebuild_migrates_and_verifies(monkeypatch, capsys):
+    """The live failure end-to-end through the candidate build, the gate, and a
+    fake WS that reads back what it wrote:
+
+      - the rebuilt candidate is monotonic and NOT flat;
+      - its pre-cutover movement reconciles with cleaned source movement
+        (compare_source_movement: source 8010 − 8000 upward offset == 10);
+      - validation is non-blocking (a recorded rebaseline, no unexplained flat);
+      - Phase C verify_written passes → status "migrated", exit 0.
+    """
+    ge_id = "sensor.givenergy_inverter_ab1234c5_pv_energy_total"  # LIFETIME suffix
+    ws = _ApplyWS(read_back={f"sensor.givtcp_{ge_id}": _LIVE_FAILURE_SOURCE, ge_id: []})
+    _feed_back_on_import(ws)
+    _patch_real_build_path(monkeypatch, ws, [_e2e_plan_entry(ge_id, _MOD.ResetClass.LIFETIME)])
+
+    code = asyncio.run(_MOD.run(_e2e_args()))
+
+    # Exactly one candidate was built, written, and verified.
+    assert ws.clear_calls == [[ge_id]]
+    imports = [c for c in ws.import_calls if c["metadata"]["statistic_id"] == ge_id]
+    assert len(imports) == 1
+    written = imports[0]["stats"]
+    sums = [r["sum"] for r in written]
+    # Candidate is monotonic, the +8000 offset is suppressed, NOT flat-lined.
+    assert sums == sorted(sums)
+    assert max(b - a for a, b in zip(sums, sums[1:])) < 25.0
+    assert sums[0] != sums[-1]  # genuine accumulation retained, not held flat
+    assert abs(sums[-1] - 1010.0) < 0.01  # 1003 + 2.7 + 2.4 + 1.9
+    # Validation reported the rebaseline as ACCEPTED and did not block; the real
+    # gate let the write proceed and Phase C confirmed the stored series.
+    out = capsys.readouterr().out
+    assert "ACCEPTED" in out and "rebaseline" in out
+    assert "BLOCKING" not in out
+    # The migrate_entity build path produced the candidate (not injected):
+    # status migrated, clean zero exit (no advisory implausible on the rebuilt).
+    cand = next(r for r in _LAST_RESULTS if r.ge_id == ge_id)
+    assert cand.status == "migrated"
+    assert code == 0
+
+
+def test_e2e_live_failure_phase_c_fails_on_altered_read_back(monkeypatch, capsys):
+    """Same build, but the recorder hands back a mutated series at Phase C.
+    verify_written must fail loudly: non-zero exit, status NOT migrated, and the
+    failure message points at the backup."""
+    ge_id = "sensor.givenergy_inverter_ab1234c5_pv_energy_total"
+    ws = _ApplyWS(read_back={f"sensor.givtcp_{ge_id}": _LIVE_FAILURE_SOURCE, ge_id: []})
+
+    original = ws.import_statistics
+
+    async def import_then_corrupt_read_back(metadata, stats):  # noqa: ANN001
+        await original(metadata, stats)
+        altered = [dict(s) for s in stats]
+        altered[-1] = {**altered[-1], "sum": altered[-1]["sum"] + 999.0}  # tamper
+        ws.read_back[metadata["statistic_id"]] = altered
+
+    ws.import_statistics = import_then_corrupt_read_back
+    _patch_real_build_path(monkeypatch, ws, [_e2e_plan_entry(ge_id, _MOD.ResetClass.LIFETIME)])
+
+    code = asyncio.run(_MOD.run(_e2e_args()))
+
+    assert code != 0
+    cand = next(r for r in _LAST_RESULTS if r.ge_id == ge_id)
+    assert cand.status != "migrated"
+    err = capsys.readouterr().err
+    assert "verification FAILED" in err
+    assert "backup" in err.lower()
+
+
+def test_e2e_daily_day_crossing_gap_is_gap_undercount_and_migrates(monkeypatch, capsys):
+    """A DAILY counter whose source crosses local midnight with a post-reset drop
+    yields an ACCEPTED gap_undercount (not a rebase/segment): the candidate carries
+    flat across the gap, validation does not block, and it migrates."""
+    ge_id = "sensor.givenergy_inverter_ab1234c5_pv_energy_today"  # DAILY suffix
+    source = [
+        _row("2026-05-20T22:00:00+00:00", 8.0),  # 23:00 local (BST)
+        _row("2026-05-21T02:00:00+00:00", 2.0),  # next local day, after reset
+    ]
+    # cutover after both rows so they're pre-cutover and there's no GE post window.
+    ws = _ApplyWS(read_back={f"sensor.givtcp_{ge_id}": source, ge_id: []})
+    _feed_back_on_import(ws)
+    _patch_real_build_path(monkeypatch, ws, [_e2e_plan_entry(ge_id, _MOD.ResetClass.DAILY)])
+    args = _apply_args()
+    args.cutover = "2026-05-22"
+
+    code = asyncio.run(_MOD.run(args))
+
+    out = capsys.readouterr().out
+    assert "gap-undercount" in out  # ACCEPTED line rendered
+    assert "BLOCKING" not in out
+    cand = next(r for r in _LAST_RESULTS if r.ge_id == ge_id)
+    assert cand.status == "migrated"
+    assert (cand.events or {}).get("gap_undercount")
+    assert not (cand.events or {}).get("rebaseline")
+    # Carried flat across the gap: both stored sums equal the last-good 8.0.
+    written = next(c for c in ws.import_calls if c["metadata"]["statistic_id"] == ge_id)
+    assert [r["sum"] for r in written["stats"]] == [8.0, 8.0]
+    assert code == 0
+
+
+def test_e2e_unexplained_flat_candidate_blocks_gate_no_writes(monkeypatch, capsys):
+    """An unexplained flat candidate built by the real path is blocking: the apply
+    gate refuses BEFORE Phase B — no clear/import of any kind, non-zero exit."""
+    ge_id = "sensor.givenergy_inverter_ab1234c5_grid_import_total"  # LIFETIME
+    # Oscillating corrupt highs that never form a coherent climbing segment (so the
+    # walk never re-baselines) and only recover at the end (so no unresolved tail):
+    # the rebuilt sum is held flat at last-good for >6h with no gap_undercount to
+    # explain it — an unexplained flat span, which blocks.
+    source = [_row("2026-05-20T00:00:00+00:00", 100.0)]
+    source += [
+        _row(f"2026-05-20T{h:02d}:00:00+00:00", 9000.0 if h % 2 else 200.0) for h in range(1, 9)
+    ]
+    source.append(_row("2026-05-20T09:00:00+00:00", 102.0))  # back to reality (no tail)
+    ws = _ApplyWS(read_back={f"sensor.givtcp_{ge_id}": source, ge_id: []})
+    _feed_back_on_import(ws)
+    _patch_real_build_path(monkeypatch, ws, [_e2e_plan_entry(ge_id, _MOD.ResetClass.LIFETIME)])
+
+    code = asyncio.run(_MOD.run(_e2e_args()))
+
+    assert code != 0
+    assert ws.clear_calls == []
+    assert ws.import_calls == []
+    err = capsys.readouterr().err
+    assert "Refusing to --apply" in err
+
+
 def test_positive_float_accepts_positive():
     assert _MOD._positive_float("6") == 6.0
     assert _MOD._positive_float("0.5") == 0.5
