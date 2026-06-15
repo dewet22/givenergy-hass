@@ -366,6 +366,47 @@ def test_walk_carries_gap_rows_none_state():
     assert _sums(_walk(rows, _MOD.ResetClass.LIFETIME, 50.0)) == [100.0, 100.0, 101.0]
 
 
+def test_walk_none_row_between_held_keeps_output_sorted():
+    # A None gap row arrives between buffered (held) rows; held rows are emitted
+    # later when the segment confirms, so the raw append order is out of order.
+    # The function contract is rows sorted ascending by start.
+    rows = [
+        _row("2026-05-20T10:00:00+00:00", 100.0),
+        _row("2026-05-20T11:00:00+00:00", 9000.0),  # over-bound -> held
+        _row("2026-05-20T12:00:00+00:00", 9002.0),  # held
+        _row("2026-05-20T13:00:00+00:00", None),  # gap row emitted immediately
+        _row("2026-05-20T14:00:00+00:00", 9004.0),  # 3rd held -> segment flush
+    ]
+    out = _walk(rows, _MOD.ResetClass.LIFETIME, 25.0)
+    starts = [_MOD._to_utc(r["start"]) for r in out]
+    assert starts == sorted(starts)  # non-decreasing
+
+
+def test_walk_leading_gap_row_keeps_none_state():
+    # A None row before any accepted data must not fabricate a 0.0 reading.
+    rows = [
+        _row("2026-05-20T12:00:00+00:00", None),
+        _row("2026-05-20T13:00:00+00:00", 100.0),
+    ]
+    out = _walk(rows, _MOD.ResetClass.LIFETIME, 50.0)
+    assert out[0]["state"] is None
+
+
+def test_walk_no_smear_event_when_no_rows_synthesised():
+    # Transient spike, then recovery 2h later within the same local day (no
+    # midnight crossed). _smear_gap returns [] -> no smear event should be
+    # recorded, but the recovery delta is still booked.
+    rows = [
+        _row("2026-05-20T10:00:00+00:00", 100.0),
+        _row("2026-05-20T11:00:00+00:00", 9999.0),  # transient spike -> held
+        _row("2026-05-20T13:00:00+00:00", 103.0),  # recovery 2h later, +3 genuine
+    ]
+    events = {}
+    out = _walk(rows, _MOD.ResetClass.LIFETIME, 25.0, events=events)
+    assert not events.get("smear")
+    assert _sums(out)[-1] == 103.0  # delta still booked
+
+
 def test_find_flat_line_spans_duration_from_timestamps():
     # 8 hourly rows 00:00..07:00 == 7 hours of flat, not 8
     rows = [{"start": f"2026-05-20T{h:02d}:00:00+00:00", "sum": 100.0} for h in range(8)]

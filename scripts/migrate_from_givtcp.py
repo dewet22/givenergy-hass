@@ -478,8 +478,14 @@ def rebuild_sum_walk(
     prev_start: str | None = None
     held: list[tuple[str, float]] = []  # (start, state) buffered, not yet emitted
 
-    def _emit(start: str, sum_val: float, state_val: float) -> None:
-        out.append({"start": start, "sum": round(sum_val, 6), "state": round(state_val, 6)})
+    def _emit(start: str, sum_val: float, state_val: float | None) -> None:
+        out.append(
+            {
+                "start": start,
+                "sum": round(sum_val, 6),
+                "state": None if state_val is None else round(state_val, 6),
+            }
+        )
 
     def _flush_transient() -> None:
         # The held run was a transient spike: emit each as last-good (flat).
@@ -507,7 +513,11 @@ def rebuild_sum_walk(
         start = row["start"]
         if state is None:
             # gap row: carry running forward (do not resolve held on a None row).
-            _emit(start, running, prev_state if prev_state is not None else running)
+            # Before any data is accepted (prev_state is None) there is no
+            # last-good reading to carry, so emit a genuine None rather than
+            # fabricating a 0.0 state that downstream reset/delta logic would
+            # treat as real.
+            _emit(start, running, prev_state)
             continue
         if prev_state is None:
             running = float(state)
@@ -532,11 +542,13 @@ def rebuild_sum_walk(
         if 0 <= delta <= bound:
             _flush_transient()
             if elapsed > 1:
-                out.extend(_smear_gap(running, delta, prev_start, start, tz))
-                _ev(
-                    "smear",
-                    {"start": start, "energy": round(delta, 3), "hours": round(elapsed, 1)},
-                )
+                smeared = _smear_gap(running, delta, prev_start, start, tz)
+                if smeared:
+                    out.extend(smeared)
+                    _ev(
+                        "smear",
+                        {"start": start, "energy": round(delta, 3), "hours": round(elapsed, 1)},
+                    )
             running += delta
             prev_state = float(state)
             prev_start = start
@@ -560,6 +572,11 @@ def rebuild_sum_walk(
     if held:
         _ev("unresolved", {"start": held[0][0], "count": len(held)})
         _flush_transient()  # emit last-good; the recorded event makes the gate refuse
+    # Held/smeared rows can be appended after a later-timestamped gap row, so the
+    # raw append order is not guaranteed sorted. Restore the ascending-by-start
+    # contract that import + Phase-C verify_written rely on. Every emitted row
+    # (real, held, smeared) carries an ISO start.
+    out.sort(key=lambda r: _to_utc(r["start"]))
     return out
 
 
