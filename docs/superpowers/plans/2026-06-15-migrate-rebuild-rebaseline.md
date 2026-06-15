@@ -65,14 +65,20 @@ Detects whether a DAILY/ANNUAL reset boundary lies strictly inside `(prev_start,
 
 **Files:** Modify script; Test.
 
-- [ ] **Step 1: Failing test**
+- [ ] **Step 1: Failing test** (note the strict-boundary cases — a reading exactly on the boundary is a normal reset row, NOT a crossed gap):
 ```python
 def test_gap_crosses_reset_daily():
     rc = _MOD.ResetClass
-    # 23:00Z->02:00Z next day in BST spans local midnight (00:00 local == 23:00Z)
+    # 20:00Z -> 06:00Z next day in BST: a local midnight (23:00Z) lies strictly inside
     assert _MOD._gap_crosses_reset("2026-05-20T20:00:00+00:00", "2026-05-21T06:00:00+00:00", rc.DAILY, _LONDON)
     # same-day morning, no midnight between
     assert not _MOD._gap_crosses_reset("2026-05-20T08:00:00+00:00", "2026-05-20T13:00:00+00:00", rc.DAILY, _LONDON)
+
+def test_gap_crosses_reset_daily_endpoint_on_boundary_is_not_crossing():
+    rc = _MOD.ResetClass
+    # start exactly at local midnight (23:00Z BST): boundary is AT the endpoint,
+    # not strictly inside -> a normal reset row, not a gap_undercount
+    assert not _MOD._gap_crosses_reset("2026-05-20T20:00:00+00:00", "2026-05-20T23:00:00+00:00", rc.DAILY, _LONDON)
 
 def test_gap_crosses_reset_lifetime_never():
     assert not _MOD._gap_crosses_reset("2026-05-20T08:00:00+00:00", "2026-06-01T00:00:00+00:00", _MOD.ResetClass.LIFETIME, _LONDON)
@@ -81,13 +87,19 @@ def test_gap_crosses_reset_annual_year_end():
     rc = _MOD.ResetClass
     assert _MOD._gap_crosses_reset("2025-12-31T20:00:00+00:00", "2026-01-01T06:00:00+00:00", rc.ANNUAL, _LONDON)
     assert not _MOD._gap_crosses_reset("2026-03-01T00:00:00+00:00", "2026-03-05T00:00:00+00:00", rc.ANNUAL, _LONDON)
+
+def test_gap_crosses_reset_annual_endpoint_on_boundary_is_not_crossing():
+    rc = _MOD.ResetClass
+    # start exactly at Jan-1 00:00 local (GMT): boundary AT endpoint, not inside
+    assert not _MOD._gap_crosses_reset("2025-12-31T20:00:00+00:00", "2026-01-01T00:00:00+00:00", rc.ANNUAL, _LONDON)
 ```
 - [ ] **Step 2: Run, expect FAIL**
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Implement** — the boundary must be **strictly inside** `(a, b)`:
 ```python
 def _gap_crosses_reset(prev_start: str, start: str, reset_class: ResetClass, tz: ZoneInfo) -> bool:
-    """True if a natural reset boundary for *reset_class* falls strictly within
-    (prev_start, start), evaluated in local time. LIFETIME never resets."""
+    """True if a natural reset boundary for *reset_class* falls STRICTLY within
+    (prev_start, start), in local time. A reading exactly on the boundary is a
+    normal reset row, not a crossed gap. LIFETIME never resets."""
     if reset_class is ResetClass.LIFETIME:
         return False
     a = _to_utc(prev_start).astimezone(tz)
@@ -95,10 +107,11 @@ def _gap_crosses_reset(prev_start: str, start: str, reset_class: ResetClass, tz:
     if b <= a:
         return False
     if reset_class is ResetClass.DAILY:
-        # a local midnight strictly between a and b: compare local dates.
-        return a.date() != b.date()
-    # ANNUAL: a Jan-1 boundary strictly between => different local years.
-    return a.year != b.year
+        first_midnight = (a + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return first_midnight < b   # strictly before b
+    # ANNUAL: first Jan-1 boundary after a, strictly before b
+    first_jan1 = a.replace(year=a.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    return first_jan1 < b
 ```
 - [ ] **Step 4: Run, expect PASS**
 - [ ] **Step 5: Commit** — `git commit -am "feat(migrate): _gap_crosses_reset helper (#172)"`
@@ -107,31 +120,51 @@ def _gap_crosses_reset(prev_start: str, start: str, reset_class: ResetClass, tz:
 
 ## Task 3: `_segment_coherent` helper
 
-A buffered held run is a coherent cumulative segment when its internal adjacent deltas are each non-negative and within the time-scaled bound. (Only the offset to the segment is bidirectional — handled in the walk, not here.)
+A buffered held run is a coherent cumulative segment when its internal adjacent deltas are each non-negative and within the bound for **that pair's own elapsed time** (`ceiling × elapsed_i`) — not one cumulative bound, which would let a single-hour internal jump up to `3×ceiling` slip through on the 3rd hold. Input is `(start, state)` tuples so per-pair elapsed is available. (Only the offset *into* the segment is bidirectional — handled in the walk, not here.)
 
 **Files:** Modify script; Test.
 
 - [ ] **Step 1: Failing test**
 ```python
 def test_segment_coherent_monotonic_within_bound():
-    # internal deltas +2.7, +2.4 within bound 25 -> coherent
-    assert _MOD._segment_coherent([1000.0, 1002.7, 1005.1], 25.0)
+    held = [("2026-05-20T12:00:00+00:00", 1000.0),
+            ("2026-05-20T13:00:00+00:00", 1002.7),
+            ("2026-05-20T14:00:00+00:00", 1005.1)]   # +2.7, +2.4 over 1h each
+    assert _MOD._segment_coherent(held, 25.0, _LONDON)
 
 def test_segment_coherent_rejects_oscillation():
-    # up-down-up: an internal negative delta -> not a cumulative segment
-    assert not _MOD._segment_coherent([1000.0, 1010.0, 1001.0], 25.0)
+    held = [("2026-05-20T12:00:00+00:00", 1000.0),
+            ("2026-05-20T13:00:00+00:00", 1010.0),
+            ("2026-05-20T14:00:00+00:00", 1001.0)]   # internal negative delta
+    assert not _MOD._segment_coherent(held, 25.0, _LONDON)
 
-def test_segment_coherent_rejects_internal_over_bound():
-    assert not _MOD._segment_coherent([1000.0, 1002.0, 1100.0], 25.0)
+def test_segment_coherent_per_pair_elapsed_bound():
+    # all hourly: a +60 internal delta over 1h exceeds 1*25 even though the
+    # cumulative span (3h) would permit 75 — must be rejected.
+    held = [("2026-05-20T12:00:00+00:00", 1000.0),
+            ("2026-05-20T13:00:00+00:00", 1002.0),
+            ("2026-05-20T14:00:00+00:00", 1062.0)]   # +60 over 1h
+    assert not _MOD._segment_coherent(held, 25.0, _LONDON)
+
+def test_segment_coherent_irregular_spacing_uses_each_gap():
+    # 5h between the last pair allows a larger (but still <= 25*5) delta
+    held = [("2026-05-20T12:00:00+00:00", 1000.0),
+            ("2026-05-20T13:00:00+00:00", 1002.0),
+            ("2026-05-20T18:00:00+00:00", 1100.0)]   # +98 over 5h <= 125
+    assert _MOD._segment_coherent(held, 25.0, _LONDON)
 ```
 - [ ] **Step 2: Run, expect FAIL**
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Implement** — bound each pair by its own elapsed:
 ```python
-def _segment_coherent(held_states: list[float], bound: float) -> bool:
-    """True if the held readings form a monotonic cumulative segment: every
-    adjacent internal delta is in [0, bound]. The offset from the prior baseline
-    to held_states[0] is evaluated by the caller (it may be either direction)."""
-    return all(0 <= b - a <= bound for a, b in zip(held_states, held_states[1:]))
+def _segment_coherent(held: list[tuple[str, float]], ceiling: float, tz: ZoneInfo) -> bool:
+    """True if the held (start, state) readings form a monotonic cumulative
+    segment: every adjacent internal delta is in [0, ceiling × elapsed_pair].
+    The offset from the prior baseline to held[0] is evaluated by the caller
+    (it may be either direction)."""
+    for (sa, va), (sb, vb) in zip(held, held[1:]):
+        if not (0 <= vb - va <= ceiling * _elapsed_hours(sa, sb)):
+            return False
+    return True
 ```
 - [ ] **Step 4: Run, expect PASS**
 - [ ] **Step 5: Commit** — `git commit -am "feat(migrate): _segment_coherent helper (#172)"`
@@ -388,9 +421,10 @@ def rebuild_sum_walk(
             _emit(start, running, running)
             continue
         # (4) Otherwise: buffer as held; try to confirm a coherent segment.
+        #     Coherence bounds each held pair by its OWN elapsed time (passes the
+        #     (start, state) tuples + ceiling), not the single cumulative `bound`.
         held.append((start, float(state)))
-        held_states = [prev_state, *[h[1] for h in held]]
-        if len(held) >= _REBASELINE_HOLDS and _segment_coherent([h[1] for h in held], bound):
+        if len(held) >= _REBASELINE_HOLDS and _segment_coherent(held, ceiling, tz):
             _flush_segment()
 
     if held:
@@ -408,32 +442,58 @@ Note: `held_states` is computed but only `_segment_coherent([h[1] for h in held]
 
 **Files:** Modify script (validation region); Test.
 
+Duration is measured from **timestamps**, not row count (8 hourly rows span 7 hours), with **epsilon** equality (synthetic/float sums) and `start`+`end` so the caller can exempt by interval overlap.
+
 - [ ] **Step 1: Failing test**
 ```python
-def test_find_flat_line_spans_flags_long_flat():
+def test_find_flat_line_spans_duration_from_timestamps():
+    # 8 hourly rows 00:00..07:00 == 7 hours of flat, not 8
     rows = [{"start": f"2026-05-20T{h:02d}:00:00+00:00", "sum": 100.0} for h in range(8)]
     spans = _MOD.find_flat_line_spans(rows, min_hours=6)
-    assert spans and spans[0]["hours"] >= 6
+    assert spans and abs(spans[0]["hours"] - 7.0) < 1e-9
+    assert spans[0]["start"] == "2026-05-20T00:00:00+00:00"
+    assert spans[0]["end"] == "2026-05-20T07:00:00+00:00"
 
 def test_find_flat_line_spans_ignores_short_flat():
+    # 00:00..03:00 == 3 hours < 6
     rows = [{"start": f"2026-05-20T{h:02d}:00:00+00:00", "sum": 100.0} for h in range(4)]
     assert _MOD.find_flat_line_spans(rows, min_hours=6) == []
+
+def test_find_flat_line_spans_epsilon_equality():
+    # sub-epsilon jitter counts as flat
+    rows = [{"start": f"2026-05-20T{h:02d}:00:00+00:00", "sum": 100.0 + h * 1e-9} for h in range(8)]
+    spans = _MOD.find_flat_line_spans(rows, min_hours=6)
+    assert spans and abs(spans[0]["hours"] - 7.0) < 1e-9
+
+def test_find_flat_line_spans_irregular_spacing():
+    # a single 8h-apart pair with equal sum is an 8h flat span
+    rows = [{"start": "2026-05-20T00:00:00+00:00", "sum": 100.0},
+            {"start": "2026-05-20T08:00:00+00:00", "sum": 100.0}]
+    spans = _MOD.find_flat_line_spans(rows, min_hours=6)
+    assert spans and abs(spans[0]["hours"] - 8.0) < 1e-9
 ```
 - [ ] **Step 2: Run, expect FAIL**
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Implement** — duration from timestamps, epsilon equality:
 ```python
+_FLAT_EPSILON = 1e-6
+
 def find_flat_line_spans(rows: list[dict[str, Any]], min_hours: int = _FLAT_LINE_MIN_HOURS) -> list[dict[str, Any]]:
-    """Maximal runs of >= min_hours consecutive rows with no sum change.
-    The caller excludes spans explained by a recorded gap_undercount event."""
+    """Maximal runs of consecutive equal-sum rows whose DURATION (from timestamps,
+    not row count) is >= min_hours. Epsilon comparison handles float/synthetic
+    sums. Returns {start, end, hours}; the caller exempts spans that overlap a
+    recorded gap_undercount interval."""
     spans: list[dict[str, Any]] = []
-    run_start_idx = 0
+    run_start = 0
     for i in range(1, len(rows) + 1):
-        changed = i == len(rows) or (rows[i].get("sum") != rows[i - 1].get("sum"))
-        if changed:
-            length = i - run_start_idx
-            if length >= min_hours:
-                spans.append({"start": rows[run_start_idx]["start"], "hours": length})
-            run_start_idx = i
+        changed = i == len(rows) or abs((rows[i].get("sum") or 0.0) - (rows[i - 1].get("sum") or 0.0)) > _FLAT_EPSILON
+        if not changed:
+            continue
+        last = i - 1
+        if last > run_start:  # at least two rows in the run
+            duration = (_to_utc(rows[last]["start"]) - _to_utc(rows[run_start]["start"])).total_seconds() / 3600.0
+            if duration >= min_hours:
+                spans.append({"start": rows[run_start]["start"], "end": rows[last]["start"], "hours": round(duration, 6)})
+        run_start = i
     return spans
 ```
 - [ ] **Step 4: Run, expect PASS**
@@ -441,44 +501,89 @@ def find_flat_line_spans(rows: list[dict[str, Any]], min_hours: int = _FLAT_LINE
 
 ---
 
-## Task 7: `compare_source_movement` (reset-aware, offset-excluded)
+## Task 7: reset-aware movement helper + `compare_source_movement`
 
-Compares pre-cutover source movement against the rebuilt candidate's movement, excluding recorded one-time offsets, flagging divergence beyond tolerance.
+Two pieces: a **reset-aware movement** helper (genuine accumulation over a window, counting post-reset state at legitimate resets — not `max(0, Δ)`, which loses it), and the comparison, which excludes only **upward** rebase offsets (a downward offset was never part of positive movement, so subtracting it is wrong).
 
 **Files:** Modify script; Test.
 
-- [ ] **Step 1: Failing test**
+- [ ] **Step 1: Failing tests**
 ```python
-def test_compare_source_movement_excludes_offsets():
-    # source moved 100 raw, but 8000 of "raw movement" came from a suppressed offset
+def test_reset_aware_movement_counts_post_reset():
+    rc = _MOD.ResetClass
+    # DAILY: 2,5 then reset to 0,3 -> genuine movement = (5-2) + 3 = 6, not 3
+    rows = [_row("2026-05-20T22:00:00+00:00", 2.0),
+            _row("2026-05-20T22:30:00+00:00", 5.0),
+            _row("2026-05-20T23:00:00+00:00", 0.0),   # local-midnight reset (BST)
+            _row("2026-05-21T00:00:00+00:00", 3.0)]
+    assert abs(_MOD._reset_aware_movement(rows, rc.DAILY, _LONDON) - 6.0) < 1e-6
+
+def test_reset_aware_movement_lifetime_is_positive_deltas():
+    rc = _MOD.ResetClass
+    rows = [_row("2026-05-20T10:00:00+00:00", 100.0),
+            _row("2026-05-20T11:00:00+00:00", 103.0),
+            _row("2026-05-20T12:00:00+00:00", 105.0)]
+    assert abs(_MOD._reset_aware_movement(rows, rc.LIFETIME, _LONDON) - 5.0) < 1e-6
+
+def test_compare_source_movement_excludes_upward_offset_only():
+    # source moved 100 genuine + an 8000 upward rebase offset; rebuilt has 100
     res = _MOD.compare_source_movement(source_movement=8100.0, rebuilt_movement=100.0,
-                                       suppressed_offsets=8000.0, tol_pct=5.0)
-    assert res["flagged"] is False   # cleaned expected (8100-8000=100) matches rebuilt 100
+                                       upward_offsets=8000.0, tol_pct=5.0)
+    assert res["flagged"] is False and abs(res["expected"] - 100.0) < 1e-9
+
+def test_compare_source_movement_downward_offset_not_subtracted():
+    # a downward rebase: its offset is negative and was never in positive movement,
+    # so upward_offsets is 0 -> expected stays 100, matches rebuilt 100
+    res = _MOD.compare_source_movement(source_movement=100.0, rebuilt_movement=100.0,
+                                       upward_offsets=0.0, tol_pct=5.0)
+    assert res["flagged"] is False and res["expected"] == 100.0
 
 def test_compare_source_movement_flags_real_divergence():
     res = _MOD.compare_source_movement(source_movement=100.0, rebuilt_movement=60.0,
-                                       suppressed_offsets=0.0, tol_pct=5.0)
-    assert res["flagged"] is True
-    assert abs(res["expected"] - 100.0) < 1e-9 and res["rebuilt"] == 60.0
+                                       upward_offsets=0.0, tol_pct=5.0)
+    assert res["flagged"] is True and abs(res["expected"] - 100.0) < 1e-9
 ```
 - [ ] **Step 2: Run, expect FAIL**
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Implement** the reset-aware movement helper and the comparison:
 ```python
+def _reset_aware_movement(rows: list[dict[str, Any]], reset_class: ResetClass, tz: ZoneInfo) -> float:
+    """Genuine accumulation across *rows*: positive consecutive deltas, plus the
+    post-reset state at a legitimate reset boundary (a reset drops the raw value,
+    so max(0, Δ) would lose that day's pre-reset accumulation otherwise)."""
+    total = 0.0
+    prev = None
+    prev_start = None
+    for r in rows:
+        st = r.get("state")
+        if st is None:
+            continue
+        if prev is not None:
+            if st < prev and _is_reset_boundary(r["start"], reset_class, tz, 2.0):
+                total += st                      # post-reset accumulation
+            elif st >= prev:
+                total += st - prev               # genuine forward movement
+            # an off-boundary drop contributes nothing (corruption)
+        prev = st
+        prev_start = r["start"]
+    return total
+
 def compare_source_movement(
-    source_movement: float, rebuilt_movement: float, suppressed_offsets: float, tol_pct: float = _MOVEMENT_TOLERANCE_PCT
+    source_movement: float, rebuilt_movement: float, upward_offsets: float, tol_pct: float = _MOVEMENT_TOLERANCE_PCT
 ) -> dict[str, Any]:
-    """Compare rebuilt movement against cleaned expected movement (source movement
-    minus the recorded one-time rebase offsets the rebuild intentionally dropped).
-    Movements are caller-computed reset-aware sums of positive deltas over the
-    aligned pre-cutover window."""
-    expected = source_movement - suppressed_offsets
+    """Compare rebuilt movement to *cleaned expected* = source movement minus the
+    recorded UPWARD rebase offsets the rebuild intentionally dropped. Downward
+    offsets were never in the positive source movement, so they are NOT
+    subtracted. Movements are reset-aware (see _reset_aware_movement) over the
+    same aligned window."""
+    expected = source_movement - upward_offsets
     denom = abs(expected) if abs(expected) > 1e-9 else 1.0
     diff_pct = abs(rebuilt_movement - expected) / denom * 100.0
     return {"expected": round(expected, 3), "rebuilt": round(rebuilt_movement, 3),
             "diff_pct": round(diff_pct, 2), "flagged": diff_pct > tol_pct}
 ```
+(`prev_start` is retained for parity with the walk's pattern; drop it if ruff flags it unused.)
 - [ ] **Step 4: Run, expect PASS**
-- [ ] **Step 5: Commit** — `git commit -am "feat(migrate): offset-excluded source-movement comparison (#172)"`
+- [ ] **Step 5: Commit** — `git commit -am "feat(migrate): reset-aware movement + upward-offset-excluded comparison (#172)"`
 
 ---
 
@@ -486,20 +591,21 @@ def compare_source_movement(
 
 **Files:** Modify `scripts/migrate_from_givtcp.py:816` (`MigrationResult`) and `:909-933` (rebuild branch of `migrate_entity`). Test.
 
-- [ ] **Step 1: Extend `MigrationResult`** — add to `__slots__` and `__init__`: `rebuilt_rows: list | None = None`, `events: dict | None = None`, `source_movement: float = 0.0`, `suppressed_offsets: float = 0.0`, `metadata: dict | None = None` (the import metadata, so Phase B can write without rebuilding). Initialise all in `__init__`.
+- [ ] **Step 1: Extend `MigrationResult`** — add to `__slots__` and `__init__`: `rebuilt_rows: list | None = None`, `events: dict | None = None`, `source_movement: float = 0.0`, `upward_offsets: float = 0.0`, `post_movement: float = 0.0` (rebuilt movement over the post-cutover window, for the GE-preservation check), `metadata: dict | None = None` (the import metadata, so Phase B can write without rebuilding). Initialise all in `__init__`.
 - [ ] **Step 2: Populate in `migrate_entity`'s rebuild branch.** After computing `ceiling`, build the candidate but DO NOT write here (writing moves to Phase B):
 ```python
         events: dict[str, list] = {}
         merged = rebuild_sum_walk(merged_states, reset_class, ceiling, tz, events=events)
         r.rebuilt_rows = merged
         r.events = events
-        # reset-aware movement over the pre-cutover window (positive source deltas),
-        # and the offsets the rebuild suppressed (for the cleaned comparison)
-        pre = [s for s in merged_states if _to_utc(s["start"]) < cutover and s.get("state") is not None]
-        r.source_movement = sum(
-            max(0.0, pre[i]["state"] - pre[i - 1]["state"]) for i in range(1, len(pre))
-        )
-        r.suppressed_offsets = sum(abs(e["offset"]) for e in events.get("rebaseline", []))
+        # reset-aware source movement over the pre-cutover window, the UPWARD
+        # offsets the rebuild suppressed (cleaned comparison), and the rebuilt
+        # movement over the post-cutover window (GE-preservation check)
+        pre = [s for s in merged_states if _to_utc(s["start"]) < cutover]
+        r.source_movement = _reset_aware_movement(pre, reset_class, tz)
+        r.upward_offsets = sum(e["offset"] for e in events.get("rebaseline", []) if e["offset"] > 0)
+        post = [s for s in merged if _to_utc(s["start"]) >= cutover]
+        r.post_movement = _reset_aware_movement(post, reset_class, tz)
         r.sum_at_cutover = next((row["sum"] for row in merged if _to_utc(row["start"]) >= cutover), None)
         r.metadata = {"has_mean": False, "has_sum": True, "name": None,
                       "source": "recorder", "statistic_id": ge_id, "unit_of_measurement": ge_unit}
@@ -526,7 +632,18 @@ async def write_candidate(ws: HAWebSocket, r: MigrationResult) -> None:
     await ws.clear_statistics([r.ge_id])
     await ws.import_statistics(metadata=r.metadata, stats=r.rebuilt_rows)
 ```
-- [ ] **Step 2: Restructure `run`'s apply flow** into two phases. Phase A: build every candidate (the existing loop calling `migrate_entity`, now returning `status="candidate"`), then run `run_validation(..., applied=False)` over the candidates to get blocking findings + the report. Determine `blocking` (any unexplained flat span / movement divergence / unresolved-held / incoherent across candidates). If `applying` and `blocking`: print the gate refusal, do NOT write, return non-zero. If `applying` and clean: Phase B — iterate candidates calling `write_candidate`; on the first exception, print which entities were written so far + which was mid-write + the restore-from-backup instruction, set status accordingly, and return non-zero (do not continue). On success set `status="migrated"`. Dry-run (`not applying`) stops after Phase A (validation report only).
+- [ ] **Step 2: Restructure `run`'s apply flow** into three stages. **Phase A (build+validate):** build every candidate (the loop calling `migrate_entity`, now `status="candidate"`), then `run_validation(..., applied=False)` over the candidates for blocking findings + the report. `blocking` = any unexplained flat span / movement divergence / unresolved-held / incoherent across candidates. If `applying` and `blocking`: print the gate refusal, write nothing, return non-zero. **Phase B (write):** if clean, iterate candidates calling `write_candidate`; on the first exception, print exactly which entities were already written, which was mid-write, and the restore-from-backup instruction, then return non-zero (do **not** continue). **Phase C (post-write verify):** after all writes succeed, re-read each stored series and assert it matches the approved candidate (same row count and per-row `sum` within epsilon, via a `verify_written(ws, r)` helper). On any mismatch or read failure, fail loudly with the backup-recovery instruction and return non-zero — do **not** report success. Only when Phase C passes set `status="migrated"`. Dry-run (`not applying`) stops after Phase A.
+```python
+async def verify_written(ws: HAWebSocket, r: MigrationResult) -> bool:
+    """Phase C: re-read the stored series and confirm it matches the approved
+    candidate (row count + per-row sum within epsilon)."""
+    raw = await ws.get_statistics([r.ge_id], _EPOCH)
+    stored = [_normalise(s) for s in raw.get(r.ge_id, [])]
+    if len(stored) != len(r.rebuilt_rows):
+        return False
+    return all(abs((a.get("sum") or 0.0) - (b.get("sum") or 0.0)) <= _FLAT_EPSILON
+               for a, b in zip(stored, r.rebuilt_rows))
+```
 - [ ] **Step 3: Test the gate + mid-Phase-B failure** in `tests/test_migrate_stats_repair.py` with a fake WS:
 ```python
 def test_phase_b_aborts_on_blocking_candidate(monkeypatch):
@@ -538,8 +655,15 @@ def test_phase_b_mid_failure_reports_and_stops():
     # Assert: entity 1 written, entity 2 attempted, loop stops (entity 3 NOT written),
     # the returned/printed report names written vs cleared and points to the backup.
     ...
+
+def test_phase_c_detects_stored_mismatch():
+    # Writes "succeed", but the fake WS read-back returns a series that differs
+    # from the candidate (e.g. a truncated/altered sum).
+    # Assert: verify_written returns False -> run fails loudly with backup guidance,
+    # status is NOT "migrated", non-zero exit.
+    ...
 ```
-(Write these against the actual `run`/helper structure you build; assert via a fake WS recording `clear_statistics`/`import_statistics` calls and the printed report.)
+(Write these against the actual `run`/helper structure you build; assert via a fake WS recording `clear_statistics`/`import_statistics` calls, a configurable read-back, and the printed report.)
 - [ ] **Step 4: Run** the tests; fix until green.
 - [ ] **Step 5: Commit** — `git commit -am "feat(migrate): two-phase apply — validate all, then write-all-or-abort (#172)"`
 
@@ -549,7 +673,7 @@ def test_phase_b_mid_failure_reports_and_stops():
 
 **Files:** Modify `scripts/migrate_from_givtcp.py:996` (`run_validation`). Test.
 
-- [ ] **Step 1:** Change `run_validation` to validate the **candidate** (`r.rebuilt_rows`) rather than re-reading HA when those rows are present (both dry-run and the Phase-A gate). For each candidate compute: `gaps` (existing), `flat_lines = find_flat_line_spans(rows)` minus spans whose start matches a recorded `gap_undercount` event, the `compare_source_movement(...)` result using `r.source_movement`/`r.suppressed_offsets` and the candidate's post-cutover movement, plus the `events` (`rebaseline`/`smear`/`gap_undercount`/`unresolved`). Build `findings[ge_id]` with all of these. Return both the report exit code AND a `blocking` flag = any unexplained flat span, `source_comparison.flagged`, or non-empty `unresolved`.
+- [ ] **Step 1:** Change `run_validation` to validate the **candidate** (`r.rebuilt_rows`) rather than re-reading HA when those rows are present (both dry-run and the Phase-A gate). For each candidate compute: `gaps` (existing); `flat_lines = find_flat_line_spans(rows)` **minus spans that overlap a recorded `gap_undercount` interval** (interval overlap by `[start, end]`, NOT exact-start equality — a reset-gap flat begins at the prior trusted row, so its start won't equal the event's `start`); `compare_source_movement(r.source_movement, <pre-cutover candidate movement>, r.upward_offsets)`; a separate post-cutover GE-preservation check that `r.post_movement` matches the GE post-cutover source movement; plus the `events` (`rebaseline`/`smear`/`gap_undercount`/`unresolved`). Build `findings[ge_id]` from all of these. Return the report exit code AND a `blocking` flag = any unexplained flat span (after the overlap exemption), `source_comparison.flagged`, post-cutover divergence, or non-empty `unresolved`. Add a small `_overlaps(span, event_interval)` helper (timestamp interval intersection) and unit-test the reset-gap-overlap exemption (a flat span starting one row *before* the gap event is still exempted).
 - [ ] **Step 2:** Keep `_repairable`/`--repair-residue` working against candidates.
 - [ ] **Step 3: Test** (fake WS / direct call): a candidate with a flat span not covered by a gap_undercount → blocking; a candidate whose only flat span is covered by a recorded gap_undercount → not blocking (warned); an `unresolved` event → blocking.
 - [ ] **Step 4: Run**; fix.
@@ -573,7 +697,7 @@ def test_phase_b_mid_failure_reports_and_stops():
 
 **Files:** Test `tests/test_migrate_stats_repair.py`.
 
-- [ ] **Step 1: Add an end-to-end acceptance test** reproducing the live failure through the candidate path: build merged states with the ~8000 artifact jump + genuine climb (as in Task 5's `test_walk_sustained_upward_rebase_*` but routed through a fake-WS `migrate_entity`), assert the candidate is monotonic/not-flat, totals reconcile with cleaned source movement, validation is non-blocking (a recorded rebaseline, no unexplained flat), and the post-apply check would pass. Also assert a DAILY day-crossing gap yields a `gap_undercount` (accepted) and an unexplained flat candidate is blocking.
+- [ ] **Step 1: Add an end-to-end acceptance test** reproducing the live failure through the candidate path: build merged states with the ~8000 artifact jump + genuine climb (as in Task 5's `test_walk_sustained_upward_rebase_*` but routed through a fake-WS `migrate_entity`), assert the candidate is monotonic/not-flat, totals reconcile with cleaned source movement (via `compare_source_movement`), validation is non-blocking (a recorded rebaseline, no unexplained flat), and — through the real apply path with a fake WS that reads back what it wrote — **Phase C `verify_written` passes**; then a variant where the read-back is altered asserts Phase C **fails loudly** (non-zero, backup guidance, status not "migrated"). Also assert a DAILY day-crossing gap yields a `gap_undercount` (accepted) and an unexplained-flat candidate is blocking (gate refuses, no writes).
 - [ ] **Step 2: Run** `uv run pytest tests/test_migrate_stats_repair.py tests/test_script_entity_refs.py -v`; then `uv run pytest -q`. Expected: all pass.
 - [ ] **Step 3: Commit** — `git commit -am "test(migrate): live-failure acceptance for sustained-shift recovery (#172)"`
 
