@@ -567,6 +567,66 @@ def _normalise(row: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Validation checks (pure)
+# ---------------------------------------------------------------------------
+
+
+def find_implausible_hours(rows: list[dict[str, Any]], ceiling: float) -> list[dict[str, Any]]:
+    """Rows whose sum-change from the previous row exceeds the ceiling."""
+    flagged = []
+    for prev, cur in zip(rows, rows[1:]):
+        ps, cs = prev.get("sum"), cur.get("sum")
+        if ps is None or cs is None:
+            continue
+        if cs - ps > ceiling:
+            flagged.append({"start": cur["start"], "change": round(cs - ps, 3)})
+    return flagged
+
+
+def find_duplicate_series(series_by_id: dict[str, list[dict[str, Any]]]) -> list[tuple[str, str]]:
+    """Pairs of statistic ids whose (start, sum) sequences are byte-identical."""
+
+    def key(rows: list[dict[str, Any]]) -> tuple:
+        return tuple((r.get("start"), r.get("sum")) for r in rows)
+
+    seen: dict[tuple, str] = {}
+    dupes: list[tuple[str, str]] = []
+    for sid, rows in series_by_id.items():
+        k = key(rows)
+        if k in seen:
+            dupes.append((seen[k], sid))
+        else:
+            seen[k] = sid
+    return dupes
+
+
+def classify_gaps(
+    rows: list[dict[str, Any]], expected_step_minutes: int = 60
+) -> list[dict[str, Any]]:
+    """Contiguous missing spans (more than one expected step between rows)."""
+    gaps = []
+    step = timedelta(minutes=expected_step_minutes)
+    for prev, cur in zip(rows, rows[1:]):
+        delta = _to_utc(cur["start"]) - _to_utc(prev["start"])
+        missing = round(delta / step) - 1
+        if missing >= 1:
+            gaps.append({"after": prev["start"], "before": cur["start"], "hours": missing})
+    return gaps
+
+
+def find_fake_reset_shapes(rows: list[dict[str, Any]], ceiling: float) -> list[dict[str, Any]]:
+    """A drop to ~0 immediately followed by a huge positive jump (modbus zero-read)."""
+    shapes = []
+    for i in range(2, len(rows)):
+        a, b, c = rows[i - 2].get("state"), rows[i - 1].get("state"), rows[i].get("state")
+        if a is None or b is None or c is None:
+            continue
+        if b <= a * 0.05 and (c - b) > ceiling:
+            shapes.append({"start": rows[i]["start"], "recovery": round(c - b, 3)})
+    return shapes
+
+
+# ---------------------------------------------------------------------------
 # Cut-over date detection
 # ---------------------------------------------------------------------------
 

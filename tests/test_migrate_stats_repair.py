@@ -189,3 +189,42 @@ def test_mean_metadata_is_mean_not_sum():
     assert meta["has_mean"] is True
     assert meta["has_sum"] is False
     assert meta["statistic_id"] == "sensor.loft_givenergy_inverter_x_pv_power"
+
+
+def test_find_implausible_hours_flags_over_ceiling():
+    rows = [
+        {"start": "2026-05-20T12:00:00+00:00", "sum": 100.0},
+        {"start": "2026-05-20T13:00:00+00:00", "sum": 27496.0},  # +27396 jump
+        {"start": "2026-05-20T14:00:00+00:00", "sum": 27497.0},
+    ]
+    flagged = _MOD.find_implausible_hours(rows, ceiling=50.0)
+    assert [f["start"] for f in flagged] == ["2026-05-20T13:00:00+00:00"]
+
+
+def test_find_duplicate_series_detects_identical():
+    a = [{"start": "t1", "sum": 1.0}, {"start": "t2", "sum": 2.0}]
+    b = [{"start": "t1", "sum": 1.0}, {"start": "t2", "sum": 2.0}]
+    c = [{"start": "t1", "sum": 9.0}, {"start": "t2", "sum": 9.0}]
+    dupes = _MOD.find_duplicate_series({"a": a, "b": b, "c": c})
+    assert ("a", "b") in dupes or ("b", "a") in dupes
+    assert all("c" not in pair for pair in dupes)
+
+
+def test_classify_gaps_marks_contiguous_missing():
+    rows = [
+        {"start": "2026-05-20T12:00:00+00:00", "state": 1.0},
+        # 13:00 and 14:00 missing
+        {"start": "2026-05-20T15:00:00+00:00", "state": 1.0},
+    ]
+    gaps = _MOD.classify_gaps(rows, expected_step_minutes=60)
+    assert gaps and gaps[0]["hours"] == 2
+
+
+def test_find_fake_reset_shapes_detects_drop_then_spike():
+    rows = [
+        {"start": "t1", "state": 200.0},
+        {"start": "t2", "state": 0.0},  # drop to ~0
+        {"start": "t3", "state": 27300.0},  # huge positive
+    ]
+    shapes = _MOD.find_fake_reset_shapes(rows, ceiling=50.0)
+    assert shapes and shapes[0]["start"] == "t3"
