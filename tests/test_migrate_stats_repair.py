@@ -723,6 +723,133 @@ def test_format_validation_report_header_distinguishes_mode():
     assert "dry-run" not in applied_text
 
 
+def test_format_validation_report_accepted_findings_warn_not_block():
+    """rebaseline / smear / gap_undercount print as ACCEPTED and never set a
+    non-zero exit code on their own."""
+    mod = _load_migrate_module()
+    findings = {
+        "sensor.x": {
+            "rebaseline": [{"start": "t1", "offset": 5.0, "held": 3}],
+            "smear": [{"start": "t2", "energy": 1.5, "hours": 4.0}],
+            "gap_undercount": [{"start": "t3", "from": "t2"}],
+        }
+    }
+    text, exit_code = mod.format_validation_report(findings, duplicates=[])
+    assert "sensor.x" in text
+    assert "ACCEPTED" in text
+    # Each accepted finding type renders a line.
+    assert "rebaseline" in text
+    assert "smear" in text
+    assert "gap" in text and "undercount" in text.replace("-", "")
+    # Accepted findings must NOT block.
+    assert "BLOCKING" not in text
+    assert exit_code == 0
+
+
+def test_format_validation_report_flat_lines_block():
+    mod = _load_migrate_module()
+    findings = {
+        "sensor.x": {
+            "flat_lines": [{"start": "t1", "end": "t2", "hours": 30.0}],
+        }
+    }
+    text, exit_code = mod.format_validation_report(findings, duplicates=[])
+    assert "flat" in text.lower()
+    assert "BLOCKING" in text
+    assert exit_code != 0
+
+
+def test_format_validation_report_unresolved_blocks():
+    mod = _load_migrate_module()
+    findings = {
+        "sensor.x": {
+            "unresolved": [{"start": "t1", "count": 4}],
+        }
+    }
+    text, exit_code = mod.format_validation_report(findings, duplicates=[])
+    assert "unresolved" in text.lower()
+    assert "BLOCKING" in text
+    assert exit_code != 0
+
+
+def test_format_validation_report_flagged_source_comparison_blocks():
+    mod = _load_migrate_module()
+    findings = {
+        "sensor.x": {
+            "source_comparison": {
+                "expected": 100.0,
+                "rebuilt": 50.0,
+                "diff_pct": 50.0,
+                "flagged": True,
+            },
+        }
+    }
+    text, exit_code = mod.format_validation_report(findings, duplicates=[])
+    assert "source" in text.lower()
+    assert "BLOCKING" in text
+    assert exit_code != 0
+
+
+def test_format_validation_report_unflagged_source_comparison_silent():
+    """An un-flagged source_comparison must neither block nor be reported as an
+    issue."""
+    mod = _load_migrate_module()
+    findings = {
+        "sensor.x": {
+            "source_comparison": {
+                "expected": 100.0,
+                "rebuilt": 100.0,
+                "diff_pct": 0.0,
+                "flagged": False,
+            },
+            "ge_preservation": {
+                "expected": 10.0,
+                "rebuilt": 10.0,
+                "diff_pct": 0.0,
+                "flagged": False,
+            },
+        }
+    }
+    text, exit_code = mod.format_validation_report(findings, duplicates=[])
+    assert "BLOCKING" not in text
+    assert exit_code == 0
+
+
+def test_format_validation_report_flagged_ge_preservation_blocks():
+    """The post-cutover GE-preservation divergence blocks when flagged."""
+    mod = _load_migrate_module()
+    findings = {
+        "sensor.x": {
+            "ge_preservation": {
+                "expected": 100.0,
+                "rebuilt": 40.0,
+                "diff_pct": 60.0,
+                "flagged": True,
+            },
+        }
+    }
+    text, exit_code = mod.format_validation_report(findings, duplicates=[])
+    assert "preservation" in text.lower() or "ge" in text.lower()
+    assert "BLOCKING" in text
+    assert exit_code != 0
+
+
+def test_format_validation_report_mixed_accepted_and_blocking():
+    """Accepted findings alongside a blocking one: both render, exit is non-zero,
+    and the accepted ones still carry the ACCEPTED marker."""
+    mod = _load_migrate_module()
+    findings = {
+        "sensor.x": {
+            "rebaseline": [{"start": "t1", "offset": 5.0, "held": 2}],
+            "flat_lines": [{"start": "t2", "end": "t3", "hours": 48.0}],
+        }
+    }
+    text, exit_code = mod.format_validation_report(findings, duplicates=[])
+    assert "ACCEPTED" in text
+    assert "BLOCKING" in text
+    assert exit_code != 0
+
+
 # ---------------------------------------------------------------------------
 # _repairable guard tests
 # ---------------------------------------------------------------------------

@@ -957,9 +957,13 @@ def format_validation_report(
 ) -> tuple[str, int]:
     """Render the validation findings; return (text, exit_code).
 
-    exit_code is non-zero when substantive issues exist (implausible hours,
-    fake-reset shapes, or duplicate series). Gaps are reported informationally
-    and do not affect the exit code.
+    Each finding renders with an explicit ``[BLOCKING]`` or ``[ACCEPTED]`` marker.
+    exit_code is non-zero iff a BLOCKING finding exists: implausible hours,
+    fake-reset shapes, an unexplained flat span, an unresolved held run, a flagged
+    source-movement or GE-preservation divergence, or a duplicate series. ACCEPTED
+    findings (rebaseline / smear / gap-undercount) and gaps print but never set the
+    exit code. This blocking notion matches the ``blocking`` flag computed by
+    :func:`run_validation` — the two derive from the same set of findings.
 
     ``mode`` selects the header and names what was validated:
 
@@ -975,29 +979,86 @@ def format_validation_report(
     """
     header = _REPORT_HEADERS[mode]
     lines = ["", header, "─" * 72]
-    substantive = False
+    blocking = False
     for ge_id, f in findings.items():
         impl = f.get("implausible", [])
         fakes = f.get("fake_resets", [])
         gaps = f.get("gaps", [])
-        if not (impl or fakes or gaps):
+        flat_lines = f.get("flat_lines", [])
+        rebaseline = f.get("rebaseline", [])
+        smear = f.get("smear", [])
+        gap_undercount = f.get("gap_undercount", [])
+        unresolved = f.get("unresolved", [])
+        src = f.get("source_comparison") or {}
+        ge_pres = f.get("ge_preservation") or {}
+        src_flagged = bool(src.get("flagged"))
+        ge_pres_flagged = bool(ge_pres.get("flagged"))
+        if not (
+            impl
+            or fakes
+            or gaps
+            or flat_lines
+            or rebaseline
+            or smear
+            or gap_undercount
+            or unresolved
+            or src_flagged
+            or ge_pres_flagged
+        ):
             continue
         lines.append(f"  {ge_id}")
+        # Blocking findings.
         for row in impl:
-            substantive = True
-            lines.append(f"    implausible +{row['change']} at {row['start']}")
+            blocking = True
+            lines.append(f"    [BLOCKING] implausible +{row['change']} at {row['start']}")
         for row in fakes:
-            substantive = True
-            lines.append(f"    fake-reset shape (+{row['recovery']}) at {row['start']}")
+            blocking = True
+            lines.append(f"    [BLOCKING] fake-reset shape (+{row['recovery']}) at {row['start']}")
+        for fl in flat_lines:
+            blocking = True
+            lines.append(
+                f"    [BLOCKING] unexplained flat {fl['hours']}h: {fl['start']} -> {fl['end']}"
+            )
+        for u in unresolved:
+            blocking = True
+            lines.append(f"    [BLOCKING] unresolved held run ({u['count']}) at {u['start']}")
+        if src_flagged:
+            blocking = True
+            lines.append(
+                f"    [BLOCKING] source movement divergence {src['diff_pct']}%"
+                f" (expected {src['expected']}, rebuilt {src['rebuilt']})"
+            )
+        if ge_pres_flagged:
+            blocking = True
+            lines.append(
+                f"    [BLOCKING] GE-preservation divergence {ge_pres['diff_pct']}%"
+                f" (expected {ge_pres['expected']}, rebuilt {ge_pres['rebuilt']})"
+            )
+        # Accepted findings (warn-not-block).
+        for rb in rebaseline:
+            lines.append(
+                f"    [ACCEPTED] rebaseline (offset {rb['offset']}, held {rb['held']})"
+                f" at {rb['start']}"
+            )
+        for sm in smear:
+            lines.append(
+                f"    [ACCEPTED] smear ({sm['energy']} over {sm['hours']}h) at {sm['start']}"
+            )
+        for gu in gap_undercount:
+            lines.append(f"    [ACCEPTED] gap-undercount: {gu['from']} -> {gu['start']}")
+        # Informational.
         for g in gaps:
             lines.append(f"    gap {g['hours']}h: {g['after']} -> {g['before']}")
     for a, b in duplicates:
-        substantive = True
-        lines.append(f"  duplicate series: {a} == {b}")
-    if not substantive and not any(f.get("gaps") for f in findings.values()):
+        blocking = True
+        lines.append(f"  [BLOCKING] duplicate series: {a} == {b}")
+    if not blocking and not any(
+        f.get("gaps") or f.get("rebaseline") or f.get("smear") or f.get("gap_undercount")
+        for f in findings.values()
+    ):
         lines.append("  no issues found")
     lines.append("─" * 72)
-    return "\n".join(lines), (1 if substantive else 0)
+    return "\n".join(lines), (1 if blocking else 0)
 
 
 # ---------------------------------------------------------------------------
