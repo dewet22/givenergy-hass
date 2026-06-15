@@ -52,11 +52,27 @@ def test_adaptive_ceiling_below_min_samples_returns_none():
     assert _MOD.adaptive_ceiling([1.0, 9900.0]) is None
 
 
-def test_percentile_interpolates():
+def test_percentile_floor():
     vals = [1.0, 2.0, 3.0, 4.0]
-    assert _MOD._percentile(vals, 50) == 2.5
+    assert _MOD._percentile(vals, 50) == 2.0
     assert _MOD._percentile(vals, 0) == 1.0
     assert _MOD._percentile(vals, 100) == 4.0
+
+
+def test_adaptive_ceiling_small_n_single_outlier_rejected():
+    # 23 genuine deltas (<=6) + 1 huge outlier = 24 positive (the min-samples floor).
+    # Floor-index p99 must land on a genuine value, so the outlier is rejected.
+    genuine = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0] + [3.0] * 17
+    ceiling = _MOD.adaptive_ceiling(genuine + [27000.0])
+    assert ceiling is not None
+    assert ceiling < 27000.0  # outlier rejected, not blessed
+    assert ceiling >= 6.0  # genuine peak still passes
+
+
+def test_apply_requires_cap_logic():
+    assert _MOD._apply_requires_cap(True, None) is True
+    assert _MOD._apply_requires_cap(True, 6.0) is False
+    assert _MOD._apply_requires_cap(False, None) is False
 
 
 def test_adaptive_ceiling_tolerates_diurnal_peaks_rejects_fakes():
