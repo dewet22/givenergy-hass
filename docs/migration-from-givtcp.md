@@ -420,12 +420,6 @@ Holding the last good value (both `state` and `sum`) means a transient zero or s
 
 `--trust-source-sums` opts out of all of this and restores the legacy path: copy GivTCP's `sum` column verbatim and rebase it once at the join so it continues from where GivTCP left off. Use it only when the source sums are known to be clean — it reintroduces the seam-at-join semantics the rebuild was written to avoid.
 
-### Mean / power / SOC / temperature back-port
-
-Energy sums are not the only history worth keeping. On by default (disable with `--skip-means`), the migration also copies a set of **mean-type** series — instantaneous power (PV, grid, battery, house consumption), battery SOC (inverter-side and per-pack) and battery temperature — as straight mean/min/max statistics. These have no cumulative `sum`, so none of the continuity machinery above applies; they are a plain copy that gives hour-of-day heatmaps and similar long-range views their full pre-cut-over history.
-
-The exact GivTCP→givenergy_local suffix pairs for this back-port are **provisional** (see `MEAN_PAIRS` / `MEAN_BATTERY_PAIRS` in the script) and have not yet been verified against a live registry across firmware versions — worth a sanity check on a real system before relying on the imported means.
-
 ### Post-migration validation and residue repair
 
 After the migration plan is built — in both dry-run and `--apply` — the script re-reads each migrated sum series and prints a read-only **validation report**. It flags:
