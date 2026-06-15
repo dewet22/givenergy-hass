@@ -157,6 +157,25 @@ INVERTER_PAIRS: list[tuple[str, str, str, bool]] = [
 # is omitted rather than mis-migrated. (Was added in #126, reverted here.)
 BATTERY_PAIRS: list[tuple[str, str, str, str]] = []
 
+# (givtcp_suffix, ge_suffix, description) — mean-type series (power/SOC/temp).
+# Straight mean/min/max copy; no sum, no rebase, no plausibility.
+# NOTE: these suffixes are provisional and must be verified against a live
+# GivTCP + givenergy_local registry before relying on them in anger.
+MEAN_PAIRS: list[tuple[str, str, str]] = [
+    ("pv_power", "pv_power", "PV power"),
+    ("grid_power", "grid_power", "Grid power (signed)"),
+    ("battery_power", "battery_power", "Battery power (signed)"),
+    ("load_power", "house_consumption", "House consumption power"),
+    ("soc", "battery_soc", "Battery SOC (inverter)"),
+]
+
+# Per-battery mean series: sensor.givtcp_<batt_sn>_<gt> -> sensor.givenergy_battery_<batt_sn>_<ge>
+# NOTE: provisional suffixes — verify against a live registry before relying on them.
+MEAN_BATTERY_PAIRS: list[tuple[str, str, str]] = [
+    ("soc", "soc", "Battery SOC (per pack)"),
+    ("battery_temperature", "temperature", "Battery temperature"),
+]
+
 # ---------------------------------------------------------------------------
 # Serial detection
 # ---------------------------------------------------------------------------
@@ -487,12 +506,13 @@ class HAWebSocket:
         statistic_ids: list[str],
         start: datetime,
         end: datetime | None = None,
+        types: list[str] | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         kwargs: dict[str, Any] = {
             "statistic_ids": statistic_ids,
             "start_time": start.isoformat(),
             "period": "hour",
-            "types": ["sum", "state"],
+            "types": types or ["sum", "state"],
         }
         if end is not None:
             kwargs["end_time"] = end.isoformat()
@@ -665,6 +685,17 @@ class MigrationResult:
 _EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
 
 
+def mean_metadata(ge_id: str, unit: str) -> dict[str, Any]:
+    return {
+        "has_mean": True,
+        "has_sum": False,
+        "name": None,
+        "source": "recorder",
+        "statistic_id": ge_id,
+        "unit_of_measurement": unit,
+    }
+
+
 async def migrate_entity(
     ws: HAWebSocket,
     givtcp_id: str,
@@ -767,6 +798,53 @@ async def migrate_entity(
     return r
 
 
+async def migrate_mean_entity(
+    ws: HAWebSocket,
+    givtcp_id: str,
+    ge_id: str,
+    description: str,
+    cutover: datetime,
+    ge_unit: str,
+    apply: bool,
+    ge_known: bool,
+) -> MigrationResult:
+    r = MigrationResult(description, ge_id)
+    try:
+        raw_givtcp = await ws.get_statistics(
+            [givtcp_id], _EPOCH, end=cutover, types=["mean", "min", "max"]
+        )
+        raw_ge = await ws.get_statistics([ge_id], _EPOCH, types=["mean", "min", "max"])
+    except Exception as exc:
+        r.status = "error"
+        r.error = str(exc)
+        return r
+    givtcp_stats = [_normalise(s) for s in raw_givtcp.get(givtcp_id, [])]
+    ge_all = [_normalise(s) for s in raw_ge.get(ge_id, [])]
+    ge_post = [s for s in ge_all if _to_utc(s["start"]) >= cutover]
+    r.givtcp_rows = len(givtcp_stats)
+    r.ge_pre_rows = len([s for s in ge_all if _to_utc(s["start"]) < cutover])
+    r.ge_post_rows = len(ge_post)
+    if not givtcp_stats:
+        r.status = "no_givtcp_data"
+        return r
+    if not ge_known:
+        r.status = "ge_not_found"
+        return r
+    merged = givtcp_stats + ge_post
+    r.merged_rows = len(merged)
+    if not apply:
+        r.status = "dry_run"
+        return r
+    try:
+        await ws.clear_statistics([ge_id])
+        await ws.import_statistics(metadata=mean_metadata(ge_id, ge_unit), stats=merged)
+        r.status = "migrated"
+    except Exception as exc:
+        r.status = "error"
+        r.error = str(exc)
+    return r
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -837,6 +915,40 @@ def _build_plan(
             unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or fallback_unit
             reset_class = classify_entity(ge_sfx)
             plan.append((givtcp_id, ge_id, desc, unit, False, reset_class, resolved))
+    return plan
+
+
+def _build_mean_plan(
+    inv_serials: list[str],
+    batt_serials: list[str],
+    meta_by_id: dict[str, dict[str, Any]],
+    canonical_to_actual: dict[str, str],
+) -> list[tuple[str, str, str, str, bool]]:
+    """Construct the mean-series migration plan from the detected serials.
+
+    Mirrors `_build_plan`'s canonical→actual resolution but for the mean tables
+    (power / SOC / temperature). Each entry's final field records whether the
+    canonical givenergy_local target was recognised by the registry resolver —
+    the same trust signal `_build_plan` uses. Units come from the live metadata
+    where available, falling back to a sensible default per series shape.
+    """
+    plan: list[tuple[str, str, str, str, bool]] = []
+    for sn in inv_serials:
+        for gt_sfx, ge_sfx, desc in MEAN_PAIRS:
+            givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
+            canonical = f"sensor.givenergy_inverter_{sn}_{ge_sfx}"
+            resolved = canonical in canonical_to_actual
+            ge_id = canonical_to_actual.get(canonical, canonical)
+            unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or "W"
+            plan.append((givtcp_id, ge_id, desc, unit, resolved))
+    for sn in batt_serials:
+        for gt_sfx, ge_sfx, desc in MEAN_BATTERY_PAIRS:
+            givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
+            canonical = f"sensor.givenergy_battery_{sn}_{ge_sfx}"
+            resolved = canonical in canonical_to_actual
+            ge_id = canonical_to_actual.get(canonical, canonical)
+            unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or "%"
+            plan.append((givtcp_id, ge_id, desc, unit, resolved))
     return plan
 
 
@@ -1050,6 +1162,22 @@ async def run(args: argparse.Namespace) -> int:
         if applying and idx < len(plan) - 1:
             await asyncio.sleep(_ENTITY_PAUSE_SECONDS)
 
+    # Mean-series back-port (power / SOC / temperature). Straight mean/min/max
+    # copy across the cutover — no sum, no rebase, no plausibility — collected
+    # into the same results list so the summary covers both paths.
+    if not args.skip_means:
+        mean_plan = _build_mean_plan(inv_serials, batt_serials, meta_by_id, canonical_to_actual)
+        for idx, (givtcp_id, ge_id, desc, unit, resolved) in enumerate(mean_plan):
+            verb = "Applying" if applying else "Previewing"
+            print(f"  {verb}: {desc} …", end=" ", flush=True)
+            r = await migrate_mean_entity(
+                ws, givtcp_id, ge_id, desc, cutover, unit, applying, resolved
+            )
+            results.append(r)
+            print(r.status)
+            if applying and idx < len(mean_plan) - 1:
+                await asyncio.sleep(_ENTITY_PAUSE_SECONDS)
+
     await ws.close()
 
     return _print_summary(results, applying)
@@ -1109,6 +1237,11 @@ def main() -> None:
             "Copy GivTCP's sum column verbatim and rebase at the join, instead of "
             "rebuilding sums from state. Use only if your GivTCP sums are known-good."
         ),
+    )
+    p.add_argument(
+        "--skip-means",
+        action="store_true",
+        help="Skip back-porting mean-type series (power, SOC, temperatures).",
     )
     args = p.parse_args()
     sys.exit(asyncio.run(run(args)))

@@ -172,3 +172,20 @@ def test_get_timezone_reads_ha_config():
     ws._call = _ConfigWS("Europe/London")._call  # type: ignore[attr-defined]
     tz = asyncio.run(mod.HAWebSocket.get_timezone(ws))
     assert str(tz) == "Europe/London"
+
+
+def test_mean_pairs_present_and_shaped():
+    mod = _load_migrate_module()
+    suffixes = {gt for (gt, _ge, _desc) in mod.MEAN_PAIRS}
+    assert any("pv_power" in s for s in suffixes)
+    assert any("grid_power" in s or "import_power" in s for s in suffixes)
+    assert any("battery_power" in s or "charge_power" in s for s in suffixes)
+    assert all(len(t) == 3 for t in mod.MEAN_PAIRS)
+
+
+def test_mean_metadata_is_mean_not_sum():
+    mod = _load_migrate_module()
+    meta = mod.mean_metadata("sensor.loft_givenergy_inverter_x_pv_power", "W")
+    assert meta["has_mean"] is True
+    assert meta["has_sum"] is False
+    assert meta["statistic_id"] == "sensor.loft_givenergy_inverter_x_pv_power"
