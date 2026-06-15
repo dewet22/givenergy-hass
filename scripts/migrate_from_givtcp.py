@@ -983,6 +983,29 @@ _REPORT_HEADERS = {
 }
 
 
+def _gate_blocking(finding: dict[str, Any]) -> bool:
+    """The single source of truth for what blocks an ``--apply``.
+
+    A finding is gate-blocking iff it carries an unexplained flat span, an
+    unresolved held run, a flagged source-movement divergence, or a flagged
+    post-cutover GE-preservation divergence. Implausible hours, fake-reset
+    shapes and duplicate series are deliberately NOT in this set — they are
+    diagnostics the gated residue repair absorbs, so they never refuse a run.
+
+    Both :func:`run_validation` (the authoritative gate) and
+    :func:`format_validation_report` (the apply-mode exit code) derive their
+    blocking decision from here, so the two cannot drift.
+    """
+    src = finding.get("source_comparison") or {}
+    ge_pres = finding.get("ge_preservation") or {}
+    return bool(
+        finding.get("flat_lines")
+        or finding.get("unresolved")
+        or src.get("flagged")
+        or ge_pres.get("flagged")
+    )
+
+
 def format_validation_report(
     findings: dict[str, dict[str, list]],
     duplicates: list[tuple[str, str]],
@@ -990,13 +1013,24 @@ def format_validation_report(
 ) -> tuple[str, int]:
     """Render the validation findings; return (text, exit_code).
 
-    Each finding renders with an explicit ``[BLOCKING]`` or ``[ACCEPTED]`` marker.
-    exit_code is non-zero iff a BLOCKING finding exists: implausible hours,
-    fake-reset shapes, an unexplained flat span, an unresolved held run, a flagged
-    source-movement or GE-preservation divergence, or a duplicate series. ACCEPTED
-    findings (rebaseline / smear / gap-undercount) and gaps print but never set the
-    exit code. This blocking notion matches the ``blocking`` flag computed by
-    :func:`run_validation` — the two derive from the same set of findings.
+    Each finding renders with an explicit marker. The exit code is mode-aware:
+
+    - In **apply mode** (``candidates`` / ``post-migration``) the exit code is
+      non-zero IFF a gate-blocking finding exists — exactly the set
+      :func:`_gate_blocking` defines (unexplained flat span, unresolved held run,
+      flagged source-movement or GE-preservation divergence). Those render
+      ``[BLOCKING]``. Implausible hours, fake-reset shapes and duplicate series
+      are diagnostics the gated repair absorbs: they render ``[ADVISORY]`` and do
+      NOT set the exit code. The invariant: in apply mode ``exit_code == 0`` iff
+      the gate would allow the apply.
+    - In **dry-run mode** there is no gate or repair, so implausible / fake-reset /
+      duplicate residue stays ``[BLOCKING]`` and exit-affecting — the useful
+      "there's something worth repairing" signal.
+
+    ``[ACCEPTED]`` findings (rebaseline / smear / gap-undercount) and gaps print
+    in every mode but never set the exit code. The apply-mode blocking decision
+    derives from :func:`_gate_blocking`, the same source the :func:`run_validation`
+    gate uses, so the report and the gate cannot drift.
 
     ``mode`` selects the header and names what was validated:
 
@@ -1013,6 +1047,11 @@ def format_validation_report(
     header = _REPORT_HEADERS[mode]
     lines = ["", header, "─" * 72]
     blocking = False
+    # In apply mode the gate (and the repair behind it) own implausible /
+    # fake-reset / duplicate residue, so they are advisory only. In a dry run
+    # they remain exit-affecting diagnostics.
+    apply_mode = mode != "dry-run"
+    diag_marker = "ADVISORY" if apply_mode else "BLOCKING"
     for ge_id, f in findings.items():
         impl = f.get("implausible", [])
         fakes = f.get("fake_resets", [])
@@ -1040,13 +1079,17 @@ def format_validation_report(
         ):
             continue
         lines.append(f"  {ge_id}")
-        # Blocking findings.
+        # Diagnostics the apply gate excludes (advisory under --apply, blocking in
+        # a dry run).
         for row in impl:
-            blocking = True
-            lines.append(f"    [BLOCKING] implausible +{row['change']} at {row['start']}")
+            blocking = blocking or not apply_mode
+            lines.append(f"    [{diag_marker}] implausible +{row['change']} at {row['start']}")
         for row in fakes:
-            blocking = True
-            lines.append(f"    [BLOCKING] fake-reset shape (+{row['recovery']}) at {row['start']}")
+            blocking = blocking or not apply_mode
+            lines.append(
+                f"    [{diag_marker}] fake-reset shape (+{row['recovery']}) at {row['start']}"
+            )
+        # Gate-blocking findings.
         for fl in flat_lines:
             blocking = True
             lines.append(
@@ -1083,11 +1126,20 @@ def format_validation_report(
         for g in gaps:
             lines.append(f"    gap {g['hours']}h: {g['after']} -> {g['before']}")
     for a, b in duplicates:
-        blocking = True
-        lines.append(f"  [BLOCKING] duplicate series: {a} == {b}")
-    if not blocking and not any(
-        f.get("gaps") or f.get("rebaseline") or f.get("smear") or f.get("gap_undercount")
-        for f in findings.values()
+        blocking = blocking or not apply_mode
+        lines.append(f"  [{diag_marker}] duplicate series: {a} == {b}")
+    if (
+        not blocking
+        and not duplicates
+        and not any(
+            f.get("gaps")
+            or f.get("rebaseline")
+            or f.get("smear")
+            or f.get("gap_undercount")
+            or f.get("implausible")
+            or f.get("fake_resets")
+            for f in findings.values()
+        )
     ):
         lines.append("  no issues found")
     lines.append("─" * 72)
@@ -1503,16 +1555,11 @@ async def run_validation(
         ge_preservation = compare_source_movement(r.ge_post_movement, r.post_movement, 0.0)
 
         unresolved = events.get("unresolved", [])
-        candidate_blocking = bool(flat_lines or unresolved) or bool(
-            source_comparison["flagged"] or ge_preservation["flagged"]
-        )
-        blocking = blocking or candidate_blocking
-
         ceiling = effective_ceiling(adaptive_ceiling(_state_deltas(rows)), max_kwh)
         implausible = find_implausible_hours(rows, ceiling) if ceiling is not None else []
         fake_resets = find_fake_reset_shapes(rows, ceiling) if ceiling is not None else []
 
-        findings[r.ge_id] = {
+        finding = {
             "implausible": implausible,
             "fake_resets": fake_resets,
             "gaps": gaps,
@@ -1524,6 +1571,10 @@ async def run_validation(
             "gap_undercount": events.get("gap_undercount", []),
             "unresolved": unresolved,
         }
+        # Authoritative apply gate: derived from the same definition the report's
+        # apply-mode exit code uses, so the gate and the report cannot diverge.
+        blocking = blocking or _gate_blocking(finding)
+        findings[r.ge_id] = finding
         series_by_id[r.ge_id] = rows
 
     duplicates = find_duplicate_series(_dedup_series(series_by_id, units_by_id))

@@ -851,6 +851,81 @@ def test_format_validation_report_mixed_accepted_and_blocking():
 
 
 # ---------------------------------------------------------------------------
+# Apply-mode (candidates / post-migration) exit-code semantics: the report's
+# exit code must match the apply gate's `blocking` set exactly. Findings that
+# the gate deliberately excludes (implausible / fake_resets / duplicates) are
+# rendered ADVISORY and do NOT set the exit code; only the gate-blocking set
+# (flat_lines / unresolved / flagged source_comparison / flagged
+# ge_preservation) sets it. Dry-run keeps the stricter BLOCKING behaviour.
+# ---------------------------------------------------------------------------
+
+
+def test_format_validation_report_implausible_advisory_in_apply_mode():
+    mod = _load_migrate_module()
+    findings = {
+        "sensor.x": {
+            "implausible": [{"start": "t1", "change": 27396.0}],
+        }
+    }
+    text, exit_code = mod.format_validation_report(findings, duplicates=[], mode="candidates")
+    assert "ADVISORY" in text
+    assert "BLOCKING" not in text
+    assert exit_code == 0
+
+
+def test_format_validation_report_fake_resets_advisory_in_apply_mode():
+    mod = _load_migrate_module()
+    findings = {
+        "sensor.x": {
+            "fake_resets": [{"start": "t1", "recovery": 500.0}],
+        }
+    }
+    text, exit_code = mod.format_validation_report(findings, duplicates=[], mode="candidates")
+    assert "ADVISORY" in text
+    assert "BLOCKING" not in text
+    assert exit_code == 0
+
+
+def test_format_validation_report_duplicates_advisory_in_apply_mode():
+    mod = _load_migrate_module()
+    text, exit_code = mod.format_validation_report({}, duplicates=[("a", "b")], mode="candidates")
+    assert "ADVISORY" in text
+    assert "BLOCKING" not in text
+    assert exit_code == 0
+
+
+def test_format_validation_report_blocking_wins_over_advisory_in_apply_mode():
+    """A gate-blocking finding alongside an advisory one: exit is non-zero
+    (blocking wins) and the implausible finding still renders advisory."""
+    mod = _load_migrate_module()
+    findings = {
+        "sensor.x": {
+            "implausible": [{"start": "t1", "change": 27396.0}],
+            "flat_lines": [{"start": "t2", "end": "t3", "hours": 30.0}],
+        }
+    }
+    text, exit_code = mod.format_validation_report(findings, duplicates=[], mode="candidates")
+    assert "ADVISORY" in text
+    assert "BLOCKING" in text
+    assert exit_code != 0
+
+
+def test_format_validation_report_implausible_blocks_in_dry_run():
+    """Dry-run preserves the stricter contract: implausible remains BLOCKING and
+    exit-affecting, since there's no gate/repair to absorb the residue."""
+    mod = _load_migrate_module()
+    findings = {
+        "sensor.x": {
+            "implausible": [{"start": "t1", "change": 27396.0}],
+        }
+    }
+    text, exit_code = mod.format_validation_report(findings, duplicates=[], mode="dry-run")
+    assert "BLOCKING" in text
+    assert "ADVISORY" not in text
+    assert exit_code != 0
+
+
+# ---------------------------------------------------------------------------
 # _repairable guard tests
 # ---------------------------------------------------------------------------
 
@@ -1551,11 +1626,13 @@ def test_repair_residue_writes_repaired_entity_exactly_once(monkeypatch, capsys)
     args = _apply_args()
     args.repair_residue = True
 
-    asyncio.run(_MOD.run(args))
+    exit_code = asyncio.run(_MOD.run(args))
 
-    # The candidate was written and verified (the non-zero report exit merely
-    # reflects the advisory pre-repair "implausible" finding, not a write failure).
+    # The candidate was written and verified. In apply mode the pre-repair
+    # "implausible" finding is advisory only (the gate excludes it and the repair
+    # absorbs it), so a clean run exits 0 — no spurious non-zero from a diagnostic.
     assert repairable.status == "migrated"
+    assert exit_code == 0
     # Exactly one clear and one import for the repaired entity — Phase B is the
     # sole writer; repair no longer issues its own write.
     assert ws.clear_calls == [["sensor.ge_a"]]
