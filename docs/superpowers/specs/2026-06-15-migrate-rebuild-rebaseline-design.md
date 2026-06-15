@@ -1,155 +1,181 @@
 # GivTCP migration: recover from sustained shifts (fix the rebuild flat-line)
 
-**Issue:** [#172](https://github.com/dewet22/givenergy-hass/issues/172) — `migrate_from_givtcp --apply` can silently flatten lifetime counters
-**Date:** 2026-06-15
-**Status:** design approved, pending implementation plan
+**Issue:** [#172](https://github.com/dewet22/givenergy-hass/issues/172)
+**Date:** 2026-06-15 (rev 2 — incorporates Codex review round 2)
+**Status:** design under review (Codex re-review pending)
 **Touches:** `scripts/migrate_from_givtcp.py`, `tests/test_migrate_stats_repair.py`
 
 ## Problem
 
-A live `--apply` flattened lifetime energy counters. `rebuild_sum_walk` holds the
-last-good value on an over-ceiling delta and deliberately does **not** advance
-`prev_state` — correct for a *transient* spike (so the recovery is measured
-against the last trusted reading). But GivTCP's lifetime PV counter had a
-one-time ~8,000 kWh artifact jump (a meter rebase/rollover, not real energy).
-The walk correctly rejected that single step, but then `prev_state` stuck at the
-pre-jump value forever, so every later (genuine, higher) reading was also
-> ceiling vs the stale baseline and got held → **permanent flat-line**.
+A live `--apply` silently flattened lifetime energy counters. `rebuild_sum_walk`
+holds last-good on an over-ceiling delta and does not advance `prev_state` —
+correct for a *transient* spike. GivTCP's lifetime PV counter had a one-time
+~8,000 kWh artifact jump (a meter rebase/rollover, not real energy); the walk
+rejected that single step, then `prev_state` stuck at the pre-jump value
+forever, so every later (genuine, higher) reading was also rejected →
+**permanent flat-line** (`pv_generation_total` pinned at 18958.5 while the
+GivTCP source climbed past 27332). Recovered from a `mysqldump`. No gate caught
+it: the dry-run validation reads the *existing* series (not the rebuild), and
+the checks only flag *large* changes, never flatness/under-counting.
 
-Evidence: migrated `pv_generation_total` pinned flat at `18958.5` while the
-GivTCP source `invertor_energy_total_kwh` climbed past `27332` with genuine
-+2–3 kWh/h deltas. Recovered from a `mysqldump` backup.
+This rev folds in Codex's round-2 review (see Provenance). The earlier rev's
+re-baseline was too weak (monotonic-≥ only, one-directional, discarded genuine
+in-segment movement, left a state discontinuity, and validated/warned only
+*after* the destructive write).
 
-Nothing caught it because no gate checks the rebuilt output for *under*-counting:
-the dry-run validation reads the **existing** HA series (not the rebuild), and
-both validation passes only flag *large* changes — a flat sum has none.
+## Decisions
 
-This design was developed against the live failure and reconciled with
-CodeRabbit's independent plan on #172 (see "Provenance" below).
+1. **Gate before the destructive write.** Build the full rebuilt candidate
+   in-memory, run the *same* validation used in dry-run against it, and **refuse**
+   the entity (and surface for the whole apply) *before* `clear_statistics` if it
+   contains unexplained re-baselines, source-vs-rebuilt movement divergence, or
+   source-moves-but-rebuilt-flat spans. Post-apply validation only confirms the
+   write matches the approved candidate.
+2. **Confirm a coherent new segment, not just `held ≥ prev_state`.** Buffer the
+   held readings; re-baseline only when they form a coherent segment — adjacent
+   held deltas mutually plausible within the time-scaled bound — in **either
+   direction** (up or down rebase). Reject a candidate whose held readings
+   themselves jump implausibly (three corrupt highs are not a segment).
+3. **Book in-segment movement; suppress only the one-time offset.** On
+   confirmation, add the buffered segment's internal plausible deltas to the
+   running sum and suppress only the single offset (the artifact jump from the
+   old level to the new segment). Never discard genuine accumulation.
+4. **Normalized, continuous output state.** Maintain a segment offset so the
+   emitted `state` timeline is continuous (no artifact discontinuity), consistent
+   with held rows already being rewritten to last-good. The clean cumulative is
+   the output; raw source discontinuities are not re-introduced.
+5. **Time-scaled, reset-aware acceptance + smear.** A delta is plausible when
+   `≤ ceiling × elapsed_hours`. A genuine multi-hour (gap) delta is **smeared**
+   so each stored period is physically plausible — booking it on the resume hour
+   would store an impossible single-hour spike that our own plausibility check
+   would (rightly) flag. Smearing is **reset-aware**: `LIFETIME` gaps smear
+   across days; `DAILY` gaps are **split at each local midnight** so each day's
+   share is reset-correct; an `ANNUAL` (year-end-crossing) gap is **flagged /
+   refused** (a cheap guard — see Scope note).
+6. **Reset-aware aligned-movement source comparison.** Compare source vs rebuilt
+   *movement* over the same pre-cutover window (reset-aware), not final-state vs
+   final-sum (baselines and DAILY/ANNUAL resets make that incomparable).
+   Separately verify the post-cutover segment preserves the GE movement.
 
-## Decisions (locked during brainstorming)
+### Scope note (from the live data)
 
-1. **Detection of sustained vs transient** — CodeRabbit's count-based approach:
-   after `K=3` consecutive holds whose held states are monotonically ≥
-   `prev_state`, treat it as a sustained shift and re-baseline. (Robust against a
-   2-reading transient, which a 1-step escrow would mis-classify.)
-2. **Plausibility is time-scaled** — a delta is plausible when
-   `≤ ceiling × elapsed_hours` (elapsed derived from row timestamps). This books
-   legitimate accumulation across a real source gap instead of rejecting it (and
-   fixes a latent under-count CodeRabbit's plan would have shipped by blanket-
-   suppressing).
-3. **Re-baseline suppresses the artifact gap** — anything reaching the K=3 path
-   exceeded `ceiling × elapsed` (a true artifact), so re-baseline adds nothing to
-   the running sum. Legitimate gaps never reach this path; they are accepted at
-   the time-scaled test.
-4. **Daily smear of booked gaps** — a multi-hour delta accepted via the
-   time-scaled test is distributed across the gap as evenly-incrementing
-   synthesised rows at daily granularity, so the cumulative climbs smoothly
-   rather than spiking on the resume hour. The total is preserved; each smear is
-   logged (the data is interpolated, so it must be transparent, not hidden).
-5. **Dry-run validates the rebuilt output**, not the current HA series.
-6. **No separate interim `--apply` guard** — this *is* the fix; `--apply` becomes
-   safe on merge (it keeps the `--max-kw` requirement from #170).
+The four identified outages (23h/69h/136h/532h, all 2025) **all cross day-ends**
+but **none cross year-end**, and the only `ANNUAL` counter
+(`battery_discharge_this_year`) is **not migrated**. So `DAILY` midnight-crossing
+is the real, ubiquitous case (engineer it properly); `ANNUAL` year-end-crossing
+gets only a conservative flag/refuse guard for the general OSS case.
 
-## Core algorithm — `rebuild_sum_walk`
+## Core algorithm — `rebuild_sum_walk` (buffered segments)
 
-Walk normalised rows ascending, maintaining `running`, `prev_state`,
-`prev_start`, `consecutive_holds`, and `held_states`.
+State: `running` (clean cumulative sum), `prev_state` (last trusted raw state),
+`prev_start`, and a `held` buffer (list of `(start, state)` for rows currently
+being held pending a transient-vs-sustained decision).
 
-For each row with a numeric `state`:
+Per row with numeric `state` (gap rows with `state is None` carry `running`
+forward, unchanged):
 
-- `elapsed_hours = max(1, hours between prev_start and this start)`.
-- `bound = ceiling * elapsed_hours` (when `ceiling` is not None).
-- `delta = state - prev_state`.
+- `elapsed = max(1, hours(prev_start → start))`; `bound = ceiling × elapsed`;
+  `delta = state − prev_state`.
+- **Accept** (`0 ≤ delta ≤ bound`): genuine accumulation. If `elapsed > 1`,
+  **smear** (reset-aware per Decision 5) across the gap; else add `delta`. Flush
+  any `held` buffer first as a transient (see below). Advance
+  `prev_state`/`prev_start`; emit normalized state.
+- **Boundary reset** (`delta < 0` at the counter's natural boundary): existing
+  behaviour (`running += state`); flush held as transient; advance.
+- **Otherwise** (over-bound, or off-boundary drop): append `(start, state)` to
+  `held`, emit last-good (held) sum **and** state. Then decide:
+  - **Transient** — the *next* accepted reading reverts toward `prev_state`
+    (within `bound`): the held run was a transient spike; discard it (already
+    emitted as held last-good), resume normally.
+  - **Sustained segment** — `held` reaches the confirmation length **and** its
+    adjacent internal deltas are each within the time-scaled bound (a coherent
+    segment, any direction): re-baseline. Suppress the one-time offset
+    (`held[0].state − prev_state`, add nothing), then **book the internal deltas**
+    across the held rows (retroactively correct their emitted sums/states),
+    advance `prev_state` to `held[-1].state`, record a re-baseline event, clear
+    the buffer.
+  - **Incoherent** — held readings jump implausibly among themselves: do **not**
+    re-baseline; keep holding (these are corruption, not a segment), and record
+    for validation.
 
-Branches:
+Confirmation length and the segment-coherence test are module constants/helpers,
+unit-tested independently.
 
-1. **Accept** — `0 ≤ delta ≤ bound`: this is genuine (possibly multi-hour)
-   accumulation. If `elapsed_hours > 1`, **smear**: emit evenly-incrementing
-   synthesised rows across the gap (daily granularity) summing to `delta`; else
-   add `delta` to `running` on this row. Advance `prev_state`/`prev_start`; reset
-   hold tracking.
-2. **Boundary reset** — `delta < 0` at the counter's natural boundary
-   (`_is_reset_boundary`): existing behaviour (`running += state`); reset hold
-   tracking.
-3. **Hold** — otherwise (over-bound spike, or off-boundary decrease): carry
-   `running`, set the row's `state` to `prev_state` (hold state too — the #170
-   fix), increment `consecutive_holds`, append `state` to `held_states`. Do
-   **not** advance `prev_state`.
-4. **Re-baseline** — once `consecutive_holds ≥ K (=3)` and all `held_states` are
-   monotonically ≥ `prev_state`: the shift is sustained, not transient. Set
-   `prev_state = state`, `prev_start = start`, add nothing to `running` (artifact
-   suppressed), record a re-baseline event, reset hold tracking. Subsequent
-   genuine deltas then accumulate from the new level.
+## Validation (gate-before-write)
 
-Gap rows (`state is None`) carry `running` forward, untouched (unchanged).
+Pure checks, run on the in-memory candidate **before** any write:
 
-`K` and the smear granularity are module constants.
+- `find_flat_line_spans(rows, min_hours)` — sustained near-zero `sum`-delta spans
+  (under-count signature).
+- `compare_source_movement(givtcp_rows, rebuilt_rows, cutover, reset_class, tol)`
+  — reset-aware aligned movement over the pre-cutover window; flags divergence
+  beyond tolerance; separately checks the post-cutover segment preserves GE
+  movement.
+- Re-baseline events and smear events surfaced for transparency.
 
-## Smear helper
+`migrate_entity` (apply path) refuses the entity before `clear_statistics` when
+the candidate has: a source-moves-but-rebuilt-flat span, source-movement
+divergence beyond tolerance, an incoherent held run, or a reset-crossing
+`ANNUAL` gap. `format_validation_report` renders all finding types. Post-apply
+validation re-reads and asserts the stored series matches the approved
+candidate.
 
-`_smear_gap(prev_sum, total_delta, start, end, prev_start)` → list of
-synthesised rows with `sum` rising linearly from `prev_sum` to
-`prev_sum + total_delta` across the gap at daily steps (hourly slots within a
-day share the day's increment evenly). Pure and unit-tested. The walk splices
-its output in place of the single jumping row.
+## Dry-run
 
-## Validation additions
-
-- `find_flat_line_spans(rows, min_hours=6)` — consecutive near-zero `sum`-delta
-  spans; the under-count signature the current checks can't see. Returns
-  `{start, hours}` entries.
-- `compare_source_rebuilt(givtcp_rows, rebuilt_rows, tolerance_pct=5)` — compares
-  the source's final `state`-span against the rebuilt `sum`-span; flags when they
-  diverge beyond tolerance. Suppressed artifacts legitimately cause some
-  divergence, so this is reported (and, at `--apply`, warned loudly) rather than
-  fatal.
-- `run_validation` records `flat_lines`, `rebaseline_events`, `smear_events`, and
-  `source_comparison` per entity; `format_validation_report` renders each.
-
-## Dry-run fix
-
-- `MigrationResult` gains `rebuilt_rows: list[dict] | None` and
-  `givtcp_final_state: float | None`, populated in `migrate_entity` after the
-  rebuild.
-- In `run_validation`, when `applied=False` and `rebuilt_rows` is present,
-  validate **those** rows (header: "dry-run: rebuilt preview") instead of
-  re-reading the current HA series. Source comparison uses `givtcp_final_state`.
+`MigrationResult` carries the rebuilt candidate (`rebuilt_rows`) and the aligned
+source rows needed for `compare_source_movement`. In dry-run (`applied=False`),
+validation analyses the **candidate**, not the current HA series (header:
+"dry-run: rebuilt preview"). This is the same validation the apply gate runs, so
+the preview is faithful to what `--apply` would do.
 
 ## Testing
 
-- `rebuild_sum_walk`: re-baseline after a sustained shift (not flat afterward);
-  transient spike still held (no re-baseline); LIFETIME monotonic shift recovers
-  at K=3; time-scaled accept books a legitimate post-gap delta; daily smear
-  produces evenly-climbing synthesised rows summing to the gap; held rows carry
-  last-good `state` (the #170 guarantee).
-- **Live-failure fixture:** a normal climb → an ~8,000 kWh single-hour artifact
-  jump → continued genuine +2–3 kWh/h climb. Assert the rebuilt series recovers
-  (not flat), the artifact is suppressed, and the rebuilt total tracks the
-  genuine source — the exact shape that flattened on the live `--apply`.
-- `find_flat_line_spans` (flags ≥ min_hours, ignores shorter); `compare_source_rebuilt`
-  (flags > tolerance, passes within); dry-run validates rebuilt output (flags a
-  flat rebuilt series even when the mocked "current" HA series is healthy).
-- Existing rebuild/validation/ceiling tests stay green.
+`rebuild_sum_walk` (pure), covering Codex's expanded fixture:
 
-## Verification (post-merge, against live data)
+- **Sustained upward rebase** (the live 8 MWh artifact then genuine climb):
+  recovers, not flat; offset suppressed; in-segment deltas booked; totals track
+  the genuine source.
+- **Sustained downward rebase** (meter reset/rollover to a lower level):
+  recovers symmetrically.
+- **Three corrupt highs then recovery to the real lower value**: not mistaken
+  for a segment; does not get permanently stuck.
+- **Confirmed segment with internal increments**: the genuine in-segment deltas
+  (`+2.7, +2.4 …`) are retained, not discarded.
+- **Transient spike**: still held (no re-baseline).
+- **Gaps crossing / not crossing a DAILY reset**: reset-aware smear splits at
+  local midnight; each day's share is reset-correct; a non-crossing LIFETIME gap
+  smears cleanly; an ANNUAL year-end-crossing gap is flagged/refused.
+- **Output state is continuous** across holds and re-baselines (no discontinuity).
 
-Re-run the live dry-run (now validating the rebuilt output) and confirm no
-flat-lines / source divergence; then a backed-up `--apply` and confirm the
-lifetime counters climb (match the GivTCP source) and totals reconcile.
+Pure validation helpers (`find_flat_line_spans`, `compare_source_movement`) and
+the apply-gate refusal path (candidate with a flat span / divergence is refused
+before any write) are unit-tested. Dry-run validates the candidate even when the
+mocked current HA series is healthy.
+
+## Verification (post-merge, against live data, backed up)
+
+Re-run the live dry-run (validating the candidate) → expect no flat-lines /
+divergence and explained re-baselines/smears; then a backed-up `--apply` →
+confirm lifetime counters climb and reconcile with the GivTCP source movement,
+and the four known day-crossing gaps smear per-day rather than spiking.
 
 ## Provenance
 
-Independently designed from the live failure and CodeRabbit's #172 plan. From
-CodeRabbit: the `K=3` consecutive-hold + monotonic-≥ detector, flat-line span
-detection, source-vs-rebuilt comparison, and the dry-run-validates-rebuilt fix.
-Added here: **time-scaled plausibility (`ceiling × elapsed_hours`)** so genuine
-post-gap accumulation is booked rather than suppressed (CodeRabbit's plan
-explicitly accepted that under-count), and **daily smearing** of booked gaps for
-natural-looking history.
+- **Ours / the live failure:** the diagnosis, time-scaled `ceiling × elapsed`
+  plausibility, and reset-aware **daily smear** (kept over Codex's "drop smear":
+  booking a multi-day gap on the resume hour stores a physically-impossible
+  single-hour spike — *less* faithful than a plausible smear, and it would fail
+  our own plausibility check).
+- **CodeRabbit (#172 plan):** count-based hold tracking, flat-line span
+  detection, source-comparison and dry-run-validates-rebuilt direction.
+- **Codex (round 2):** gate-before-write; coherent-segment (bidirectional)
+  confirmation rather than monotonic-≥; book in-segment movement / suppress only
+  the offset; normalized continuous output state; reset-aware aligned-movement
+  source comparison; reset-aware handling of gaps. We diverge from Codex only on
+  *whether* to smear (we smear, reset-aware) — see the smear rationale above.
 
 ## Out of scope
 
-- Diurnal-shaped smear (per-sensor time-of-day profiles) — daily-uniform is
+- Diurnal-shaped smear (per-sensor time-of-day weighting) — daily-uniform is
   enough for the Energy dashboard.
 - The mean/SOC back-port (#169) — independent; does not use `rebuild_sum_walk`.
