@@ -103,6 +103,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import re
 import statistics
 import sys
@@ -1400,8 +1401,8 @@ async def run(args: argparse.Namespace) -> int:
 def _positive_float(value: str) -> float:
     """argparse type: a strictly positive float (for --max-kw)."""
     f = float(value)
-    if f <= 0:
-        raise argparse.ArgumentTypeError("must be a positive number of kW")
+    if not math.isfinite(f) or f <= 0:
+        raise argparse.ArgumentTypeError("must be a positive, finite number of kW")
     return f
 
 

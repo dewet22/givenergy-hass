@@ -440,3 +440,11 @@ def test_positive_float_rejects_zero_and_negative():
         _MOD._positive_float("0")
     with pytest.raises(argparse.ArgumentTypeError):
         _MOD._positive_float("-3")
+
+
+def test_positive_float_rejects_non_finite():
+    # nan/inf pass an `f <= 0` check but would corrupt (nan) or unguard (inf) the
+    # rebuild, so they must be rejected too.
+    for value in ("nan", "inf", "-inf"):
+        with pytest.raises(argparse.ArgumentTypeError):
+            _MOD._positive_float(value)
