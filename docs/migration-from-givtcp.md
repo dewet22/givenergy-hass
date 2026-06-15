@@ -32,7 +32,7 @@ Suffixes shown are after stripping the integration prefix and the inverter/batte
 | 🆕 new | 71 |
 | 🛠️ derived givtcp | 20 |
 
-> Counts are *suffix*-level (one row per logical sensor); on a real system each per-battery row multiplies by the number of battery packs, and per-cell rows multiply by 16. The reference system above has two battery packs (`BG2134G007`, `DZ2228G532`).
+> Counts are *suffix*-level (one row per logical sensor); on a real system each per-battery row multiplies by the number of battery packs, and per-cell rows multiply by 16. The reference system above has two battery packs (`CD2345E678`, `EF3456G789`).
 
 ## Catalogue
 
@@ -110,22 +110,22 @@ Suffixes shown are after stripping the integration prefix and the inverter/batte
 | 🚫 | `battery_charge_energy_total_computed` | — | Auto-categorised; not yet manually mapped. Example: `sensor.battery_charge_energy_total_computed` |
 | 🚫 | `battery_discharge_energy_today_kwh_negated` | — | Auto-categorised; not yet manually mapped. Example: `sensor.battery_discharge_energy_today_kwh_negated` |
 | 🚫 | `battery_discharge_energy_total_computed` | — | Auto-categorised; not yet manually mapped. Example: `sensor.battery_discharge_energy_total_computed` |
-| 🚫 | `soc` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_soc` |
-| 🆕 | — | `battery_alt_charge_today` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_battery_alt_charge_today` |
-| 🆕 | — | `battery_alt_charge_total` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_battery_alt_charge_total` |
-| 🆕 | — | `battery_alt_discharge_today` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_battery_alt_discharge_today` |
-| 🆕 | — | `battery_alt_discharge_total` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_battery_alt_discharge_total` |
-| 🆕 | — | `battery_capacity` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_battery_capacity` |
-| 🆕 | — | `battery_discharge_min_power_reserve` | No GivTCP equivalent. Example: `number.givenergy_inverter_sa2114g047_battery_discharge_min_power_reserve` |
-| 🆕 | — | `battery_discharge_this_year` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_battery_discharge_this_year` |
-| 🆕 | — | `battery_maintenance_mode` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_battery_maintenance_mode` |
-| 🆕 | — | `battery_pause_mode` | No GivTCP equivalent. Example: `select.givenergy_inverter_sa2114g047_battery_pause_mode` |
-| 🆕 | — | `battery_pause_slot_end` | No GivTCP equivalent. Example: `time.givenergy_inverter_sa2114g047_battery_pause_slot_end` |
-| 🆕 | — | `battery_pause_slot_start` | No GivTCP equivalent. Example: `time.givenergy_inverter_sa2114g047_battery_pause_slot_start` |
-| 🆕 | — | `battery_power_mode` | No GivTCP equivalent. Example: `select.givenergy_inverter_sa2114g047_battery_power_mode` |
-| 🆕 | — | `battery_soc` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_battery_soc` |
-| 🆕 | — | `battery_temperature` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_battery_temperature` |
-| 🆕 | — | `charge_status` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_charge_status` |
+| 🚫 | `soc` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_soc` |
+| 🆕 | — | `battery_alt_charge_today` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_battery_alt_charge_today` |
+| 🆕 | — | `battery_alt_charge_total` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_battery_alt_charge_total` |
+| 🆕 | — | `battery_alt_discharge_today` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_battery_alt_discharge_today` |
+| 🆕 | — | `battery_alt_discharge_total` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_battery_alt_discharge_total` |
+| 🆕 | — | `battery_capacity` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_battery_capacity` |
+| 🆕 | — | `battery_discharge_min_power_reserve` | No GivTCP equivalent. Example: `number.givenergy_inverter_ab1234c567_battery_discharge_min_power_reserve` |
+| 🆕 | — | `battery_discharge_this_year` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_battery_discharge_this_year` |
+| 🆕 | — | `battery_maintenance_mode` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_battery_maintenance_mode` |
+| 🆕 | — | `battery_pause_mode` | No GivTCP equivalent. Example: `select.givenergy_inverter_ab1234c567_battery_pause_mode` |
+| 🆕 | — | `battery_pause_slot_end` | No GivTCP equivalent. Example: `time.givenergy_inverter_ab1234c567_battery_pause_slot_end` |
+| 🆕 | — | `battery_pause_slot_start` | No GivTCP equivalent. Example: `time.givenergy_inverter_ab1234c567_battery_pause_slot_start` |
+| 🆕 | — | `battery_power_mode` | No GivTCP equivalent. Example: `select.givenergy_inverter_ab1234c567_battery_power_mode` |
+| 🆕 | — | `battery_soc` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_battery_soc` |
+| 🆕 | — | `battery_temperature` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_battery_temperature` |
+| 🆕 | — | `charge_status` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_charge_status` |
 | 🆕 | — | `restore_full_givenergy_battery_discharge_after_octopus_intelligent_dispatching` | No GivTCP equivalent. Example: `automation.restore_full_givenergy_battery_discharge_after_octopus_intelligent_dispatching` |
 
 ### PV strings
@@ -149,11 +149,11 @@ Suffixes shown are after stripping the integration prefix and the inverter/batte
 
 | Status | GivTCP suffix | `givenergy_local` suffix | Notes |
 |---|---|---|---|
-| 🆕 | — | `ac_output_current` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_ac_output_current` |
-| 🆕 | — | `ac_output_frequency` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_ac_output_frequency` |
-| 🆕 | — | `ac_output_voltage` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_ac_output_voltage` |
-| 🆕 | — | `grid_apparent_power` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_grid_apparent_power` |
-| 🆕 | — | `inverter_export_total` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_inverter_export_total` |
+| 🆕 | — | `ac_output_current` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_ac_output_current` |
+| 🆕 | — | `ac_output_frequency` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_ac_output_frequency` |
+| 🆕 | — | `ac_output_voltage` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_ac_output_voltage` |
+| 🆕 | — | `grid_apparent_power` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_grid_apparent_power` |
+| 🆕 | — | `inverter_export_total` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_inverter_export_total` |
 
 ### Tariff (Octopus day/night)
 
@@ -197,31 +197,31 @@ Suffixes shown are after stripping the integration prefix and the inverter/batte
 
 | Status | GivTCP suffix | `givenergy_local` suffix | Notes |
 |---|---|---|---|
-| 🚫 | `invertor_serial_number` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_invertor_serial_number` |
-| 🚫 | `invertor_temperature` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_invertor_temperature` |
-| 🚫 | `invertor_type` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_invertor_type` |
-| 🚫 | `meter_type` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_meter_type` |
-| 🚫 | `modbus_version` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_modbus_version` |
-| 🚫 | `reboot_invertor` | — | Auto-categorised; not yet manually mapped. Example: `button.givtcp_sa2114g047_reboot_invertor` |
-| 🚫 | `status` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_status` |
-| 🆕 | — | `arm_firmware_version` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_arm_firmware_version` |
-| 🆕 | — | `charger_warning_code` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_charger_warning_code` |
-| 🆕 | — | `device_type_code` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_device_type_code` |
-| 🆕 | — | `dsp_firmware_version` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_dsp_firmware_version` |
-| 🆕 | — | `fault_code` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_fault_code` |
-| 🆕 | — | `fault_messages` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_fault_messages` |
-| 🆕 | — | `inverter_errors` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_inverter_errors` |
-| 🆕 | — | `inverter_heatsink_temperature` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_inverter_heatsink_temperature` |
-| 🆕 | — | `last_successful_refresh` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_last_successful_refresh` |
-| 🆕 | — | `meter_type` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_meter_type` |
-| 🆕 | — | `modbus_version` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_modbus_version` |
-| 🆕 | — | `mppt_count` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_mppt_count` |
-| 🆕 | — | `negative_dc_bus_voltage` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_negative_dc_bus_voltage` |
-| 🆕 | — | `phase_count` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_phase_count` |
-| 🆕 | — | `positive_dc_bus_voltage` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_positive_dc_bus_voltage` |
-| 🆕 | — | `status` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_status` |
-| 🆕 | — | `system_mode` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_system_mode` |
-| 🆕 | — | `usb_device` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_usb_device` |
+| 🚫 | `invertor_serial_number` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_invertor_serial_number` |
+| 🚫 | `invertor_temperature` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_invertor_temperature` |
+| 🚫 | `invertor_type` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_invertor_type` |
+| 🚫 | `meter_type` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_meter_type` |
+| 🚫 | `modbus_version` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_modbus_version` |
+| 🚫 | `reboot_invertor` | — | Auto-categorised; not yet manually mapped. Example: `button.givtcp_ab1234c567_reboot_invertor` |
+| 🚫 | `status` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_status` |
+| 🆕 | — | `arm_firmware_version` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_arm_firmware_version` |
+| 🆕 | — | `charger_warning_code` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_charger_warning_code` |
+| 🆕 | — | `device_type_code` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_device_type_code` |
+| 🆕 | — | `dsp_firmware_version` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_dsp_firmware_version` |
+| 🆕 | — | `fault_code` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_fault_code` |
+| 🆕 | — | `fault_messages` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_fault_messages` |
+| 🆕 | — | `inverter_errors` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_inverter_errors` |
+| 🆕 | — | `inverter_heatsink_temperature` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_inverter_heatsink_temperature` |
+| 🆕 | — | `last_successful_refresh` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_last_successful_refresh` |
+| 🆕 | — | `meter_type` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_meter_type` |
+| 🆕 | — | `modbus_version` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_modbus_version` |
+| 🆕 | — | `mppt_count` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_mppt_count` |
+| 🆕 | — | `negative_dc_bus_voltage` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_negative_dc_bus_voltage` |
+| 🆕 | — | `phase_count` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_phase_count` |
+| 🆕 | — | `positive_dc_bus_voltage` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_positive_dc_bus_voltage` |
+| 🆕 | — | `status` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_status` |
+| 🆕 | — | `system_mode` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_system_mode` |
+| 🆕 | — | `usb_device` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_usb_device` |
 
 ### Controls — number entities
 
@@ -251,8 +251,8 @@ Suffixes shown are after stripping the integration prefix and the inverter/batte
 
 | Status | GivTCP suffix | `givenergy_local` suffix | Notes |
 |---|---|---|---|
-| 🆕 | — | `enable_charge` | No GivTCP equivalent. Example: `switch.givenergy_inverter_sa2114g047_enable_charge` |
-| 🆕 | — | `enable_discharge` | No GivTCP equivalent. Example: `switch.givenergy_inverter_sa2114g047_enable_discharge` |
+| 🆕 | — | `enable_charge` | No GivTCP equivalent. Example: `switch.givenergy_inverter_ab1234c567_enable_charge` |
+| 🆕 | — | `enable_discharge` | No GivTCP equivalent. Example: `switch.givenergy_inverter_ab1234c567_enable_discharge` |
 
 ### Switches
 
@@ -277,15 +277,15 @@ Suffixes shown are after stripping the integration prefix and the inverter/batte
 
 | Status | GivTCP suffix | `givenergy_local` suffix | Notes |
 |---|---|---|---|
-| 🚫 | `invertor_time` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_invertor_time` |
-| 🚫 | `last_updated_time` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_last_updated_time` |
-| 🚫 | `real_time_control` | — | Auto-categorised; not yet manually mapped. Example: `switch.givtcp_sa2114g047_real_time_control` |
-| 🚫 | `sync_time` | — | Auto-categorised; not yet manually mapped. Example: `button.givtcp_sa2114g047_sync_time` |
-| 🚫 | `time_since_last_update` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_time_since_last_update` |
-| 🚫 | `timeout_error` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_timeout_error` |
-| 🆕 | — | `charge_slot_2_end` | No GivTCP equivalent. Example: `time.givenergy_inverter_sa2114g047_charge_slot_2_end` |
-| 🆕 | — | `charge_slot_2_start` | No GivTCP equivalent. Example: `time.givenergy_inverter_sa2114g047_charge_slot_2_start` |
-| 🆕 | — | `work_time_total` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_work_time_total` |
+| 🚫 | `invertor_time` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_invertor_time` |
+| 🚫 | `last_updated_time` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_last_updated_time` |
+| 🚫 | `real_time_control` | — | Auto-categorised; not yet manually mapped. Example: `switch.givtcp_ab1234c567_real_time_control` |
+| 🚫 | `sync_time` | — | Auto-categorised; not yet manually mapped. Example: `button.givtcp_ab1234c567_sync_time` |
+| 🚫 | `time_since_last_update` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_time_since_last_update` |
+| 🚫 | `timeout_error` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_timeout_error` |
+| 🆕 | — | `charge_slot_2_end` | No GivTCP equivalent. Example: `time.givenergy_inverter_ab1234c567_charge_slot_2_end` |
+| 🆕 | — | `charge_slot_2_start` | No GivTCP equivalent. Example: `time.givenergy_inverter_ab1234c567_charge_slot_2_start` |
+| 🆕 | — | `work_time_total` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_work_time_total` |
 
 ### Per-battery (BMS / cells)
 
@@ -310,17 +310,17 @@ Suffixes shown are after stripping the integration prefix and the inverter/batte
 
 | Status | GivTCP suffix | `givenergy_local` suffix | Notes |
 |---|---|---|---|
-| 🆕 | — | `bms_mosfet_temperature` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_bms_mosfet_temperature` |
-| 🆕 | — | `bms_status_1` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_bms_status_1` |
-| 🆕 | — | `bms_status_2` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_bms_status_2` |
-| 🆕 | — | `bms_status_3` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_bms_status_3` |
-| 🆕 | — | `bms_status_4` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_bms_status_4` |
-| 🆕 | — | `bms_status_5` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_bms_status_5` |
-| 🆕 | — | `bms_status_6` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_bms_status_6` |
-| 🆕 | — | `bms_status_7` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_bms_status_7` |
-| 🆕 | — | `bms_warning_1` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_bms_warning_1` |
-| 🆕 | — | `bms_warning_2` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_bms_warning_2` |
-| 🆕 | — | `cell_voltages_sum` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_cell_voltages_sum` |
+| 🆕 | — | `bms_mosfet_temperature` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_bms_mosfet_temperature` |
+| 🆕 | — | `bms_status_1` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_bms_status_1` |
+| 🆕 | — | `bms_status_2` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_bms_status_2` |
+| 🆕 | — | `bms_status_3` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_bms_status_3` |
+| 🆕 | — | `bms_status_4` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_bms_status_4` |
+| 🆕 | — | `bms_status_5` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_bms_status_5` |
+| 🆕 | — | `bms_status_6` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_bms_status_6` |
+| 🆕 | — | `bms_status_7` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_bms_status_7` |
+| 🆕 | — | `bms_warning_1` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_bms_warning_1` |
+| 🆕 | — | `bms_warning_2` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_bms_warning_2` |
+| 🆕 | — | `cell_voltages_sum` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_cell_voltages_sum` |
 
 ### Connectivity (uncategorised)
 
@@ -334,55 +334,55 @@ Suffixes shown are after stripping the integration prefix and the inverter/batte
 
 | Status | GivTCP suffix | `givenergy_local` suffix | Notes |
 |---|---|---|---|
-| 🚫 | `inverter_output_frequency` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_inverter_output_frequency` |
+| 🚫 | `inverter_output_frequency` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_inverter_output_frequency` |
 
 ### PV strings (uncategorised)
 
 | Status | GivTCP suffix | `givenergy_local` suffix | Notes |
 |---|---|---|---|
-| 🆕 | — | `pv_string_1_energy_today` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_pv_string_1_energy_today` |
-| 🆕 | — | `pv_string_2_energy_today` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_pv_string_2_energy_today` |
-| 🆕 | — | `solar_diverter_energy_total` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_solar_diverter_energy_total` |
+| 🆕 | — | `pv_string_1_energy_today` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_pv_string_1_energy_today` |
+| 🆕 | — | `pv_string_2_energy_today` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_pv_string_2_energy_today` |
+| 🆕 | — | `solar_diverter_energy_total` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_solar_diverter_energy_total` |
 
 ### Other (uncategorised)
 
 | Status | GivTCP suffix | `givenergy_local` suffix | Notes |
 |---|---|---|---|
-| 🚫 | `active_power_rate` | — | Auto-categorised; not yet manually mapped. Example: `number.givtcp_sa2114g047_active_power_rate` |
+| 🚫 | `active_power_rate` | — | Auto-categorised; not yet manually mapped. Example: `number.givtcp_ab1234c567_active_power_rate` |
 | 🚫 | `charge_energy` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givenergy_battery_charge_energy` |
 | 🚫 | `cpu_percent` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_cpu_percent` |
-| 🚫 | `current_rate` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_current_rate` |
-| 🚫 | `current_rate_type` | — | Auto-categorised; not yet manually mapped. Example: `select.givtcp_sa2114g047_current_rate_type` |
-| 🚫 | `day_cost` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_day_cost` |
-| 🚫 | `day_rate` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_day_rate` |
+| 🚫 | `current_rate` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_current_rate` |
+| 🚫 | `current_rate_type` | — | Auto-categorised; not yet manually mapped. Example: `select.givtcp_ab1234c567_current_rate_type` |
+| 🚫 | `day_cost` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_day_cost` |
+| 🚫 | `day_rate` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_day_rate` |
 | 🚫 | `disharge_energy` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givenergy_battery_disharge_energy` |
-| 🚫 | `eco_mode` | — | Auto-categorised; not yet manually mapped. Example: `switch.givtcp_sa2114g047_eco_mode` |
-| 🚫 | `energy_battery_givtcp_sa2114g047_discharge_power_givtcp_sa2114g047_charge_power_net_power` | — | Auto-categorised; not yet manually mapped. Example: `sensor.energy_battery_givtcp_sa2114g047_discharge_power_givtcp_sa2114g047_charge_power_net_power` |
+| 🚫 | `eco_mode` | — | Auto-categorised; not yet manually mapped. Example: `switch.givtcp_ab1234c567_eco_mode` |
+| 🚫 | `energy_battery_givtcp_ab1234c567_discharge_power_givtcp_ab1234c567_charge_power_net_power` | — | Auto-categorised; not yet manually mapped. Example: `sensor.energy_battery_givtcp_ab1234c567_discharge_power_givtcp_ab1234c567_charge_power_net_power` |
 | 🚫 | `eps_energy` | — | Auto-categorised; not yet manually mapped. Example: `sensor.eps_energy` |
-| 🚫 | `eps_power` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_eps_power` |
-| 🚫 | `givtcp_version` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_givtcp_version` |
-| 🚫 | `invertor_firmware` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_invertor_firmware` |
-| 🚫 | `invertor_max_bat_rate` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_invertor_max_bat_rate` |
-| 🚫 | `invertor_max_inv_rate` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_invertor_max_inv_rate` |
-| 🚫 | `invertor_power` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_invertor_power` |
+| 🚫 | `eps_power` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_eps_power` |
+| 🚫 | `givtcp_version` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_givtcp_version` |
+| 🚫 | `invertor_firmware` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_invertor_firmware` |
+| 🚫 | `invertor_max_bat_rate` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_invertor_max_bat_rate` |
+| 🚫 | `invertor_max_inv_rate` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_invertor_max_inv_rate` |
+| 🚫 | `invertor_power` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_invertor_power` |
 | 🚫 | `memory_percent` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_memory_percent` |
-| 🚫 | `mode` | — | Auto-categorised; not yet manually mapped. Example: `select.givtcp_sa2114g047_mode` |
+| 🚫 | `mode` | — | Auto-categorised; not yet manually mapped. Example: `select.givtcp_ab1234c567_mode` |
 | 🚫 | `newest_version` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_newest_version` |
-| 🚫 | `night_cost` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_night_cost` |
-| 🚫 | `night_rate` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_night_rate` |
-| 🚫 | `reboot_addon` | — | Auto-categorised; not yet manually mapped. Example: `button.givtcp_sa2114g047_reboot_addon` |
+| 🚫 | `night_cost` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_night_cost` |
+| 🚫 | `night_rate` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_night_rate` |
+| 🚫 | `reboot_addon` | — | Auto-categorised; not yet manually mapped. Example: `button.givtcp_ab1234c567_reboot_addon` |
 | 🚫 | `restart_givtcp_if_borked_for_5m` | — | Auto-categorised; not yet manually mapped. Example: `automation.restart_givtcp_if_borked_for_5m` |
 | 🚫 | `running` | — | Auto-categorised; not yet manually mapped. Example: `binary_sensor.givtcp_running` |
-| 🚫 | `safe_write_count` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_safe_write_count` |
+| 🚫 | `safe_write_count` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_safe_write_count` |
 | 🚫 | `version` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_version` |
-| 🚫 | `write_count` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_sa2114g047_write_count` |
+| 🚫 | `write_count` | — | Auto-categorised; not yet manually mapped. Example: `sensor.givtcp_ab1234c567_write_count` |
 | 🆕 | — | — | No GivTCP equivalent. Example: `device_tracker.givenergy_inverter` |
 | 🆕 | — | `charge_energy` | No GivTCP equivalent. Example: `sensor.givenergy_battery_charge_energy` |
-| 🆕 | — | `charger_temperature` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_charger_temperature` |
-| 🆕 | — | `design_capacity_alt` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_design_capacity_alt` |
+| 🆕 | — | `charger_temperature` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_charger_temperature` |
+| 🆕 | — | `design_capacity_alt` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_design_capacity_alt` |
 | 🆕 | — | `disharge_energy` | No GivTCP equivalent. Example: `sensor.givenergy_battery_disharge_energy` |
-| 🆕 | — | `inverter_power_factor` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_sa2114g047_inverter_power_factor` |
-| 🆕 | — | `temperature_min` | No GivTCP equivalent. Example: `sensor.givenergy_battery_bg2134g007_temperature_min` |
+| 🆕 | — | `inverter_power_factor` | No GivTCP equivalent. Example: `sensor.givenergy_inverter_ab1234c567_inverter_power_factor` |
+| 🆕 | — | `temperature_min` | No GivTCP equivalent. Example: `sensor.givenergy_battery_cd2345e678_temperature_min` |
 
 ## Migration design notes
 
