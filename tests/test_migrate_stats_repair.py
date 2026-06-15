@@ -176,11 +176,11 @@ def test_get_timezone_reads_ha_config():
 
 def test_mean_pairs_present_and_shaped():
     mod = _load_migrate_module()
-    suffixes = {gt for (gt, _ge, _desc) in mod.MEAN_PAIRS}
+    suffixes = {gt for (gt, *_rest) in mod.MEAN_PAIRS}
     assert any("pv_power" in s for s in suffixes)
     assert any("grid_power" in s or "import_power" in s for s in suffixes)
     assert any("battery_power" in s or "charge_power" in s for s in suffixes)
-    assert all(len(t) == 3 for t in mod.MEAN_PAIRS)
+    assert all(len(t) == 4 for t in mod.MEAN_PAIRS)
 
 
 def test_mean_metadata_is_mean_not_sum():

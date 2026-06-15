@@ -51,8 +51,10 @@ class _FakeWS:
 
     def __init__(self, series: dict[str, list[dict]]) -> None:
         self._series = series
+        self.calls: list[dict] = []
 
     async def get_statistics(self, ids, start, end=None, types=None):  # noqa: ANN001 - mirrors real sig
+        self.calls.append({"ids": list(ids), "types": types})
         return {i: self._series.get(i, []) for i in ids}
 
 
@@ -329,6 +331,13 @@ async def test_migrate_entity_dry_run_with_overlap():
     assert r.status == "dry_run"
     assert (r.ge_pre_rows, r.ge_post_rows) == (1, 1)
     assert r.warn_no_ge_pre is False
+    # The sum path must read the default sum/state series — it must NOT request
+    # mean/min/max (that's the mean path's contract). get_statistics passes no
+    # `types`, so every recorded call has types=None; assert the sum path never
+    # asked for mean kinds.
+    assert ws.calls, "migrate_entity made no get_statistics calls"
+    assert all(c["types"] is None for c in ws.calls)
+    assert all(c["types"] != ["mean", "min", "max"] for c in ws.calls)
 
 
 async def test_migrate_entity_flags_missing_overlap():
@@ -424,6 +433,8 @@ async def test_migrate_mean_entity_dry_run():
         _mean_row(datetime(2026, 6, 5, tzinfo=UTC), 1500.0),
         _mean_row(datetime(2026, 6, 6, tzinfo=UTC), 1200.0),
     ]
+    # A GivTCP row exactly at the cutover boundary must be excluded (< cutover).
+    givtcp_at_cutover = [_mean_row(_CUTOVER, 1300.0)]
     ge_post = [
         _mean_row(datetime(2026, 6, 7, 1, tzinfo=UTC), 1100.0),
         _mean_row(datetime(2026, 6, 8, tzinfo=UTC), 950.0),
@@ -432,7 +443,7 @@ async def test_migrate_mean_entity_dry_run():
     ge_pre = [_mean_row(datetime(2026, 6, 5, tzinfo=UTC), 200.0)]
     ws = _FakeWS(
         {
-            _GIVTCP_MEAN: givtcp_pre,
+            _GIVTCP_MEAN: givtcp_pre + givtcp_at_cutover,
             _GE_MEAN: ge_pre + ge_post,
         }
     )
@@ -447,5 +458,9 @@ async def test_migrate_mean_entity_dry_run():
         ge_known=True,
     )
     assert r.status == "dry_run"
-    # merged = 2 givtcp pre-cutover rows + 2 ge post-cutover rows
+    # merged = 2 givtcp pre-cutover rows + 2 ge post-cutover rows; the boundary
+    # GivTCP row at exactly cutover is dropped by the < cutover filter.
     assert r.merged_rows == len(givtcp_pre) + len(ge_post)
+    # The mean path must request mean/min/max — not the sum path's default kinds.
+    assert ws.calls, "migrate_mean_entity made no get_statistics calls"
+    assert any(c["types"] == ["mean", "min", "max"] for c in ws.calls)

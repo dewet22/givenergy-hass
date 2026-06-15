@@ -185,23 +185,24 @@ INVERTER_PAIRS: list[tuple[str, str, str, bool]] = [
 # is omitted rather than mis-migrated. (Was added in #126, reverted here.)
 BATTERY_PAIRS: list[tuple[str, str, str, str]] = []
 
-# (givtcp_suffix, ge_suffix, description) — mean-type series (power/SOC/temp).
-# Straight mean/min/max copy; no sum, no rebase, no plausibility.
+# (givtcp_suffix, ge_suffix, description, fallback_unit) — mean-type series
+# (power/SOC/temp). Straight mean/min/max copy; no sum, no rebase, no
+# plausibility. fallback_unit is used only when live metadata is absent.
 # NOTE: these suffixes are provisional and must be verified against a live
 # GivTCP + givenergy_local registry before relying on them in anger.
-MEAN_PAIRS: list[tuple[str, str, str]] = [
-    ("pv_power", "pv_power", "PV power"),
-    ("grid_power", "grid_power", "Grid power (signed)"),
-    ("battery_power", "battery_power", "Battery power (signed)"),
-    ("load_power", "house_consumption", "House consumption power"),
-    ("soc", "battery_soc", "Battery SOC (inverter)"),
+MEAN_PAIRS: list[tuple[str, str, str, str]] = [
+    ("pv_power", "pv_power", "PV power", "W"),
+    ("grid_power", "grid_power", "Grid power (signed)", "W"),
+    ("battery_power", "battery_power", "Battery power (signed)", "W"),
+    ("load_power", "house_consumption", "House consumption power", "W"),
+    ("soc", "battery_soc", "Battery SOC (inverter)", "%"),
 ]
 
 # Per-battery mean series: sensor.givtcp_<batt_sn>_<gt> -> sensor.givenergy_battery_<batt_sn>_<ge>
 # NOTE: provisional suffixes — verify against a live registry before relying on them.
-MEAN_BATTERY_PAIRS: list[tuple[str, str, str]] = [
-    ("soc", "soc", "Battery SOC (per pack)"),
-    ("battery_temperature", "temperature", "Battery temperature"),
+MEAN_BATTERY_PAIRS: list[tuple[str, str, str, str]] = [
+    ("soc", "soc", "Battery SOC (per pack)", "%"),
+    ("battery_temperature", "temperature", "Battery temperature", "°C"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -973,6 +974,10 @@ async def migrate_mean_entity(
         r.error = str(exc)
         return r
     givtcp_stats = [_normalise(s) for s in raw_givtcp.get(givtcp_id, [])]
+    # Filter GivTCP to strictly before the cutover, mirroring the sum path's
+    # build_merged_states. get_statistics already passes end=cutover, but enforce
+    # it here too for symmetry/safety so a boundary row can't leak through.
+    givtcp_stats = [s for s in givtcp_stats if _to_utc(s["start"]) < cutover]
     ge_all = [_normalise(s) for s in raw_ge.get(ge_id, [])]
     ge_post = [s for s in ge_all if _to_utc(s["start"]) >= cutover]
     r.givtcp_rows = len(givtcp_stats)
@@ -1029,6 +1034,7 @@ async def run_validation(
     results: list[MigrationResult],
     tz: ZoneInfo,
     units_by_id: dict[str, str | None] | None = None,
+    reset_classes: dict[str, ResetClass] | None = None,
     repair: bool = False,
     applied: bool = True,
 ) -> int:
@@ -1085,9 +1091,13 @@ async def run_validation(
         for ge_id in to_repair:
             rows = series_by_id[ge_id]
             ceiling = adaptive_ceiling(_state_deltas(rows))
-            # classify_entity keys off the suffix via endswith, so the full
-            # resolved ge_id (…_today / …_total / …_this_year) classifies correctly.
-            rebuilt = rebuild_sum_walk(rows, classify_entity(ge_id), ceiling, tz)
+            # Prefer the authoritative reset_class from the migration plan: a user
+            # rename can strip the …_today / …_this_year suffix, so re-deriving it
+            # from the (possibly renamed) ge_id via classify_entity would misclassify
+            # the series as LIFETIME and rebuild the wrong sum shape. Fall back to
+            # suffix classification only when the plan doesn't carry this id.
+            rc = (reset_classes or {}).get(ge_id) or classify_entity(ge_id)
+            rebuilt = rebuild_sum_walk(rows, rc, ceiling, tz)
             unit = units_by_id.get(ge_id)
             await ws.clear_statistics([ge_id])
             await ws.import_statistics(
@@ -1195,20 +1205,20 @@ def _build_mean_plan(
     """
     plan: list[tuple[str, str, str, str, bool]] = []
     for sn in inv_serials:
-        for gt_sfx, ge_sfx, desc in MEAN_PAIRS:
+        for gt_sfx, ge_sfx, desc, fallback_unit in MEAN_PAIRS:
             givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
             canonical = f"sensor.givenergy_inverter_{sn}_{ge_sfx}"
             resolved = canonical in canonical_to_actual
             ge_id = canonical_to_actual.get(canonical, canonical)
-            unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or "W"
+            unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or fallback_unit
             plan.append((givtcp_id, ge_id, desc, unit, resolved))
     for sn in batt_serials:
-        for gt_sfx, ge_sfx, desc in MEAN_BATTERY_PAIRS:
+        for gt_sfx, ge_sfx, desc, fallback_unit in MEAN_BATTERY_PAIRS:
             givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
             canonical = f"sensor.givenergy_battery_{sn}_{ge_sfx}"
             resolved = canonical in canonical_to_actual
             ge_id = canonical_to_actual.get(canonical, canonical)
-            unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or "%"
+            unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or fallback_unit
             plan.append((givtcp_id, ge_id, desc, unit, resolved))
     return plan
 
@@ -1399,6 +1409,9 @@ async def run(args: argparse.Namespace) -> int:
     # Execute
     results: list[MigrationResult] = []
     units_by_id: dict[str, str | None] = {}
+    # Authoritative reset cadence per target, straight from the plan — used by the
+    # residue-repair walk instead of re-deriving from the (renameable) ge_id.
+    reset_classes = {ge_id: reset_class for (_, ge_id, _, _, _, reset_class, _) in plan}
     for idx, (givtcp_id, ge_id, desc, unit, warn, reset_class, resolved) in enumerate(plan):
         units_by_id[ge_id] = unit
         verb = "Applying" if applying else "Previewing"
@@ -1450,6 +1463,7 @@ async def run(args: argparse.Namespace) -> int:
         results,
         tz,
         units_by_id=units_by_id,
+        reset_classes=reset_classes,
         repair=applying and args.repair_residue,
         applied=applying,
     )
