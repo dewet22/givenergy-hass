@@ -1020,6 +1020,17 @@ def _repairable(ge_id: str, units_by_id: dict[str, str | None], implausible: lis
     return bool(implausible) and ge_id in units_by_id
 
 
+def _repair_reset_class(
+    ge_id: str,
+    reset_classes: dict[str, ResetClass] | None,
+) -> ResetClass:
+    """Reset class for residue repair: prefer the migration plan's authoritative
+    class (keyed by resolved ge_id), falling back to suffix inference. The plan
+    value survives user-renamed entity IDs that no longer carry a known suffix.
+    """
+    return (reset_classes or {}).get(ge_id) or classify_entity(ge_id)
+
+
 def _state_deltas(rows: list[dict[str, Any]]) -> list[float]:
     """Positive-or-any consecutive state deltas, mirroring migrate_entity's pattern."""
     return [
@@ -1091,12 +1102,7 @@ async def run_validation(
         for ge_id in to_repair:
             rows = series_by_id[ge_id]
             ceiling = adaptive_ceiling(_state_deltas(rows))
-            # Prefer the authoritative reset_class from the migration plan: a user
-            # rename can strip the …_today / …_this_year suffix, so re-deriving it
-            # from the (possibly renamed) ge_id via classify_entity would misclassify
-            # the series as LIFETIME and rebuild the wrong sum shape. Fall back to
-            # suffix classification only when the plan doesn't carry this id.
-            rc = (reset_classes or {}).get(ge_id) or classify_entity(ge_id)
+            rc = _repair_reset_class(ge_id, reset_classes)
             rebuilt = rebuild_sum_walk(rows, rc, ceiling, tz)
             unit = units_by_id.get(ge_id)
             await ws.clear_statistics([ge_id])

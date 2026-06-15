@@ -342,6 +342,36 @@ def test_repairable_mean_entity_excluded_when_units_by_id_empty():
     assert mod._repairable("sensor.ge_pv_power", {}, implausible) is False
 
 
+# ---------------------------------------------------------------------------
+# _repair_reset_class tests
+# ---------------------------------------------------------------------------
+
+
+def test_repair_reset_class_prefers_plan_over_suffix_inference():
+    """A user-renamed entity whose ge_id no longer ends in _today is still
+    classified as DAILY when the migration plan carries the authoritative class.
+
+    This is the crux of the extraction: bare classify_entity on the renamed id
+    would return LIFETIME, but _repair_reset_class returns the plan value.
+    """
+    mod = _load_migrate_module()
+    rc = mod.ResetClass
+    renamed_id = "sensor.loft_givenergy_inverter_x_solar_daily"
+    reset_classes = {renamed_id: rc.DAILY}
+    # Confirm the fallback alone would misclassify.
+    assert mod.classify_entity(renamed_id) is rc.LIFETIME
+    # The helper returns the plan value.
+    assert mod._repair_reset_class(renamed_id, reset_classes) is rc.DAILY
+
+
+def test_repair_reset_class_falls_back_to_suffix_when_absent():
+    """An entity absent from the plan (or plan is None) falls back to classify_entity."""
+    mod = _load_migrate_module()
+    rc = mod.ResetClass
+    assert mod._repair_reset_class("sensor.ge_pv_energy_today", {}) is rc.DAILY
+    assert mod._repair_reset_class("sensor.ge_grid_import_total", None) is rc.LIFETIME
+
+
 def test_acceptance_rebuild_heals_documented_corruption():
     """Reproduce the LTS-report shapes and assert rebuild + validation handle them.
 
