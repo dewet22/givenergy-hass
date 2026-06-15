@@ -434,7 +434,7 @@ Multi-hour gaps are handled according to whether they cross a counter reset:
 
 `--trust-source-sums` opts out of all of this and restores the legacy path: copy GivTCP's `sum` column verbatim and rebase it once at the join so it continues from where GivTCP left off. Use it only when the source sums are known to be clean — it reintroduces the seam-at-join semantics the rebuild was written to avoid.
 
-### Post-migration validation and residue repair
+### Post-migration validation
 
 After the migration plan is built — in both dry-run and `--apply` — the script re-reads each migrated sum series and prints a read-only **validation report**. It flags:
 
@@ -443,9 +443,7 @@ After the migration plan is built — in both dry-run and `--apply` — the scri
 - duplicate series (two `statistic_id`s carrying the same values), and
 - gaps in coverage.
 
-The script exits non-zero when it finds substantive issues (implausible hours, fake resets, duplicates); gaps are reported for information only and do not change the exit code.
-
-`--repair-residue` (only meaningful together with `--apply`) acts on those findings: for any sum entity still showing implausible hours, it clears and re-imports the rebuilt series. It is off by default — without it the report is purely advisory.
+The script exits non-zero when it finds substantive issues (implausible hours, fake resets, duplicates); gaps are reported for information only and do not change the exit code. Under `--apply` the mandatory `--max-kw` ceiling already bounds the rebuild, so these findings render as advisory; in dry-run they stay blocking as the "consider `--max-kw`" signal.
 
 ### The `--apply` gate (validate-all before any write)
 

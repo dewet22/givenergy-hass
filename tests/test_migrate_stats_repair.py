@@ -926,40 +926,6 @@ def test_format_validation_report_implausible_blocks_in_dry_run():
 
 
 # ---------------------------------------------------------------------------
-# _repairable guard tests
-# ---------------------------------------------------------------------------
-
-
-def test_repairable_sum_entity_with_implausible_is_true():
-    mod = _load_migrate_module()
-    units_by_id = {"sensor.ge_pv_energy_today": "kWh"}
-    implausible = [{"start": "2026-05-20T13:00:00+00:00", "change": 27396.0}]
-    assert mod._repairable("sensor.ge_pv_energy_today", units_by_id, implausible) is True
-
-
-def test_repairable_sum_entity_without_implausible_is_false():
-    mod = _load_migrate_module()
-    units_by_id = {"sensor.ge_pv_energy_today": "kWh"}
-    assert mod._repairable("sensor.ge_pv_energy_today", units_by_id, []) is False
-
-
-def test_repairable_mean_entity_excluded_even_with_implausible():
-    """A mean entity (ge_id not in units_by_id) must never be queued for repair,
-    even if find_implausible_hours returns findings for it."""
-    mod = _load_migrate_module()
-    units_by_id = {"sensor.ge_pv_energy_today": "kWh"}  # only the sum entity
-    implausible = [{"start": "2026-05-20T13:00:00+00:00", "change": 99999.0}]
-    # mean entity ge_id is NOT in units_by_id
-    assert mod._repairable("sensor.ge_pv_power", units_by_id, implausible) is False
-
-
-def test_repairable_mean_entity_excluded_when_units_by_id_empty():
-    mod = _load_migrate_module()
-    implausible = [{"start": "2026-05-20T13:00:00+00:00", "change": 99999.0}]
-    assert mod._repairable("sensor.ge_pv_power", {}, implausible) is False
-
-
-# ---------------------------------------------------------------------------
 # _repair_reset_class tests
 # ---------------------------------------------------------------------------
 
@@ -1290,31 +1256,6 @@ def test_run_validation_ge_preservation_divergence_is_blocking():
     assert blocking is True
 
 
-def test_apply_residue_repair_mutates_candidate_in_place_no_write():
-    # A candidate with implausible residue is re-walked against the candidate rows
-    # and r.rebuilt_rows is replaced IN PLACE — with NO WebSocket write. Phase B is
-    # the sole writer, so repair must touch neither clear nor import.
-    rows = [
-        {"start": "2026-05-20T08:00:00+00:00", "sum": 100.0, "state": 100.0},
-        {"start": "2026-05-20T09:00:00+00:00", "sum": 27496.0, "state": 27496.0},
-        {"start": "2026-05-20T10:00:00+00:00", "sum": 27497.0, "state": 27497.0},
-    ]
-    r = _candidate("sensor.ge_pv_energy_today", rows, source_movement=0.0)
-    repaired = asyncio.run(
-        _MOD.apply_residue_repair(
-            [r],
-            {"sensor.ge_pv_energy_today": "kWh"},
-            {"sensor.ge_pv_energy_today": _MOD.ResetClass.DAILY},
-            _LONDON,
-            max_kwh=50.0,
-        )
-    )
-    assert repaired == ["sensor.ge_pv_energy_today"]
-    # rows mutated in place: the implausible 27496 spike is gone from the candidate.
-    assert r.rebuilt_rows is not rows
-    assert max(row["sum"] for row in r.rebuilt_rows) < 27496.0
-
-
 # ---------------------------------------------------------------------------
 # Two-phase apply: validate-all-then-write-all-or-abort (Task 9)
 # ---------------------------------------------------------------------------
@@ -1378,7 +1319,6 @@ def _apply_args() -> argparse.Namespace:
         include_charge_from_grid=False,
         trust_source_sums=False,
         max_kw=50.0,
-        repair_residue=False,
     )
 
 
@@ -1558,89 +1498,6 @@ def test_phase_c_read_failure_aborts(monkeypatch, capsys):
     err = capsys.readouterr().err
     assert "FAILED to re-read" in err
     assert "backup" in err.lower()
-
-
-def test_repair_residue_suppressed_when_another_candidate_blocks(monkeypatch, capsys):
-    # One candidate is repairable (implausible residue), another is blocking
-    # (unresolved event). Under --apply --repair-residue, the gate must fire FIRST:
-    # NO clear/import of any kind, non-zero exit. The repair write must not run
-    # before the gate proves the whole set clean.
-    repairable = _candidate(
-        "sensor.ge_a",
-        [
-            {"start": "2026-05-20T08:00:00+00:00", "sum": 100.0, "state": 100.0},
-            {"start": "2026-05-20T09:00:00+00:00", "sum": 27496.0, "state": 27496.0},
-            {"start": "2026-05-20T10:00:00+00:00", "sum": 27497.0, "state": 27497.0},
-        ],
-        source_movement=0.0,
-    )
-    blocked = _candidate(
-        "sensor.ge_b",
-        [
-            {"start": "2026-05-19T08:00:00+00:00", "sum": 20.0, "state": 20.0},
-            {"start": "2026-05-19T09:00:00+00:00", "sum": 22.0, "state": 22.0},
-        ],
-        events={"unresolved": [{"start": "2026-05-19T09:00:00+00:00", "count": 2}]},
-        source_movement=2.0,
-    )
-    ws = _ApplyWS()
-    _patch_apply_path(
-        monkeypatch,
-        ws,
-        {"sensor.ge_a": repairable, "sensor.ge_b": blocked},
-        ["sensor.ge_a", "sensor.ge_b"],
-    )
-    args = _apply_args()
-    args.repair_residue = True
-
-    code = asyncio.run(_MOD.run(args))
-
-    assert code != 0
-    # No writes of any kind — repair stayed behind the (failed) gate.
-    assert ws.clear_calls == []
-    assert ws.import_calls == []
-    assert "Refusing to --apply" in capsys.readouterr().err
-
-
-def test_repair_residue_writes_repaired_entity_exactly_once(monkeypatch, capsys):
-    # Clean --apply --repair-residue run: a single repairable candidate is re-walked
-    # in place (mutate-only) then written by Phase B. The repaired entity must appear
-    # EXACTLY ONCE in clear_calls and import_calls (no duplicate second writer), and
-    # the imported rows must be the repaired ones (implausible spike gone).
-    spike_rows = [
-        {"start": "2026-05-20T08:00:00+00:00", "sum": 100.0, "state": 100.0},
-        {"start": "2026-05-20T09:00:00+00:00", "sum": 27496.0, "state": 27496.0},
-        {"start": "2026-05-20T10:00:00+00:00", "sum": 27497.0, "state": 27497.0},
-    ]
-    repairable = _candidate("sensor.ge_a", spike_rows, source_movement=0.0)
-    ws = _ApplyWS()
-    # Phase C re-reads: feed back whatever Phase B imported so verify passes.
-    original_import = ws.import_statistics
-
-    async def record_then_feed_back(metadata, stats):  # noqa: ANN001
-        await original_import(metadata, stats)
-        ws.read_back[metadata["statistic_id"]] = [dict(s) for s in stats]
-
-    ws.import_statistics = record_then_feed_back
-    _patch_apply_path(monkeypatch, ws, {"sensor.ge_a": repairable}, ["sensor.ge_a"])
-    args = _apply_args()
-    args.repair_residue = True
-
-    exit_code = asyncio.run(_MOD.run(args))
-
-    # The candidate was written and verified. In apply mode the pre-repair
-    # "implausible" finding is advisory only (the gate excludes it and the repair
-    # absorbs it), so a clean run exits 0 — no spurious non-zero from a diagnostic.
-    assert repairable.status == "migrated"
-    assert exit_code == 0
-    # Exactly one clear and one import for the repaired entity — Phase B is the
-    # sole writer; repair no longer issues its own write.
-    assert ws.clear_calls == [["sensor.ge_a"]]
-    imports_for_a = [c for c in ws.import_calls if c["metadata"]["statistic_id"] == "sensor.ge_a"]
-    assert len(imports_for_a) == 1
-    # The written rows are the repaired ones: the implausible spike is gone.
-    written = imports_for_a[0]["stats"]
-    assert max(row["sum"] for row in written) < 27496.0
 
 
 # ---------------------------------------------------------------------------

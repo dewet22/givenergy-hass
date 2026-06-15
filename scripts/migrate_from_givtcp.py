@@ -111,8 +111,6 @@ Post-migration validation (automatic, read-only, runs in both dry-run and apply)
   Re-reads each migrated sum series and flags residual implausible hours,
   fake-reset shapes, duplicate series, and gaps. Exits non-zero on substantive
   findings; gaps are reported informationally and do not affect the exit code.
-  Pass --repair-residue (only meaningful with --apply) to clear and re-import the
-  rebuilt series for sum entities that still show implausible hours.
 
 --apply is a three-phase, validate-all-before-any-write sequence:
   Phase A builds and validates EVERY candidate first. If any candidate carries a
@@ -927,8 +925,7 @@ def _dedup_series(
     SOC, temperature) carry no sum, so their rows come back with ``sum=None`` and
     two genuinely different mean series over the same hours collapse to identical
     ``(start, None)`` key tuples — a false-positive duplicate.  Only sum entities
-    (those present in ``units_by_id`` — the same signal ``_repairable`` uses) are
-    candidates for duplicate detection.
+    (those present in ``units_by_id``) are candidates for duplicate detection.
     """
     return {sid: rows for sid, rows in series_by_id.items() if sid in units_by_id}
 
@@ -989,8 +986,9 @@ def _gate_blocking(finding: dict[str, Any]) -> bool:
     A finding is gate-blocking iff it carries an unexplained flat span, an
     unresolved held run, a flagged source-movement divergence, or a flagged
     post-cutover GE-preservation divergence. Implausible hours, fake-reset
-    shapes and duplicate series are deliberately NOT in this set — they are
-    diagnostics the gated residue repair absorbs, so they never refuse a run.
+    shapes and duplicate series are deliberately NOT in this set — under
+    ``--apply`` the mandatory ``--max-kw`` ceiling already bounds the rebuild,
+    so these are diagnostics only and never refuse a run.
 
     Both :func:`run_validation` (the authoritative gate) and
     :func:`format_validation_report` (the apply-mode exit code) derive their
@@ -1020,12 +1018,12 @@ def format_validation_report(
       :func:`_gate_blocking` defines (unexplained flat span, unresolved held run,
       flagged source-movement or GE-preservation divergence). Those render
       ``[BLOCKING]``. Implausible hours, fake-reset shapes and duplicate series
-      are diagnostics the gated repair absorbs: they render ``[ADVISORY]`` and do
-      NOT set the exit code. The invariant: in apply mode ``exit_code == 0`` iff
-      the gate would allow the apply.
-    - In **dry-run mode** there is no gate or repair, so implausible / fake-reset /
+      are diagnostics (the ``--max-kw`` ceiling already bounds the rebuild):
+      they render ``[ADVISORY]`` and do NOT set the exit code. The invariant: in
+      apply mode ``exit_code == 0`` iff the gate would allow the apply.
+    - In **dry-run mode** there is no gate, so implausible / fake-reset /
       duplicate residue stays ``[BLOCKING]`` and exit-affecting — the useful
-      "there's something worth repairing" signal.
+      "consider --max-kw" signal.
 
     ``[ACCEPTED]`` findings (rebaseline / smear / gap-undercount) and gaps print
     in every mode but never set the exit code. The apply-mode blocking decision
@@ -1395,26 +1393,15 @@ async def migrate_entity(
 
 
 # ---------------------------------------------------------------------------
-# Post-migration validation + opt-in residue repair
+# Post-migration validation
 # ---------------------------------------------------------------------------
-
-
-def _repairable(ge_id: str, units_by_id: dict[str, str | None], implausible: list) -> bool:
-    """Return True only when *ge_id* is a sum entity AND has implausible findings.
-
-    Mean entities (power, SOC, temperature) are not present in ``units_by_id``
-    (which is built exclusively from the sum migration plan).  Admitting them to
-    the repair path would clear their mean series and re-import them as a sum
-    series, corrupting the data.  This guard is the single enforcement point.
-    """
-    return bool(implausible) and ge_id in units_by_id
 
 
 def _repair_reset_class(
     ge_id: str,
     reset_classes: dict[str, ResetClass] | None,
 ) -> ResetClass:
-    """Reset class for residue repair: prefer the migration plan's authoritative
+    """Reset class for validation: prefer the migration plan's authoritative
     class (keyed by resolved ge_id), falling back to suffix inference. The plan
     value survives user-renamed entity IDs that no longer carry a known suffix.
     """
@@ -1444,44 +1431,6 @@ def _gap_undercount_intervals(events: dict[str, list] | None) -> list[tuple[str,
     return out
 
 
-async def apply_residue_repair(
-    results: list[MigrationResult],
-    units_by_id: dict[str, str | None] | None,
-    reset_classes: dict[str, ResetClass] | None,
-    tz: ZoneInfo,
-    max_kwh: float | None = None,
-) -> list[str]:
-    """Re-walk any sum candidate that still carries implausible hours, MUTATE-ONLY.
-
-    Only sum entities with residual implausible findings are touched
-    (``_repairable``). The re-walked rows REPLACE ``r.rebuilt_rows`` in place, so
-    the candidate that Phase B's :func:`write_candidate` later writes (and Phase C
-    verifies) is the repaired one. This performs NO WebSocket writes itself —
-    Phase B remains the sole writer, keeping the two-phase gate's invariant that a
-    single gated write path exists. The caller must invoke this ONLY after the
-    apply gate has proven the whole candidate set non-blocking. Returns the
-    repaired ids.
-    """
-    units_by_id = units_by_id or {}
-    repaired: list[str] = []
-    for r in results:
-        if r.status != "candidate":
-            continue
-        rows = r.rebuilt_rows or []
-        if not rows:
-            continue
-        ceiling = effective_ceiling(adaptive_ceiling(_state_deltas(rows)), max_kwh)
-        if ceiling is None:
-            continue
-        implausible = find_implausible_hours(rows, ceiling)
-        if not _repairable(r.ge_id, units_by_id, implausible):
-            continue
-        rc = _repair_reset_class(r.ge_id, reset_classes)
-        r.rebuilt_rows = rebuild_sum_walk(rows, rc, ceiling, tz)
-        repaired.append(r.ge_id)
-    return repaired
-
-
 async def run_validation(
     ws: HAWebSocket,
     results: list[MigrationResult],
@@ -1508,9 +1457,8 @@ async def run_validation(
     the candidates about to be written ("candidates to write"); otherwise they are
     a dry-run preview of the current series.
 
-    This is a read-only validation pass: residue repair is a separate, gated step
-    (:func:`apply_residue_repair`) the caller runs *after* the apply gate, so no
-    write of any kind ever precedes the gate.
+    This is a read-only validation pass, so no write of any kind ever precedes
+    the apply gate.
 
     Returns ``(exit_code, blocking)``: the report exit code, and a blocking flag
     true when any candidate has an unexplained flat >= threshold, a flagged
@@ -1890,8 +1838,8 @@ async def run(args: argparse.Namespace) -> int:
     # ── Phase A: build every candidate (no writes yet) ──────────────────────
     results: list[MigrationResult] = []
     units_by_id: dict[str, str | None] = {}
-    # Authoritative reset cadence per target, straight from the plan — used by the
-    # residue-repair walk instead of re-deriving from the (renameable) ge_id.
+    # Authoritative reset cadence per target, straight from the plan — used by
+    # validation instead of re-deriving from the (renameable) ge_id.
     reset_classes = {ge_id: reset_class for (_, ge_id, _, _, _, reset_class, _) in plan}
     for givtcp_id, ge_id, desc, unit, warn, reset_class, resolved in plan:
         units_by_id[ge_id] = unit
@@ -1917,8 +1865,7 @@ async def run(args: argparse.Namespace) -> int:
 
     # Validate the in-memory candidates and print the findings report. This drives
     # both the dry-run preview and the Phase-A apply gate from the SAME findings.
-    # Validation is read-only, so no write of any kind precedes the gate below —
-    # residue repair (if opted in) happens in Phase B, only once the set is clean.
+    # Validation is read-only, so no write of any kind precedes the gate below.
     validation_exit, blocking = await run_validation(
         ws,
         results,
@@ -1953,20 +1900,6 @@ async def run(args: argparse.Namespace) -> int:
         return max(summary_code, validation_exit)
 
     # ── Phase B: write all approved candidates, or abort on the first failure ──
-    # Gated residue repair: only now, with the whole set proven non-blocking, do we
-    # re-walk the repairable candidates IN PLACE (no write). The Phase B loop below
-    # then writes each repaired candidate exactly once, so Phase B is the sole
-    # writer and never runs ahead of the gate (the invariant Task 9 protects).
-    if args.repair_residue:
-        repaired = await apply_residue_repair(
-            results, units_by_id, reset_classes, tz, max_kwh=args.max_kw
-        )
-        if repaired:
-            print(
-                f"  Repaired {len(repaired)} entit{'y' if len(repaired) == 1 else 'ies'} with"
-                " residual implausible hours: " + ", ".join(repaired)
-            )
-
     written: list[str] = []
     for idx, r in enumerate(candidates):
         try:
@@ -2114,14 +2047,6 @@ def main() -> None:
             "used directly as the authoritative rebuild bound (the adaptive p99 "
             "estimate is only the dry-run fallback). Must be positive. Required "
             "with --apply."
-        ),
-    )
-    p.add_argument(
-        "--repair-residue",
-        action="store_true",
-        help=(
-            "After validation, clear + re-import the rebuilt series for entities "
-            "with residual implausible hours. Off by default (report only)."
         ),
     )
     args = p.parse_args()
