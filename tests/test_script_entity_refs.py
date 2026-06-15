@@ -13,6 +13,7 @@ import importlib.util
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
+from zoneinfo import ZoneInfo
 
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -239,6 +240,7 @@ async def test_migrate_resolver_maps_area_prefixed_ids(hass, setup_integration):
 _CUTOVER = datetime(2026, 6, 7, tzinfo=UTC)
 _GIVTCP = "sensor.givtcp_x_pv_energy_today_kwh"
 _GE = "sensor.givenergy_inverter_x_pv_energy_today"
+_TZ = ZoneInfo("Europe/London")
 
 
 def test_systemic_resolution_failure_uses_registry_recognition():
@@ -251,9 +253,18 @@ def test_systemic_resolution_failure_uses_registry_recognition():
     only on the plan's registry-recognition flag, never consults).
     """
     mod = _load_migrate_module()
-    # plan tuple: (givtcp_id, ge_id, desc, unit, warn, resolved)
-    recognised = ("sensor.givtcp_x_import", "sensor.loft_x_import", "Import", "kWh", False, True)
-    unresolved = ("sensor.givtcp_x_pv", "sensor.ge_x_pv", "PV", "kWh", False, False)
+    # plan tuple: (givtcp_id, ge_id, desc, unit, warn, reset_class, resolved)
+    rc = mod.ResetClass.LIFETIME
+    recognised = (
+        "sensor.givtcp_x_import",
+        "sensor.loft_x_import",
+        "Import",
+        "kWh",
+        False,
+        rc,
+        True,
+    )
+    unresolved = ("sensor.givtcp_x_pv", "sensor.ge_x_pv", "PV", "kWh", False, rc, False)
 
     # At least one target recognised -> not systemic -> no abort.
     assert mod._systemic_resolution_failure([recognised, unresolved]) == []
@@ -272,7 +283,17 @@ async def test_migrate_entity_refuses_unknown_ge_target():
     mod = _load_migrate_module()
     ws = _FakeWS({_GIVTCP: [_stat_row(datetime(2026, 6, 5, tzinfo=UTC), 100.0)]})
     r = await mod.migrate_entity(
-        ws, _GIVTCP, _GE, "Solar generation today", _CUTOVER, "kWh", False, ge_known=False
+        ws,
+        _GIVTCP,
+        _GE,
+        "Solar generation today",
+        _CUTOVER,
+        "kWh",
+        False,
+        ge_known=False,
+        reset_class=mod.ResetClass.DAILY,
+        tz=_TZ,
+        trust_source_sums=False,
     )
     assert r.status == "ge_not_found"
 
@@ -293,7 +314,17 @@ async def test_migrate_entity_dry_run_with_overlap():
         }
     )
     r = await mod.migrate_entity(
-        ws, _GIVTCP, _GE, "Solar generation today", _CUTOVER, "kWh", False, ge_known=True
+        ws,
+        _GIVTCP,
+        _GE,
+        "Solar generation today",
+        _CUTOVER,
+        "kWh",
+        False,
+        ge_known=True,
+        reset_class=mod.ResetClass.DAILY,
+        tz=_TZ,
+        trust_source_sums=False,
     )
     assert r.status == "dry_run"
     assert (r.ge_pre_rows, r.ge_post_rows) == (1, 1)
@@ -310,7 +341,17 @@ async def test_migrate_entity_flags_missing_overlap():
         }
     )
     r = await mod.migrate_entity(
-        ws, _GIVTCP, _GE, "Solar generation today", _CUTOVER, "kWh", False, ge_known=True
+        ws,
+        _GIVTCP,
+        _GE,
+        "Solar generation today",
+        _CUTOVER,
+        "kWh",
+        False,
+        ge_known=True,
+        reset_class=mod.ResetClass.DAILY,
+        tz=_TZ,
+        trust_source_sums=False,
     )
     assert r.status == "dry_run"
     assert r.ge_pre_rows == 0

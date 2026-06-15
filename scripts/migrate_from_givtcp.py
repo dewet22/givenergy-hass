@@ -609,6 +609,25 @@ def rebase_sum(stats: list[dict[str, Any]], base_sum: float) -> list[dict[str, A
     return result
 
 
+def build_merged_states(
+    givtcp_rows: list[dict[str, Any]],
+    ge_rows: list[dict[str, Any]],
+    cutover: datetime,
+) -> list[dict[str, Any]]:
+    """Concatenate the state timeline across the cut-over for a single entity.
+
+    GivTCP rows strictly before the cut-over, then givenergy_local rows from the
+    cut-over onward, each carrying ``state``. Sorted ascending by ``start``. This
+    is the input to ``rebuild_sum_walk`` — walking it produces one continuous
+    sum, so the join seam never exists.
+    """
+    pre = [r for r in givtcp_rows if _to_utc(r["start"]) < cutover]
+    post = [r for r in ge_rows if _to_utc(r["start"]) >= cutover]
+    merged = pre + post
+    merged.sort(key=lambda r: _to_utc(r["start"]))
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # Per-entity migration
 # ---------------------------------------------------------------------------
@@ -655,6 +674,9 @@ async def migrate_entity(
     ge_unit: str,
     apply: bool,
     ge_known: bool,
+    reset_class: ResetClass,
+    tz: ZoneInfo,
+    trust_source_sums: bool,
     warn_diverged: bool = False,
 ) -> MigrationResult:
     r = MigrationResult(description, ge_id, warn_diverged)
@@ -697,11 +719,27 @@ async def migrate_entity(
     # but worth surfacing — flag it without blocking.
     r.warn_no_ge_pre = r.ge_pre_rows == 0
 
-    last_givtcp_sum = givtcp_stats[-1].get("sum") or 0.0
-    r.sum_at_cutover = last_givtcp_sum
-
-    rebased_post = rebase_sum(ge_post, last_givtcp_sum)
-    merged = givtcp_stats + rebased_post
+    if trust_source_sums:
+        # Legacy path: copy GivTCP sums + rebase GE-post (unchanged behaviour).
+        last_givtcp_sum = givtcp_stats[-1].get("sum") or 0.0
+        r.sum_at_cutover = last_givtcp_sum
+        rebased_post = rebase_sum(ge_post, last_givtcp_sum)
+        merged = givtcp_stats + rebased_post
+    else:
+        # Rebuild path (default): one continuous sum from the concatenated state
+        # timeline, plausibility- and reset-guarded.
+        merged_states = build_merged_states(givtcp_stats, ge_all, cutover)
+        deltas = [
+            (merged_states[i]["state"] - merged_states[i - 1]["state"])
+            for i in range(1, len(merged_states))
+            if merged_states[i].get("state") is not None
+            and merged_states[i - 1].get("state") is not None
+        ]
+        ceiling = adaptive_ceiling(deltas)
+        merged = rebuild_sum_walk(merged_states, reset_class, ceiling, tz)
+        r.sum_at_cutover = next(
+            (row["sum"] for row in merged if _to_utc(row["start"]) >= cutover), None
+        )
     r.merged_rows = len(merged)
 
     if not apply:
@@ -766,7 +804,7 @@ def _build_plan(
     meta_by_id: dict[str, dict[str, Any]],
     include_charge_from_grid: bool,
     canonical_to_actual: dict[str, str],
-) -> list[tuple[str, str, str, str, bool, bool]]:
+) -> list[tuple[str, str, str, str, bool, ResetClass, bool]]:
     """Construct the per-entity migration plan from the detected serials.
 
     Each entry's final field records whether the canonical givenergy_local
@@ -774,9 +812,11 @@ def _build_plan(
     `canonical_to_actual`). That is the only trustworthy proof the target maps to
     a real entity: a statistic merely present in the recorder is not — a prior
     run of the buggy area-prefix version may have left an orphan at the canonical
-    id. HA 2026.6 area prefixes and user renames are followed via the map.
+    id. HA 2026.6 area prefixes and user renames are followed via the map. The
+    penultimate field is the entity's `ResetClass`, derived from its
+    givenergy_local suffix, driving reset-vs-corruption calls in the sum rebuild.
     """
-    plan: list[tuple[str, str, str, str, bool, bool]] = []
+    plan: list[tuple[str, str, str, str, bool, ResetClass, bool]] = []
     for sn in inv_serials:
         for gt_sfx, ge_sfx, desc, default in INVERTER_PAIRS:
             if not default and not include_charge_from_grid:
@@ -786,7 +826,8 @@ def _build_plan(
             resolved = canonical in canonical_to_actual
             ge_id = canonical_to_actual.get(canonical, canonical)
             unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or "kWh"
-            plan.append((givtcp_id, ge_id, desc, unit, not default, resolved))
+            reset_class = classify_entity(ge_sfx)
+            plan.append((givtcp_id, ge_id, desc, unit, not default, reset_class, resolved))
     for sn in batt_serials:
         for gt_sfx, ge_sfx, desc, fallback_unit in BATTERY_PAIRS:
             givtcp_id = f"sensor.givtcp_{sn}_{gt_sfx}"
@@ -794,12 +835,13 @@ def _build_plan(
             resolved = canonical in canonical_to_actual
             ge_id = canonical_to_actual.get(canonical, canonical)
             unit = meta_by_id.get(ge_id, {}).get("unit_of_measurement") or fallback_unit
-            plan.append((givtcp_id, ge_id, desc, unit, False, resolved))
+            reset_class = classify_entity(ge_sfx)
+            plan.append((givtcp_id, ge_id, desc, unit, False, reset_class, resolved))
     return plan
 
 
 def _systemic_resolution_failure(
-    plan: list[tuple[str, str, str, str, bool, bool]],
+    plan: list[tuple[str, str, str, str, bool, ResetClass, bool]],
 ) -> list[str]:
     """Return the targets to abort on iff the resolver mapped *none* of them.
 
@@ -883,6 +925,9 @@ async def run(args: argparse.Namespace) -> int:
         print(f"FAILED\n{exc}", file=sys.stderr)
         return 1
     print("OK")
+
+    # Local timezone drives reset-boundary detection in the sum rebuild.
+    tz = await ws.get_timezone()
 
     # Discover serials
     all_meta = await ws.list_statistic_ids()
@@ -980,13 +1025,24 @@ async def run(args: argparse.Namespace) -> int:
 
     # Execute
     results: list[MigrationResult] = []
-    for idx, (givtcp_id, ge_id, desc, unit, warn, resolved) in enumerate(plan):
+    for idx, (givtcp_id, ge_id, desc, unit, warn, reset_class, resolved) in enumerate(plan):
         verb = "Applying" if applying else "Previewing"
         print(f"  {verb}: {desc} …", end=" ", flush=True)
         # `resolved` (registry recognition), not recorder presence, is what makes
         # a target real — so an orphan from a prior broken run is never written.
         r = await migrate_entity(
-            ws, givtcp_id, ge_id, desc, cutover, unit, applying, resolved, warn
+            ws,
+            givtcp_id,
+            ge_id,
+            desc,
+            cutover,
+            unit,
+            applying,
+            resolved,
+            reset_class,
+            tz,
+            args.trust_source_sums,
+            warn,
         )
         results.append(r)
         print(r.status)
@@ -1044,6 +1100,14 @@ def main() -> None:
             "Also migrate ac_charge_energy_total_kwh → charge_from_grid_total. "
             "⚠️  These sensors read different register blocks on some inverters — "
             "inspect the imported values in the Energy dashboard afterwards."
+        ),
+    )
+    p.add_argument(
+        "--trust-source-sums",
+        action="store_true",
+        help=(
+            "Copy GivTCP's sum column verbatim and rebase at the join, instead of "
+            "rebuilding sums from state. Use only if your GivTCP sums are known-good."
         ),
     )
     args = p.parse_args()

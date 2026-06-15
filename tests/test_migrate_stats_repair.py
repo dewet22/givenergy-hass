@@ -131,6 +131,29 @@ def test_rebuild_walk_carries_sum_across_gap_rows():
     assert _sums(out) == [100.0, 100.0, 101.0]
 
 
+def test_build_merged_states_concatenates_across_cutover():
+    mod = _load_migrate_module()
+    from datetime import UTC, datetime
+
+    cutover = datetime(2026, 5, 20, tzinfo=UTC)
+    givtcp = [
+        {"start": "2026-05-19T23:00:00+00:00", "state": 2360.0},
+        {"start": "2026-05-20T00:00:00+00:00", "state": 2364.0},  # at/after cutover -> dropped
+    ]
+    ge = [
+        {"start": "2026-05-19T22:00:00+00:00", "state": 0.1},  # before cutover -> dropped
+        {"start": "2026-05-20T00:00:00+00:00", "state": 0.2},
+        {"start": "2026-05-20T01:00:00+00:00", "state": 0.5},
+    ]
+    merged = mod.build_merged_states(givtcp, ge, cutover)
+    assert [r["start"] for r in merged] == [
+        "2026-05-19T23:00:00+00:00",
+        "2026-05-20T00:00:00+00:00",
+        "2026-05-20T01:00:00+00:00",
+    ]
+    assert [r["state"] for r in merged] == [2360.0, 0.2, 0.5]
+
+
 class _ConfigWS:
     def __init__(self, tz: str) -> None:
         self._tz = tz
