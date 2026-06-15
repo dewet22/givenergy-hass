@@ -301,23 +301,45 @@ def classify_entity(ge_suffix: str) -> ResetClass:
 # rejected; pinned by the LTS-fixture acceptance test.
 _CEILING_MAD_K = 8.0
 
+# Minimum positive-delta samples before a MAD-based ceiling is trusted. A day of
+# hourly points is a defensible floor for a robust estimate; below it the
+# median/MAD are too easily skewed (sparse data like [1, 9900] yields a ceiling
+# high enough to bless the spike). Fewer than this and adaptive_ceiling refuses.
+_CEILING_MIN_SAMPLES = 24
 
-def adaptive_ceiling(deltas: list[float | None]) -> float:
+
+def adaptive_ceiling(deltas: list[float | None]) -> float | None:
     """Robust per-hour ceiling from an entity's positive state-deltas.
 
     Uses median + K * 1.4826 * MAD over the positive, finite deltas. Both the
     median and the MAD are resistant to a handful of giant outliers, so the
     bound reflects genuine hourly behaviour even on a heavily corrupted series.
-    Returns +inf when there is nothing positive to anchor on (caller then can't
-    guard, and the walk accepts all non-negative deltas).
+    Returns None when there are fewer than ``_CEILING_MIN_SAMPLES`` positive
+    deltas to anchor on (this also covers the empty case) — the caller then
+    cannot self-estimate a guard and must fail closed or rely on a hard cap.
     """
     pos = sorted(d for d in deltas if d is not None and d > 0)
-    if not pos:
-        return float("inf")
+    if len(pos) < _CEILING_MIN_SAMPLES:
+        return None
     median = statistics.median(pos)
     mad = statistics.median([abs(d - median) for d in pos])
     spread = mad if mad > 0 else median
     return median + _CEILING_MAD_K * 1.4826 * spread
+
+
+def effective_ceiling(adaptive: float | None, cap: float | None) -> float | None:
+    """Combine the adaptive estimate with an optional user-supplied hard cap.
+
+    None means 'cannot guard' (refuse). cap bounds an inflated adaptive ceiling
+    and rescues sparse-data entities that have no adaptive estimate.
+    """
+    if adaptive is None and cap is None:
+        return None
+    if adaptive is None:
+        return cap
+    if cap is None:
+        return adaptive
+    return min(adaptive, cap)
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +424,14 @@ def rebuild_sum_walk(
         elif delta < 0 and _is_reset_boundary(r["start"], reset_class, tz, midnight_tol_hours):
             running += state
             prev_state = state
-        # else: corruption (off-boundary drop) or spike (> ceiling) -> hold last-good.
+        else:
+            # Corruption (off-boundary drop) or spike (> ceiling): hold last-good
+            # for BOTH sum and state. `r` is a copy of the corrupt row, so its
+            # `state` still carries the bogus 0/spike; overwrite it with the last
+            # trusted reading. Otherwise the imported state timeline stays
+            # corrupt and find_fake_reset_shapes keeps flagging it (and
+            # --repair-residue can't heal it).
+            r["state"] = prev_state
         r["sum"] = round(running, 6)
         out.append(r)
     return out
@@ -822,6 +851,7 @@ async def migrate_entity(
     tz: ZoneInfo,
     trust_source_sums: bool,
     warn_diverged: bool = False,
+    max_kwh: float | None = None,
 ) -> MigrationResult:
     r = MigrationResult(description, ge_id, warn_diverged)
 
@@ -882,7 +912,13 @@ async def migrate_entity(
         # Negative deltas (resets, spikes) are silently excluded inside
         # adaptive_ceiling (it filters to `d > 0`), so passing the full list here
         # is intentional — no pre-filtering needed.
-        ceiling = adaptive_ceiling(deltas)
+        adaptive = adaptive_ceiling(deltas)
+        ceiling = effective_ceiling(adaptive, max_kwh)
+        if ceiling is None:
+            # Too little clean data to estimate a guard and no --max-kw cap given:
+            # refuse rather than import an unguarded sum.
+            r.status = "insufficient_data"
+            return r
         merged = rebuild_sum_walk(merged_states, reset_class, ceiling, tz)
         r.sum_at_cutover = next(
             (row["sum"] for row in merged if _to_utc(row["start"]) >= cutover), None
@@ -958,6 +994,7 @@ async def run_validation(
     reset_classes: dict[str, ResetClass] | None = None,
     repair: bool = False,
     applied: bool = True,
+    max_kwh: float | None = None,
 ) -> int:
     """Re-read each migrated/previewed sum series, report validation findings.
 
@@ -986,10 +1023,16 @@ async def run_validation(
         rows = [_normalise(s) for s in raw.get(r.ge_id, [])]
         if not rows:
             continue
-        ceiling = adaptive_ceiling(_state_deltas(rows))
+        gaps = classify_gaps(rows)
+        ceiling = effective_ceiling(adaptive_ceiling(_state_deltas(rows)), max_kwh)
+        if ceiling is None:
+            # No guard derivable (too little clean data, no cap): record gaps but
+            # skip the ceiling-dependent checks rather than crash on a None bound.
+            findings[r.ge_id] = {"implausible": [], "fake_resets": [], "gaps": gaps}
+            series_by_id[r.ge_id] = rows
+            continue
         implausible = find_implausible_hours(rows, ceiling)
         fake_resets = find_fake_reset_shapes(rows, ceiling)
-        gaps = classify_gaps(rows)
         findings[r.ge_id] = {
             "implausible": implausible,
             "fake_resets": fake_resets,
@@ -1011,7 +1054,10 @@ async def run_validation(
         )
         for ge_id in to_repair:
             rows = series_by_id[ge_id]
-            ceiling = adaptive_ceiling(_state_deltas(rows))
+            # to_repair is only populated when the ceiling was non-None above, so
+            # this re-derivation is also non-None; assert keeps mypy honest.
+            ceiling = effective_ceiling(adaptive_ceiling(_state_deltas(rows)), max_kwh)
+            assert ceiling is not None
             rc = _repair_reset_class(ge_id, reset_classes)
             rebuilt = rebuild_sum_walk(rows, rc, ceiling, tz)
             unit = units_by_id.get(ge_id)
@@ -1149,9 +1195,11 @@ def _print_summary(results: list[MigrationResult], applying: bool) -> int:
     counts = Counter(r.status for r in results)
     errored = counts["error"]
     not_found = counts["ge_not_found"]
+    insufficient = counts["insufficient_data"]
     tail = (
         f"No GivTCP data: {counts['no_givtcp_data']}  |  "
-        f"GE not found: {not_found}  |  Errors: {errored}"
+        f"GE not found: {not_found}  |  Insufficient data: {insufficient}  |  "
+        f"Errors: {errored}"
     )
 
     if not applying:
@@ -1170,8 +1218,16 @@ def _print_summary(results: list[MigrationResult], applying: bool) -> int:
                 "Skipped.",
                 file=sys.stderr,
             )
+        elif r.status == "insufficient_data":
+            print(
+                f"\n  ⚠️  {r.description}: too little clean history to estimate a "
+                "plausibility ceiling, and no --max-kw cap was given — skipped rather "
+                "than import an unguarded sum. Re-run with --max-kw <your inverter's "
+                "peak kW> (or --trust-source-sums if the GivTCP sums are known-good).",
+                file=sys.stderr,
+            )
 
-    return 0 if (errored == 0 and not_found == 0) else 2
+    return 0 if (errored == 0 and not_found == 0 and insufficient == 0) else 2
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -1313,6 +1369,7 @@ async def run(args: argparse.Namespace) -> int:
             tz,
             args.trust_source_sums,
             warn,
+            max_kwh=args.max_kw,
         )
         results.append(r)
         print(r.status)
@@ -1332,6 +1389,7 @@ async def run(args: argparse.Namespace) -> int:
         reset_classes=reset_classes,
         repair=applying and args.repair_residue,
         applied=applying,
+        max_kwh=args.max_kw,
     )
 
     await ws.close()
@@ -1392,6 +1450,17 @@ def main() -> None:
         help=(
             "Copy GivTCP's sum column verbatim and rebase at the join, instead of "
             "rebuilding sums from state. Use only if your GivTCP sums are known-good."
+        ),
+    )
+    p.add_argument(
+        "--max-kw",
+        type=float,
+        default=None,
+        metavar="KW",
+        help=(
+            "Your inverter's peak output in kW. Hourly energy deltas above this "
+            "are treated as implausible — it caps the adaptive ceiling and lets "
+            "entities with too little history to self-estimate still rebuild safely."
         ),
     )
     p.add_argument(

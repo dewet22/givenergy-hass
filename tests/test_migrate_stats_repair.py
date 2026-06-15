@@ -39,8 +39,31 @@ def test_adaptive_ceiling_rejects_fakes_keeps_genuine():
     assert max(genuine) <= ceiling < 100.0  # genuine peaks pass; fakes far above
 
 
-def test_adaptive_ceiling_no_positive_deltas_is_unbounded():
-    assert _MOD.adaptive_ceiling([0.0, 0.0, None]) == float("inf")
+def test_adaptive_ceiling_no_positive_deltas_returns_none():
+    assert _MOD.adaptive_ceiling([0.0, 0.0, None]) is None
+
+
+def test_adaptive_ceiling_below_min_samples_returns_none():
+    # Sparse data: too few positive deltas for a robust MAD estimate. Returning a
+    # value here would let the median/MAD bless an order-of-magnitude spike.
+    assert _MOD.adaptive_ceiling([1.0, 9900.0]) is None
+
+
+def test_effective_ceiling_both_none_is_none():
+    assert _MOD.effective_ceiling(None, None) is None
+
+
+def test_effective_ceiling_adaptive_none_uses_cap():
+    assert _MOD.effective_ceiling(None, 7.0) == 7.0
+
+
+def test_effective_ceiling_no_cap_uses_adaptive():
+    assert _MOD.effective_ceiling(42.0, None) == 42.0
+
+
+def test_effective_ceiling_both_takes_min():
+    assert _MOD.effective_ceiling(42.0, 7.0) == 7.0
+    assert _MOD.effective_ceiling(7.0, 42.0) == 7.0
 
 
 def test_reset_boundary_daily_local_midnight():
@@ -88,6 +111,20 @@ def test_rebuild_walk_holds_through_fake_zero_and_recovery():
         _row("2026-05-20T14:00:00+00:00", 203.0),  # recovery
     ]
     out = _MOD.rebuild_sum_walk(rows, _MOD.ResetClass.LIFETIME, 50.0, _LONDON)
+    assert _sums(out) == [200.0, 200.0, 203.0]
+
+
+def test_rebuild_walk_holds_state_not_just_sum_on_fake_zero():
+    """The rejected row's OUTPUT state must be held to last-good (200), not the
+    corrupt 0 it carried — otherwise the imported state timeline stays corrupt
+    and post-migration state-based checks keep flagging it."""
+    rows = [
+        _row("2026-05-20T12:00:00+00:00", 200.0),
+        _row("2026-05-20T13:00:00+00:00", 0.0),  # fake zero-read -> held
+        _row("2026-05-20T14:00:00+00:00", 203.0),  # recovery
+    ]
+    out = _MOD.rebuild_sum_walk(rows, _MOD.ResetClass.LIFETIME, 50.0, _LONDON)
+    assert [r["state"] for r in out] == [200.0, 200.0, 203.0]
     assert _sums(out) == [200.0, 200.0, 203.0]
 
 
@@ -381,3 +418,10 @@ def test_acceptance_rebuild_heals_documented_corruption():
     assert sums[-1] < 1010.0
     # Validation on the rebuilt series finds nothing implausible.
     assert _MOD.find_implausible_hours(out, ceiling) == []
+    # The STATE timeline must also be clean: rejected rows hold last-good state,
+    # not the corrupt 0/spike, so find_fake_reset_shapes (which reads state) has
+    # nothing to flag and --repair-residue would find no residue.
+    assert _MOD.find_fake_reset_shapes(out, ceiling) == []
+    out_states = [r["state"] for r in out]
+    assert 0.0 not in out_states  # the zero-read was overwritten with last-good
+    assert 27396.1 not in out_states  # the fake spike was overwritten too

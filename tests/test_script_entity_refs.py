@@ -327,6 +327,7 @@ async def test_migrate_entity_dry_run_with_overlap():
         reset_class=mod.ResetClass.DAILY,
         tz=_TZ,
         trust_source_sums=False,
+        max_kwh=50.0,  # sparse fixture (< min samples) needs a cap to rebuild
     )
     assert r.status == "dry_run"
     assert (r.ge_pre_rows, r.ge_post_rows) == (1, 1)
@@ -361,10 +362,47 @@ async def test_migrate_entity_flags_missing_overlap():
         reset_class=mod.ResetClass.DAILY,
         tz=_TZ,
         trust_source_sums=False,
+        max_kwh=50.0,  # sparse fixture (< min samples) needs a cap to rebuild
     )
     assert r.status == "dry_run"
     assert r.ge_pre_rows == 0
     assert r.warn_no_ge_pre is True
+
+
+async def test_migrate_entity_insufficient_data_without_cap():
+    """Sparse GivTCP data and no --max-kw cap must yield insufficient_data.
+
+    With too few clean deltas to self-estimate a plausibility ceiling and no hard
+    cap to fall back on, migrate_entity fails closed rather than importing an
+    unguarded sum.
+    """
+    mod = _load_migrate_module()
+    ws = _FakeWS(
+        {
+            _GIVTCP: [
+                _stat_row(datetime(2026, 6, 5, tzinfo=UTC), 100.0),
+                _stat_row(datetime(2026, 6, 6, tzinfo=UTC), 110.0),
+            ],
+            _GE: [
+                _stat_row(datetime(2026, 6, 7, 1, tzinfo=UTC), 6.0),
+            ],
+        }
+    )
+    r = await mod.migrate_entity(
+        ws,
+        _GIVTCP,
+        _GE,
+        "Solar generation today",
+        _CUTOVER,
+        "kWh",
+        False,
+        ge_known=True,
+        reset_class=mod.ResetClass.DAILY,
+        tz=_TZ,
+        trust_source_sums=False,
+        max_kwh=None,
+    )
+    assert r.status == "insufficient_data"
 
 
 async def test_migrate_entity_trust_source_sums_legacy_path():
