@@ -591,7 +591,7 @@ def compare_source_movement(
 
 **Files:** Modify `scripts/migrate_from_givtcp.py:816` (`MigrationResult`) and `:909-933` (rebuild branch of `migrate_entity`). Test.
 
-- [ ] **Step 1: Extend `MigrationResult`** — add to `__slots__` and `__init__`: `rebuilt_rows: list | None = None`, `events: dict | None = None`, `source_movement: float = 0.0`, `upward_offsets: float = 0.0`, `post_movement: float = 0.0` (rebuilt movement over the post-cutover window, for the GE-preservation check), `metadata: dict | None = None` (the import metadata, so Phase B can write without rebuilding). Initialise all in `__init__`.
+- [ ] **Step 1: Extend `MigrationResult`** — add to `__slots__` and `__init__`: `rebuilt_rows: list | None = None`, `events: dict | None = None`, `source_movement: float = 0.0`, `upward_offsets: float = 0.0`, `post_movement: float = 0.0` (rebuilt movement over the post-cutover window), `ge_post_movement: float = 0.0` (original GE source movement over the same post-cutover window, for the preservation comparison), `metadata: dict | None = None` (the import metadata, so Phase B can write without rebuilding). Initialise all in `__init__`.
 - [ ] **Step 2: Populate in `migrate_entity`'s rebuild branch.** After computing `ceiling`, build the candidate but DO NOT write here (writing moves to Phase B):
 ```python
         events: dict[str, list] = {}
@@ -606,6 +606,8 @@ def compare_source_movement(
         r.upward_offsets = sum(e["offset"] for e in events.get("rebaseline", []) if e["offset"] > 0)
         post = [s for s in merged if _to_utc(s["start"]) >= cutover]
         r.post_movement = _reset_aware_movement(post, reset_class, tz)
+        # original GE rows over the SAME post-cutover window, for preservation check
+        r.ge_post_movement = _reset_aware_movement(ge_post, reset_class, tz)
         r.sum_at_cutover = next((row["sum"] for row in merged if _to_utc(row["start"]) >= cutover), None)
         r.metadata = {"has_mean": False, "has_sum": True, "name": None,
                       "source": "recorder", "statistic_id": ge_id, "unit_of_measurement": ge_unit}
@@ -636,13 +638,17 @@ async def write_candidate(ws: HAWebSocket, r: MigrationResult) -> None:
 ```python
 async def verify_written(ws: HAWebSocket, r: MigrationResult) -> bool:
     """Phase C: re-read the stored series and confirm it matches the approved
-    candidate (row count + per-row sum within epsilon)."""
+    candidate — row count, per-row normalized `start` timestamp, AND per-row sum
+    within epsilon (equal sums with shifted/reordered timestamps must NOT pass)."""
     raw = await ws.get_statistics([r.ge_id], _EPOCH)
     stored = [_normalise(s) for s in raw.get(r.ge_id, [])]
     if len(stored) != len(r.rebuilt_rows):
         return False
-    return all(abs((a.get("sum") or 0.0) - (b.get("sum") or 0.0)) <= _FLAT_EPSILON
-               for a, b in zip(stored, r.rebuilt_rows))
+    return all(
+        a["start"] == b["start"]
+        and abs((a.get("sum") or 0.0) - (b.get("sum") or 0.0)) <= _FLAT_EPSILON
+        for a, b in zip(stored, r.rebuilt_rows)
+    )
 ```
 - [ ] **Step 3: Test the gate + mid-Phase-B failure** in `tests/test_migrate_stats_repair.py` with a fake WS:
 ```python
@@ -657,8 +663,9 @@ def test_phase_b_mid_failure_reports_and_stops():
     ...
 
 def test_phase_c_detects_stored_mismatch():
-    # Writes "succeed", but the fake WS read-back returns a series that differs
-    # from the candidate (e.g. a truncated/altered sum).
+    # Writes "succeed", but the fake WS read-back differs from the candidate.
+    # Cover BOTH: (a) an altered sum, and (b) SAME sums with shifted timestamps
+    # (the latter must also fail — verify compares start timestamps too).
     # Assert: verify_written returns False -> run fails loudly with backup guidance,
     # status is NOT "migrated", non-zero exit.
     ...
@@ -673,7 +680,7 @@ def test_phase_c_detects_stored_mismatch():
 
 **Files:** Modify `scripts/migrate_from_givtcp.py:996` (`run_validation`). Test.
 
-- [ ] **Step 1:** Change `run_validation` to validate the **candidate** (`r.rebuilt_rows`) rather than re-reading HA when those rows are present (both dry-run and the Phase-A gate). For each candidate compute: `gaps` (existing); `flat_lines = find_flat_line_spans(rows)` **minus spans that overlap a recorded `gap_undercount` interval** (interval overlap by `[start, end]`, NOT exact-start equality — a reset-gap flat begins at the prior trusted row, so its start won't equal the event's `start`); `compare_source_movement(r.source_movement, <pre-cutover candidate movement>, r.upward_offsets)`; a separate post-cutover GE-preservation check that `r.post_movement` matches the GE post-cutover source movement; plus the `events` (`rebaseline`/`smear`/`gap_undercount`/`unresolved`). Build `findings[ge_id]` from all of these. Return the report exit code AND a `blocking` flag = any unexplained flat span (after the overlap exemption), `source_comparison.flagged`, post-cutover divergence, or non-empty `unresolved`. Add a small `_overlaps(span, event_interval)` helper (timestamp interval intersection) and unit-test the reset-gap-overlap exemption (a flat span starting one row *before* the gap event is still exempted).
+- [ ] **Step 1:** Change `run_validation` to validate the **candidate** (`r.rebuilt_rows`) rather than re-reading HA when those rows are present (both dry-run and the Phase-A gate). For each candidate compute: `gaps` (existing); the raw `find_flat_line_spans(rows)`, then **clip** each span by the recorded `gap_undercount` intervals and keep only the **residual unexplained contiguous** portions — a span is blocking only if a residual portion's duration ≥ `min_hours` (so a short accepted reset gap that merely touches a multi-day flat does NOT exempt the whole flat); `compare_source_movement(r.source_movement, <pre-cutover candidate movement>, r.upward_offsets)`; a post-cutover GE-preservation check comparing `r.post_movement` (rebuilt) against `r.ge_post_movement` (original GE source, Task 8) over the same window; plus the `events`. Build `findings[ge_id]` from all of these. Return the report exit code AND a `blocking` flag = any residual unexplained flat ≥ threshold, `source_comparison.flagged`, post-cutover divergence, or non-empty `unresolved`. Add a `_unexplained_flat_portions(span, gap_intervals)` helper (subtract covered intervals, return residual `[start,end]` contiguous pieces with durations) and unit-test it: **a long flat containing one short accepted reset gap still has a residual ≥ threshold → blocking**, while a flat fully covered by gap intervals → exempt.
 - [ ] **Step 2:** Keep `_repairable`/`--repair-residue` working against candidates.
 - [ ] **Step 3: Test** (fake WS / direct call): a candidate with a flat span not covered by a gap_undercount → blocking; a candidate whose only flat span is covered by a recorded gap_undercount → not blocking (warned); an `unresolved` event → blocking.
 - [ ] **Step 4: Run**; fix.
