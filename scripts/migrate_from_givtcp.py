@@ -36,12 +36,25 @@ Typical workflow:
 
 The cut-over date is the boundary between GivTCP and givenergy_local history.
 GivTCP data strictly before midnight on that date is migrated; givenergy_local
-data from midnight on that date onwards is kept (and its running sum is rebased
-to continue from where GivTCP left off). Any givenergy_local data before that
-boundary is discarded — it will typically be partial or recorded in parallel with
-GivTCP. Choosing a day when both integrations were running means the full GivTCP
-history is captured and GE takes over from 00:00 that day regardless of when
-GivTCP actually stopped.
+data from midnight on that date onwards is kept. Any givenergy_local data before
+that boundary is discarded — it will typically be partial or recorded in parallel
+with GivTCP. Choosing a day when both integrations were running means the full
+GivTCP history is captured and GE takes over from 00:00 that day regardless of
+when GivTCP actually stopped.
+
+Sum reconstruction (default): rather than copy GivTCP's `sum` column and rebase
+it at the join, the script concatenates the `state` timeline across the cut-over
+and walks it once to produce a single continuous `sum`. This removes the join
+seam entirely. The walk is plausibility-guarded (an adaptive per-entity ceiling
+rejects fake spikes) and reset-aware: a decrease in `state` only counts as a
+legitimate counter reset at that counter's natural boundary — `_today` sensors at
+local midnight, `_this_year` sensors at the year boundary, `_total` sensors never.
+Off-boundary drops and over-ceiling spikes hold the last good value instead of
+booking the bogus jump.
+
+Pass --trust-source-sums to restore the legacy behaviour (copy GivTCP's sum
+column verbatim and rebase at the join) for installs whose GivTCP sums are
+known-good.
 
 Serials are auto-detected — no hard-coding needed. Multi-inverter and
 multi-battery setups are handled automatically.
@@ -62,6 +75,14 @@ What is migrated by default:
     derived house_consumption_today; givenergy-modbus #174. The old
     load_energy_today read ~0 and was excluded; the derived figure is correct.)
 
+Mean-type back-port (default; --skip-means to opt out):
+  Power, grid power, battery power, house-consumption power, battery SOC
+  (inverter + per-pack) and battery temperature are copied as straight
+  mean/min/max series, giving hour-of-day heatmaps their full history. These
+  carry no cumulative sum, so there is no continuity to reconstruct.
+  (The exact source/target sensor suffixes are provisional — see MEAN_PAIRS /
+  MEAN_BATTERY_PAIRS — and should be verified against a live registry.)
+
 Opt-in (--include-charge-from-grid):
   Charge from grid lifetime  ⚠️  values differ on some systems — verify manually
 
@@ -74,6 +95,13 @@ Not migrated (no GivTCP equivalent, register-level gap, or incompatible type):
     total_increasing *sum* series. The two are incompatible shapes — there is no
     sum column to rebase, and forcing it would corrupt the GE counter — so the
     pre-GE cycle history is not migrated. See BATTERY_PAIRS below.)
+
+Post-migration validation (automatic, read-only, runs in both dry-run and apply):
+  Re-reads each migrated sum series and flags residual implausible hours,
+  fake-reset shapes, duplicate series, and gaps. Exits non-zero on substantive
+  findings; gaps are reported informationally and do not affect the exit code.
+  Pass --repair-residue (only meaningful with --apply) to clear and re-import the
+  rebuilt series for sum entities that still show implausible hours.
 
 See docs/migration-from-givtcp.md for the full sensor catalogue and design notes.
 """
