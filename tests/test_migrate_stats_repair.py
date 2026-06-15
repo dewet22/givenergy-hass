@@ -47,9 +47,28 @@ def test_adaptive_ceiling_no_positive_deltas_returns_none():
 
 
 def test_adaptive_ceiling_below_min_samples_returns_none():
-    # Sparse data: too few positive deltas for a robust MAD estimate. Returning a
-    # value here would let the median/MAD bless an order-of-magnitude spike.
+    # Sparse data: too few positive deltas. Returning a value here would let the
+    # p99 estimate bless an order-of-magnitude spike.
     assert _MOD.adaptive_ceiling([1.0, 9900.0]) is None
+
+
+def test_percentile_interpolates():
+    vals = [1.0, 2.0, 3.0, 4.0]
+    assert _MOD._percentile(vals, 50) == 2.5
+    assert _MOD._percentile(vals, 0) == 1.0
+    assert _MOD._percentile(vals, 100) == 4.0
+
+
+def test_adaptive_ceiling_tolerates_diurnal_peaks_rejects_fakes():
+    """Realistic diurnal distribution: many overnight lows plus genuine peaks,
+    plus a couple of huge fakes. Genuine peaks (<=6 kWh/h) must pass; the
+    order-of-magnitude fakes (27k) must be rejected."""
+    diurnal = ([0.1, 0.2, 0.3, 0.5, 0.7] * 40) + ([3.0, 4.0, 5.0, 6.0] * 20) + [27396.1, 29724.7]
+    ceiling = _MOD.adaptive_ceiling(diurnal)
+    assert ceiling is not None
+    assert ceiling >= 6.0  # genuine midday/evening peaks (<=6) are NOT flagged
+    assert ceiling < 50.0  # but the order-of-magnitude fakes are
+    assert 27396.1 > ceiling and 6.0 <= ceiling
 
 
 def test_effective_ceiling_both_none_is_none():

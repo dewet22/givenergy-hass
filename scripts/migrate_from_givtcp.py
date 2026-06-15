@@ -105,7 +105,6 @@ import asyncio
 import json
 import math
 import re
-import statistics
 import sys
 from collections import Counter
 from collections.abc import Callable
@@ -297,35 +296,34 @@ def classify_entity(ge_suffix: str) -> ResetClass:
 # Adaptive plausibility ceiling
 # ---------------------------------------------------------------------------
 
-# Multiplier on the (normal-scaled) MAD for the plausibility ceiling. Tuned so
-# genuine inverter-clip hours pass while order-of-magnitude fake spikes are
-# rejected; pinned by the LTS-fixture acceptance test.
-_CEILING_MAD_K = 8.0
-
-# Minimum positive-delta samples before a MAD-based ceiling is trusted. A day of
-# hourly points is a defensible floor for a robust estimate; below it the
-# median/MAD are too easily skewed (sparse data like [1, 9900] yields a ceiling
-# high enough to bless the spike). Fewer than this and adaptive_ceiling refuses.
 _CEILING_MIN_SAMPLES = 24
+_CEILING_PERCENTILE = 99.0
+_CEILING_FACTOR = 1.5
+
+
+def _percentile(sorted_vals: list[float], p: float) -> float:
+    """Linear-interpolated percentile of an ascending-sorted, non-empty list."""
+    k = (len(sorted_vals) - 1) * p / 100.0
+    f = int(k)
+    c = min(f + 1, len(sorted_vals) - 1)
+    return sorted_vals[f] + (sorted_vals[c] - sorted_vals[f]) * (k - f)
 
 
 def adaptive_ceiling(deltas: list[float | None]) -> float | None:
-    """Robust per-hour ceiling from an entity's positive state-deltas.
+    """Per-hour plausibility ceiling from an entity's positive state-deltas.
 
-    Uses median + K * 1.4826 * MAD over the positive, finite deltas. Both the
-    median and the MAD are resistant to a handful of giant outliers, so the
-    bound reflects genuine hourly behaviour even on a heavily corrupted series.
-    Returns None when there are fewer than ``_CEILING_MIN_SAMPLES`` positive
-    deltas to anchor on (this also covers the empty case) — the caller then
-    cannot self-estimate a guard and must fail closed or rely on a hard cap.
+    Genuine hourly deltas are bounded by the hardware (inverter clip, battery
+    subsystem rate); corruption sits orders of magnitude higher as a tiny (<1%)
+    tail. The 99th percentile tracks the real physical limit without being pulled
+    up by the rare fakes; the 1.5x factor adds headroom for legitimate peaks
+    while still rejecting order-of-magnitude spikes. Returns None below
+    _CEILING_MIN_SAMPLES (and on empty) so the caller fails closed rather than
+    guessing a bound from too little data.
     """
     pos = sorted(d for d in deltas if d is not None and d > 0)
     if len(pos) < _CEILING_MIN_SAMPLES:
         return None
-    median = statistics.median(pos)
-    mad = statistics.median([abs(d - median) for d in pos])
-    spread = mad if mad > 0 else median
-    return median + _CEILING_MAD_K * 1.4826 * spread
+    return _percentile(pos, _CEILING_PERCENTILE) * _CEILING_FACTOR
 
 
 def effective_ceiling(adaptive: float | None, cap: float | None) -> float | None:
