@@ -1070,6 +1070,7 @@ def _candidate(ge_id: str, rebuilt_rows: list[dict], **kw) -> object:
     r.upward_offsets = kw.get("upward_offsets", 0.0)
     r.post_movement = kw.get("post_movement", 0.0)
     r.ge_post_movement = kw.get("ge_post_movement", 0.0)
+    r.source_rows = kw.get("source_rows")
     r.metadata = {
         "has_mean": False,
         "has_sum": True,
@@ -1121,7 +1122,11 @@ def test_run_validation_does_not_reread_ha_for_candidate():
 
 
 def test_run_validation_unexplained_flat_is_blocking():
-    # A 12h flat span not covered by any gap_undercount -> blocking.
+    # A 12h flat span not covered by any gap_undercount -> blocking via the
+    # fail-closed path: this candidate carries no source_rows, so the
+    # source-correlated gate cannot prove the flat benign and refuses. (The
+    # source-moved-while-flat case is pinned by
+    # test_run_validation_flat_while_source_climbed_still_blocking.)
     rows = _flat_rows(0, 13, 100.0)  # 00:00..12:00 == 12h flat
     r = _candidate("sensor.ge_x", rows, source_movement=0.0)
     ws = _RecordingWS()
@@ -1254,6 +1259,122 @@ def test_run_validation_ge_preservation_divergence_is_blocking():
         )
     )
     assert blocking is True
+
+
+def _state_rows(start_hour: int, count: int, value: float) -> list[dict]:
+    """A flat source state timeline aligned to _flat_rows timestamps."""
+    return [
+        {"start": f"2026-05-20T{start_hour + h:02d}:00:00+00:00", "state": value}
+        for h in range(count)
+    ]
+
+
+def test_run_validation_flat_with_flat_source_not_blocking():
+    # Core regression for the false-positive: a LIFETIME candidate genuinely flat
+    # overnight (12h) where the SOURCE was ALSO flat over the same span is
+    # legitimate inactivity, not lost energy — must NOT block.
+    rows = _flat_rows(0, 13, 100.0)  # candidate flat 00:00..12:00
+    source_rows = _state_rows(0, 13, 500.0)  # source equally flat over the span
+    r = _candidate("sensor.ge_x", rows, source_movement=0.0, source_rows=source_rows)
+    ws = _RecordingWS()
+    _exit, blocking = asyncio.run(
+        _MOD.run_validation(
+            ws,
+            [r],
+            _LONDON,
+            units_by_id={"sensor.ge_x": "kWh"},
+            cutover=_CUTOVER_DT,
+            max_kwh=50.0,
+        )
+    )
+    assert blocking is False
+
+
+def test_run_validation_flat_while_source_climbed_still_blocking():
+    # The live-failure shape: candidate flat-lined while the source climbed ~8000
+    # kWh over the span — real energy was lost in the rebuild. Still blocking.
+    rows = _flat_rows(0, 13, 100.0)  # candidate flat 00:00..12:00
+    source_rows = [
+        {"start": f"2026-05-20T{h:02d}:00:00+00:00", "state": 1000.0 + h * 666.0} for h in range(13)
+    ]  # source climbs ~8000 across the flat window
+    r = _candidate("sensor.ge_x", rows, source_movement=8000.0, source_rows=source_rows)
+    ws = _RecordingWS()
+    _exit, blocking = asyncio.run(
+        _MOD.run_validation(
+            ws,
+            [r],
+            _LONDON,
+            units_by_id={"sensor.ge_x": "kWh"},
+            cutover=_CUTOVER_DT,
+            max_kwh=50.0,
+        )
+    )
+    assert blocking is True
+
+
+def test_run_validation_localized_flat_above_threshold_blocks_under_aggregate_radar():
+    # A localized flatten: the candidate moves correctly overall (so the aggregate
+    # compare_source_movement would NOT flag it) but flat-lines through one window
+    # where the source moved a material amount (> ceiling). The per-span detector
+    # must still block; this is what it earns its keep on.
+    # Candidate: climbs except a 6h flat at 100 (06:00..12:00 inclusive).
+    rows = []
+    for h in range(20):
+        val = 100.0 if 6 <= h <= 12 else (h * 10.0 if h < 6 else 100.0 + (h - 12) * 10.0)
+        rows.append({"start": f"2026-05-20T{h:02d}:00:00+00:00", "sum": val, "state": val})
+    # Candidate reset-aware movement over the whole series == 170 (50 + 50 + 70).
+    # Source state climbs +10/h; over the flat window [06:00,12:00] it moves 60 kWh
+    # (> ceiling 50), but the aggregate source_movement scalar is set to match the
+    # candidate so compare_source_movement does NOT flag — isolating the per-span
+    # detector as the sole reason this blocks.
+    source_rows = [
+        {"start": f"2026-05-20T{h:02d}:00:00+00:00", "state": h * 10.0} for h in range(20)
+    ]
+    late_cutover = __import__("datetime").datetime(2026, 5, 21, tzinfo=__import__("datetime").UTC)
+    r = _candidate(
+        "sensor.ge_x",
+        rows,
+        source_movement=170.0,  # matches candidate pre-cutover movement -> not flagged
+        source_rows=source_rows,
+    )
+    ws = _RecordingWS()
+    _exit, blocking = asyncio.run(
+        _MOD.run_validation(
+            ws,
+            [r],
+            _LONDON,
+            units_by_id={"sensor.ge_x": "kWh"},
+            cutover=late_cutover,
+            max_kwh=50.0,
+        )
+    )
+    assert blocking is True
+
+
+def test_run_validation_flat_with_negligible_source_movement_not_blocking():
+    # The source moved only a negligible amount (below the ceiling) over the flat
+    # span — within one plausible hour's worth of energy, treated as inactivity.
+    rows = _flat_rows(0, 13, 100.0)  # candidate flat 00:00..12:00
+    # Source nudges by 1 kWh total across 12h (< ceiling 50).
+    source_rows = [
+        {"start": f"2026-05-20T{h:02d}:00:00+00:00", "state": 500.0 + (1.0 if h == 12 else 0.0)}
+        for h in range(13)
+    ]
+    # source_movement (aggregate) matches the flat candidate (0) so the aggregate
+    # comparison stays clean; the per-span source moves only 1 kWh (< ceiling).
+    r = _candidate("sensor.ge_x", rows, source_movement=0.0, source_rows=source_rows)
+    ws = _RecordingWS()
+    _exit, blocking = asyncio.run(
+        _MOD.run_validation(
+            ws,
+            [r],
+            _LONDON,
+            units_by_id={"sensor.ge_x": "kWh"},
+            cutover=_CUTOVER_DT,
+            max_kwh=50.0,
+        )
+    )
+    assert blocking is False
 
 
 # ---------------------------------------------------------------------------
@@ -1702,6 +1823,52 @@ def test_e2e_unexplained_flat_candidate_blocks_gate_no_writes(monkeypatch, capsy
     assert ws.import_calls == []
     err = capsys.readouterr().err
     assert "Refusing to --apply" in err
+
+
+def test_e2e_trust_source_sums_with_real_movement_not_refused(monkeypatch, capsys):
+    """The exact case Codex called out: a --trust-source-sums candidate with
+    ordinary increasing sums (real pre- and post-cutover movement) must NOT be
+    refused. The trust path now populates the movement fields, so source ==
+    candidate by construction and neither source_comparison nor ge_preservation
+    flags. The gate allows the write and it migrates."""
+    ge_id = "sensor.givenergy_inverter_ab1234c5_grid_import_total"  # LIFETIME
+    # GivTCP source: a clean monotonic climb, all on 2026-05-20 (pre-cutover with
+    # the e2e cutover of 2026-05-21), carrying BOTH sum (the trusted value
+    # rebase_sum copies) and state (for reset-aware movement).
+    source = [
+        {
+            "start": f"2026-05-20T{h:02d}:00:00+00:00",
+            "sum": 1000.0 + h * 5.0,
+            "state": 1000.0 + h * 5.0,
+        }
+        for h in range(24)  # 00:00..23:00, continuous up to the cutover seam
+    ]
+    # GE-post: a continuing climb from the cutover onward, contiguous with the
+    # source (no seam gap) so the rebased join introduces no flat span.
+    ge_post = [
+        {
+            "start": f"2026-05-21T{h:02d}:00:00+00:00",
+            "sum": 2000.0 + h * 3.0,
+            "state": 2000.0 + h * 3.0,
+        }
+        for h in range(6)
+    ]
+    ws = _ApplyWS(read_back={f"sensor.givtcp_{ge_id}": source, ge_id: ge_post})
+    _feed_back_on_import(ws)
+    _patch_real_build_path(monkeypatch, ws, [_e2e_plan_entry(ge_id, _MOD.ResetClass.LIFETIME)])
+    args = _e2e_args()  # cutover 2026-05-21: source all pre, ge_post all post
+    args.trust_source_sums = True
+
+    code = asyncio.run(_MOD.run(args))
+
+    captured = capsys.readouterr()
+    assert "BLOCKING" not in captured.out
+    assert "Refusing to --apply" not in captured.err
+    cand = next(r for r in _LAST_RESULTS if r.ge_id == ge_id)
+    assert cand.status == "migrated"
+    assert ws.clear_calls == [[ge_id]]
+    assert any(c["metadata"]["statistic_id"] == ge_id for c in ws.import_calls)
+    assert code == 0
 
 
 def test_positive_float_accepts_positive():

@@ -337,6 +337,16 @@ _CEILING_FACTOR = 1.5
 _REBASELINE_HOLDS = 3  # consecutive coherent holds before re-baselining
 _FLAT_LINE_MIN_HOURS = 6  # min span for a flat-line finding
 _MOVEMENT_TOLERANCE_PCT = 5.0  # source-vs-rebuilt movement divergence tolerance
+# A candidate flat span is only blocking if the source-of-truth genuinely moved
+# over that same window — cumulative counters legitimately flat-line for hours
+# during inactivity (PV totals overnight, grid import/export idle for days), and
+# blocking those would refuse almost every real migration. The threshold is the
+# rebuild `ceiling` (the per-hour plausibility bound): a flat is blocking only if
+# the source moved more than one plausible hour's worth of energy across the whole
+# span, i.e. the rebuild flat-lined through real accumulation. This is
+# entity-relative (the ceiling already scales to each entity's hourly rate) rather
+# than a fixed kWh floor, so it holds for both small DAILY counters and large
+# LIFETIME totals.
 
 
 def _percentile(sorted_vals: list[float], p: float) -> float:
@@ -606,8 +616,9 @@ def rebuild_sum_walk(
     # Held/smeared rows can be appended after a later-timestamped gap row, so the
     # raw append order is not guaranteed sorted. Restore the ascending-by-start
     # contract that import + Phase-C verify_written rely on. Every emitted row
-    # (real, held, smeared) carries an ISO start.
-    out.sort(key=lambda r: _to_utc(r["start"]))
+    # (real, held, smeared) carries a normalised UTC ISO start, so lexical sort
+    # order is chronological.
+    out.sort(key=lambda r: r["start"])
     return out
 
 
@@ -869,6 +880,35 @@ def _flat_piece(a: datetime, b: datetime) -> dict[str, Any]:
         "end": _as_iso(b),
         "hours": round((b - a).total_seconds() / 3600.0, 6),
     }
+
+
+def _flat_span_source_blocking(
+    piece: dict[str, Any],
+    source_rows: list[dict[str, Any]] | None,
+    reset_class: ResetClass,
+    tz: ZoneInfo,
+    ceiling: float | None,
+) -> bool:
+    """Is a residual candidate flat span over ``piece`` actually a lost-energy
+    defect (blocking), or legitimate inactivity (benign)?
+
+    Blocking iff the SOURCE genuinely moved over the same window — i.e. the rebuild
+    flat-lined through real accumulation. The threshold is the rebuild ``ceiling``
+    (one plausible hour's worth of energy); a span where the source moved no more
+    than that is treated as inactivity and dropped (see _FLAT_LINE threshold note).
+
+    Fail-closed: if there is no source reference (``source_rows`` is None, which
+    should not happen for a built candidate) or no ceiling to size the threshold
+    against, fall back to the old behaviour and treat the flat as blocking rather
+    than silently passing.
+    """
+    if source_rows is None or ceiling is None:
+        return True
+    lo, hi = piece["start"], piece["end"]
+    # `start` values are normalised UTC ISO strings, so the inclusive lexical
+    # window matches the chronological [start, end] span.
+    span_source = [s for s in source_rows if lo <= s["start"] <= hi]
+    return _reset_aware_movement(span_source, reset_class, tz) > ceiling
 
 
 def _reset_aware_movement(
@@ -1250,6 +1290,7 @@ class MigrationResult:
         "upward_offsets",
         "post_movement",
         "ge_post_movement",
+        "source_rows",
         "metadata",
     )
 
@@ -1272,6 +1313,10 @@ class MigrationResult:
         self.upward_offsets: float = 0.0
         self.post_movement: float = 0.0
         self.ge_post_movement: float = 0.0
+        # Source-of-truth reference state timeline the candidate was built from.
+        # Used by run_validation to source-correlate flat spans: a candidate flat
+        # is only blocking if the source genuinely moved over that same window.
+        self.source_rows: list[dict[str, Any]] | None = None
         self.metadata: dict[str, Any] | None = None
 
 
@@ -1348,6 +1393,22 @@ async def migrate_entity(
         rebased_post = rebase_sum(ge_post, last_givtcp_sum)
         merged = givtcp_stats + rebased_post
         r.rebuilt_rows = merged
+        # Source-of-truth reference for flat-span correlation (analogous to the
+        # rebuild branch's merged_states).
+        r.source_rows = givtcp_stats + ge_post
+        # Populate the movement fields so run_validation's comparisons see matching
+        # movement. This path TRUSTS the GivTCP sums, so the candidate pre-cutover
+        # IS the source (`givtcp_stats` by construction) — source and candidate
+        # movement match and compare_source_movement is non-divergent. Without
+        # this, the fields stay at their zero defaults and any trusted-source
+        # migration with real movement is falsely flagged divergent.
+        cutover_str = _as_iso(cutover)
+        pre = [s for s in givtcp_stats if s["start"] < cutover_str]
+        r.source_movement = _reset_aware_movement(pre, reset_class, tz)
+        r.upward_offsets = 0.0  # no rebase offsets suppressed in the trust path
+        post = [s for s in merged if s["start"] >= cutover_str]
+        r.post_movement = _reset_aware_movement(post, reset_class, tz)
+        r.ge_post_movement = _reset_aware_movement(ge_post, reset_class, tz)
         r.metadata = metadata
     else:
         # Rebuild path (default): one continuous sum from the concatenated state
@@ -1373,19 +1434,25 @@ async def migrate_entity(
         merged = rebuild_sum_walk(merged_states, reset_class, ceiling, tz, events=events)
         r.rebuilt_rows = merged
         r.events = events
+        # The source-of-truth state timeline the candidate was built from — the
+        # reference run_validation source-correlates flat spans against. Its
+        # timestamps align with the candidate pre-cutover (the candidate derives
+        # from it).
+        r.source_rows = merged_states
         # reset-aware source movement over the pre-cutover window, the UPWARD
         # offsets the rebuild suppressed (cleaned comparison), and the rebuilt
-        # movement over the post-cutover window (GE-preservation check)
-        pre = [s for s in merged_states if _to_utc(s["start"]) < cutover]
+        # movement over the post-cutover window (GE-preservation check). All
+        # `start` values are normalised UTC ISO strings, so lexical `<`/`>=`
+        # against the normalised cutover is chronological.
+        cutover_str = _as_iso(cutover)
+        pre = [s for s in merged_states if s["start"] < cutover_str]
         r.source_movement = _reset_aware_movement(pre, reset_class, tz)
         r.upward_offsets = sum(e["offset"] for e in events.get("rebaseline", []) if e["offset"] > 0)
-        post = [s for s in merged if _to_utc(s["start"]) >= cutover]
+        post = [s for s in merged if s["start"] >= cutover_str]
         r.post_movement = _reset_aware_movement(post, reset_class, tz)
         # original GE rows over the SAME post-cutover window, for preservation check
         r.ge_post_movement = _reset_aware_movement(ge_post, reset_class, tz)
-        r.sum_at_cutover = next(
-            (row["sum"] for row in merged if _to_utc(row["start"]) >= cutover), None
-        )
+        r.sum_at_cutover = next((row["sum"] for row in merged if row["start"] >= cutover_str), None)
         r.metadata = metadata
     r.merged_rows = len(merged)
     r.status = "candidate"  # built, not yet validated/written
@@ -1478,20 +1545,30 @@ async def run_validation(
             continue
         events = r.events or {}
         gaps = classify_gaps(rows)
+        rc = _repair_reset_class(r.ge_id, reset_classes)
+        ceiling = effective_ceiling(adaptive_ceiling(_state_deltas(rows)), max_kwh)
 
         # Residual unexplained flats: clip each flat span by the accepted
-        # gap_undercount intervals, keep contiguous residual >= threshold.
+        # gap_undercount intervals, then keep a contiguous residual >= threshold
+        # only when the SOURCE genuinely moved over that same window. Cumulative
+        # counters legitimately flat-line during inactivity (overnight PV totals,
+        # idle grid import/export), so a flat where the source was also flat is
+        # benign and must not block. See _flat_span_source_blocking.
         covered = _gap_undercount_intervals(events)
         flat_lines: list[dict[str, Any]] = []
         for span in find_flat_line_spans(rows):
             for piece in _unexplained_flat_portions(span, covered):
-                if piece["hours"] >= _FLAT_LINE_MIN_HOURS:
+                if piece["hours"] >= _FLAT_LINE_MIN_HOURS and _flat_span_source_blocking(
+                    piece, r.source_rows, rc, tz, ceiling
+                ):
                     flat_lines.append(piece)
 
-        # Pre-cutover candidate movement vs cleaned source movement.
-        rc = _repair_reset_class(r.ge_id, reset_classes)
+        # Pre-cutover candidate movement vs cleaned source movement. All `start`
+        # values are normalised UTC ISO strings, so lexical `<` against the
+        # normalised cutover is chronological.
         if cutover is not None:
-            pre = [s for s in rows if _to_utc(s["start"]) < cutover]
+            cutover_str = _as_iso(cutover)
+            pre = [s for s in rows if s["start"] < cutover_str]
         else:
             pre = rows
         candidate_pre_movement = _reset_aware_movement(pre, rc, tz)
@@ -1503,7 +1580,6 @@ async def run_validation(
         ge_preservation = compare_source_movement(r.ge_post_movement, r.post_movement, 0.0)
 
         unresolved = events.get("unresolved", [])
-        ceiling = effective_ceiling(adaptive_ceiling(_state_deltas(rows)), max_kwh)
         implausible = find_implausible_hours(rows, ceiling) if ceiling is not None else []
         fake_resets = find_fake_reset_shapes(rows, ceiling) if ceiling is not None else []
 
