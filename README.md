@@ -34,7 +34,7 @@ The following have modelled register maps and are expected to work, but haven't 
 - Gateway (V1 / V2) — register layout decoded from owner probes, but the integration hasn't been run against one directly
 - HV battery stacks (BCU/BMU)
 
-If you'd like to help validate, a wire-frame capture is the most useful thing you can include. If you already have the integration running, use the built-in service from **Developer Tools → Services**:
+If you'd like to help validate, a wire-frame capture is the most useful thing you can include. If you already have the integration running, use the built-in action from **Developer Tools → Actions** (named **Services** in older Home Assistant versions):
 
 ```
 Service: givenergy_local.capture_frames
@@ -216,7 +216,7 @@ All-in-One systems expose each removable battery module separately, so on AIO ha
 
 ### Services
 
-The integration registers the following services under the `givenergy_local` domain. All are accessible from **Developer Tools → Services** or from automations.
+The integration registers the following services under the `givenergy_local` domain. All are accessible from **Developer Tools → Actions** (named **Services** in older Home Assistant versions) or from automations.
 
 | Service | Description |
 |---|---|
@@ -305,7 +305,7 @@ Home Assistant's voice assistants (Assist) and LLM tools (Claude / OpenAI via MC
 
 #### Option 1: run the `expose_recommended_entities` service (recommended)
 
-From **Developer Tools → Services**, pick **GivEnergy Local: Expose recommended entities to voice assistants**, choose your inverter device, and run it. You'll get a persistent notification listing what was exposed. The service is idempotent — re-run any time without losing manual customisations (it only ever exposes; it never un-exposes).
+From **Developer Tools → Actions**, pick **GivEnergy Local: Expose recommended entities to voice assistants**, choose your inverter device, and run it. You'll get a persistent notification listing what was exposed. The service is idempotent — re-run any time without losing manual customisations (it only ever exposes; it never un-exposes).
 
 By default it targets the `conversation` assistant, which covers Assist, the LLM tools API, and MCP-via-conversation. Pass `assistants` to also target `cloud.alexa` or `cloud.google_assistant`.
 
