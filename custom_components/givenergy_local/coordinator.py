@@ -487,13 +487,15 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             self._unchanged_ticks = 0
             self._active_tick = 0
             _LOGGER.info("Connected to inverter at %s:%s", self.host, self.port)
-        except Exception:
+        except BaseException:
             # connect()/detect() failed before capabilities were established (a
             # PlantTopologyMismatch is handled above and doesn't reach here). Discard
             # the half-initialised client so the next tick reconnects and re-detects
             # cleanly — a connected-but-capability-less client would otherwise be kept
             # by the timeout-tolerance path, and its next refresh() raises
-            # PlantNotDetected ("requires plant capabilities") (#176).
+            # PlantNotDetected ("requires plant capabilities") (#176). BaseException,
+            # not Exception, so a CancelledError (HA cancelling the connect mid-flight)
+            # also cleans up rather than leaking the client; re-raised either way.
             await self._reset_client()
             raise
 

@@ -1,5 +1,6 @@
 """Tests for the GivEnergy Local coordinator."""
 
+import asyncio
 import logging
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
@@ -208,6 +209,28 @@ async def test_detect_timeout_on_reconnect_discards_client(hass, mock_plant):
         assert result is mock_plant
         assert coordinator._client is client
         assert coordinator.consecutive_failures == 0
+
+
+async def test_cancelled_connect_discards_client(hass, mock_plant):
+    """A cancellation during _connect() (HA cancelling the attempt) must still
+    discard the half-initialised client. CancelledError is a BaseException, not
+    Exception, so the cleanup boundary has to catch it too — and re-raise the
+    cancellation. Regression for #176 review (Codex/Gemini)."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+    coordinator.data = mock_plant
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.detect.side_effect = asyncio.CancelledError()
+        mock_cls.return_value = client
+
+        with pytest.raises(asyncio.CancelledError):
+            await coordinator._async_update_data()
+
+    assert coordinator._client is None  # cleaned up despite the cancellation
+    client.close.assert_awaited_once()  # _reset_client() ran
 
 
 async def test_timeout_increments_consecutive_failures(hass):
