@@ -1,5 +1,6 @@
 """Tests for the GivEnergy Local coordinator."""
 
+import asyncio
 import logging
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
@@ -170,6 +171,66 @@ async def test_timeout_reaching_tolerance_resets_client(hass, mock_plant):
 
         client.close.assert_called_once()
         assert coordinator._client is None
+
+
+async def test_detect_timeout_on_reconnect_discards_client(hass, mock_plant):
+    """A reconnect whose detect() times out must not retain a capability-less client.
+
+    Otherwise the next tick skips _connect() (the socket still reports connected),
+    calls refresh() with capabilities=None, and the library raises PlantNotDetected.
+    The half-initialised client must be dropped so the next tick reconnects and
+    re-detects cleanly. Regression for #176.
+    """
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+    coordinator.data = mock_plant  # seed stale data so the tolerance path serves it
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.detect.side_effect = TimeoutError()
+        mock_cls.return_value = client
+
+        # Reconnect tick (_client is None): _connect() → detect() times out.
+        result = await coordinator._async_update_data()
+
+        assert result is mock_plant  # last-known served for this tick
+        assert coordinator._client is None  # the fix: don't retain a caps-less client
+        assert coordinator.consecutive_failures == 1
+        client.refresh.assert_not_called()  # never reached refresh on a caps-less client
+
+        # Next tick: detect() now succeeds → clean reconnect, no PlantNotDetected.
+        client.detect.side_effect = None
+        client.load_config = AsyncMock(return_value=mock_plant)
+        client.refresh = AsyncMock(return_value=mock_plant)
+
+        result = await coordinator._async_update_data()
+
+        assert result is mock_plant
+        assert coordinator._client is client
+        assert coordinator.consecutive_failures == 0
+
+
+async def test_cancelled_connect_discards_client(hass, mock_plant):
+    """A cancellation during _connect() (HA cancelling the attempt) must still
+    discard the half-initialised client. CancelledError is a BaseException, not
+    Exception, so the cleanup boundary has to catch it too — and re-raise the
+    cancellation. Regression for #176 review (Codex/Gemini)."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+    coordinator.data = mock_plant
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.detect.side_effect = asyncio.CancelledError()
+        mock_cls.return_value = client
+
+        with pytest.raises(asyncio.CancelledError):
+            await coordinator._async_update_data()
+
+    assert coordinator._client is None  # cleaned up despite the cancellation
+    client.close.assert_awaited_once()  # _reset_client() ran
 
 
 async def test_timeout_increments_consecutive_failures(hass):
@@ -396,9 +457,11 @@ async def test_partial_log_periodic_rewarn(hass, mock_plant, caplog):
     assert coordinator.partial_failures == _PARTIAL_LOG_EVERY
 
 
-async def test_clean_poll_clears_stale_partial_detail(hass, mock_plant):
-    """After a partial, a later clean poll clears last_partial_failures so the
-    diagnostic stops naming a recovered device — but the cumulative counter stays."""
+async def test_clean_poll_retains_partial_detail(hass, mock_plant):
+    """After a partial, a later clean poll RETAINS last_partial_failures and
+    last_partial_at so the diagnostic can still name the bank that dropped after
+    an intermittent failure recovers (#176). The throttle run still ends and the
+    cumulative counter is unaffected."""
     coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
 
     with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
@@ -411,9 +474,12 @@ async def test_clean_poll_clears_stale_partial_detail(hass, mock_plant):
 
         await coordinator._async_update_data()  # partial — detail populated
         assert coordinator.last_partial_failures
-        await coordinator._async_update_data()  # clean — detail cleared
+        assert coordinator.last_partial_at is not None
+        await coordinator._async_update_data()  # clean — detail retained
 
-    assert coordinator.last_partial_failures == []
+    assert coordinator.last_partial_failures  # retained past the clean poll
+    assert coordinator.last_partial_at is not None
+    assert coordinator._consecutive_partials == 0  # throttle run ended
     assert coordinator.partial_failures == 1  # counter is cumulative, retained
 
 
