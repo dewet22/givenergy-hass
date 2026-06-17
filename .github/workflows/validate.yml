@@ -77,7 +77,7 @@ jobs:
       # alarm. Real test failures are absorbed here (they fail `tests`).
       - name: Surface deprecation warnings
         run: |
-          uv run pytest -q -W always::DeprecationWarning 2>&1 | tee dep.log || true
+          uv run pytest -q -W always::DeprecationWarning -W always::PendingDeprecationWarning 2>&1 | tee dep.log || true
           if grep -iE "DeprecationWarning|PendingDeprecationWarning" dep.log >/dev/null; then
             count=$(grep -icE "DeprecationWarning|PendingDeprecationWarning" dep.log)
             echo "::warning title=Deprecation warnings ($count)::Deprecated APIs are in use — migrate before upstream removes them (see log below)."
