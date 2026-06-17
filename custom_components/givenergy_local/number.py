@@ -34,7 +34,7 @@ NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
         native_step=1,
         mode=NumberMode.BOX,
         value_fn=lambda inv: inv.charge_target_soc,
-        set_value_cmd=lambda v: commands.set_charge_target(int(v)),
+        set_value_cmd=lambda v: commands.set_charge_target_enabled(int(v)),
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyNumberEntityDescription(
