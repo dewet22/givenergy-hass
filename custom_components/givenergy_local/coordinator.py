@@ -173,7 +173,14 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self.partial_failures: int = 0
         # The ReadFailure records from the most recent partial poll, surfaced as
         # a diagnostic sensor attribute so users can see *which* device dropped.
+        # Deliberately NOT cleared by a subsequent clean poll (#176): an
+        # intermittent failure would otherwise be un-diagnosable after the fact —
+        # the detail must outlive the recovery so the sensor can still name the
+        # bank that dropped, paired with last_partial_at below.
         self.last_partial_failures: list[ReadFailure] = []
+        # When the most recent partial poll occurred (UTC), retained alongside
+        # last_partial_failures so the diagnostic sensor can show how long ago.
+        self.last_partial_at: datetime | None = None
         # Length of the current unbroken run of partial polls, used only to
         # throttle the partial log (see _record_partial). Reset by a clean poll.
         self._consecutive_partials: int = 0
@@ -211,11 +218,10 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                 else await self._active_update()
             )
 
-            # A fully clean poll — clear any stale partial-failure detail so the
-            # diagnostic sensor stops naming devices that have since recovered,
-            # and end the partial run so the next one warns afresh.
-            # (The cumulative partial_failures counter is left untouched.)
-            self.last_partial_failures = []
+            # A fully clean poll ends the partial run so the next one warns afresh.
+            # The last_partial_failures detail and last_partial_at are deliberately
+            # retained (#176) so the diagnostic sensor can still name the bank that
+            # dropped after an intermittent failure has recovered.
             self._consecutive_partials = 0
             self._mark_success(plant)
             return plant
@@ -309,6 +315,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         """
         self.partial_failures += 1
         self.last_partial_failures = exc.failures
+        self.last_partial_at = dt_util.utcnow()
         self._consecutive_partials += 1
         if self._consecutive_partials == 1:
             _LOGGER.warning(

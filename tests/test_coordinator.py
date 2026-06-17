@@ -434,9 +434,11 @@ async def test_partial_log_periodic_rewarn(hass, mock_plant, caplog):
     assert coordinator.partial_failures == _PARTIAL_LOG_EVERY
 
 
-async def test_clean_poll_clears_stale_partial_detail(hass, mock_plant):
-    """After a partial, a later clean poll clears last_partial_failures so the
-    diagnostic stops naming a recovered device — but the cumulative counter stays."""
+async def test_clean_poll_retains_partial_detail(hass, mock_plant):
+    """After a partial, a later clean poll RETAINS last_partial_failures and
+    last_partial_at so the diagnostic can still name the bank that dropped after
+    an intermittent failure recovers (#176). The throttle run still ends and the
+    cumulative counter is unaffected."""
     coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
 
     with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
@@ -449,9 +451,12 @@ async def test_clean_poll_clears_stale_partial_detail(hass, mock_plant):
 
         await coordinator._async_update_data()  # partial — detail populated
         assert coordinator.last_partial_failures
-        await coordinator._async_update_data()  # clean — detail cleared
+        assert coordinator.last_partial_at is not None
+        await coordinator._async_update_data()  # clean — detail retained
 
-    assert coordinator.last_partial_failures == []
+    assert coordinator.last_partial_failures  # retained past the clean poll
+    assert coordinator.last_partial_at is not None
+    assert coordinator._consecutive_partials == 0  # throttle run ended
     assert coordinator.partial_failures == 1  # counter is cumulative, retained
 
 

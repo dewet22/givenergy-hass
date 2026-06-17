@@ -1091,12 +1091,14 @@ def _partial_failure_attributes(
     """Summarise the most recent partial poll's failed reads for the UI.
 
     Names the device(s) that dropped (e.g. "0x34" for a battery) plus the
-    per-bank detail, so a flaky device can be identified even though its
-    entities stay available with stale data.
+    per-bank detail and when it last happened, so a flaky device can be
+    identified even after the poll has recovered (the detail is retained past
+    a clean poll — #176).
     """
     failures = coordinator.last_partial_failures
     if not failures:
         return None
+    last_partial_at = coordinator.last_partial_at
     return {
         "last_failed_devices": sorted({f"0x{f.device_address:02x}" for f in failures}),
         "last_failure_count": len(failures),
@@ -1106,6 +1108,7 @@ def _partial_failure_attributes(
             f"@ {f.base_register}+{f.register_count}"
             for f in failures
         ],
+        "last_partial_at": last_partial_at.isoformat() if last_partial_at else None,
     }
 
 

@@ -1,5 +1,6 @@
 """Tests for the GivEnergy Local sensor platform."""
 
+from datetime import UTC
 from unittest.mock import MagicMock
 
 import pytest
@@ -391,6 +392,39 @@ async def test_diagnostic_sensors_available_during_coordinator_failure(
 async def test_partial_failures_starts_at_zero(hass, setup_integration):
     state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_partial_failures"))
     assert state.state == "0"
+
+
+def test_partial_failure_attributes_name_device_and_time():
+    """The diagnostic attributes name the dropped bank, count, per-bank detail and
+    when it last happened — retained past a clean poll so an intermittent failure
+    stays diagnosable (#176)."""
+    from datetime import datetime
+
+    from givenergy_modbus.exceptions import ReadFailure
+
+    from custom_components.givenergy_local.sensor import _partial_failure_attributes
+
+    coordinator = MagicMock()
+    coordinator.last_partial_failures = [
+        ReadFailure(
+            device_address=0x34,
+            request_type="ReadInputRegisters",
+            base_register=60,
+            register_count=60,
+        )
+    ]
+    stamp = datetime(2026, 6, 17, 12, 0, tzinfo=UTC)
+    coordinator.last_partial_at = stamp
+
+    attrs = _partial_failure_attributes(coordinator)
+    assert attrs["last_failed_devices"] == ["0x34"]
+    assert attrs["last_failure_count"] == 1
+    assert attrs["last_failures"] == ["0x34 ReadInputRegisters @ 60+60"]
+    assert attrs["last_partial_at"] == stamp.isoformat()
+
+    # No failures recorded → no attributes.
+    coordinator.last_partial_failures = []
+    assert _partial_failure_attributes(coordinator) is None
 
 
 async def test_partial_failures_increments_and_attributes_name_device(
