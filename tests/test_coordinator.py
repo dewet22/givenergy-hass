@@ -172,6 +172,44 @@ async def test_timeout_reaching_tolerance_resets_client(hass, mock_plant):
         assert coordinator._client is None
 
 
+async def test_detect_timeout_on_reconnect_discards_client(hass, mock_plant):
+    """A reconnect whose detect() times out must not retain a capability-less client.
+
+    Otherwise the next tick skips _connect() (the socket still reports connected),
+    calls refresh() with capabilities=None, and the library raises PlantNotDetected.
+    The half-initialised client must be dropped so the next tick reconnects and
+    re-detects cleanly. Regression for #176.
+    """
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+    coordinator.data = mock_plant  # seed stale data so the tolerance path serves it
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.detect.side_effect = TimeoutError()
+        mock_cls.return_value = client
+
+        # Reconnect tick (_client is None): _connect() → detect() times out.
+        result = await coordinator._async_update_data()
+
+        assert result is mock_plant  # last-known served for this tick
+        assert coordinator._client is None  # the fix: don't retain a caps-less client
+        assert coordinator.consecutive_failures == 1
+        client.refresh.assert_not_called()  # never reached refresh on a caps-less client
+
+        # Next tick: detect() now succeeds → clean reconnect, no PlantNotDetected.
+        client.detect.side_effect = None
+        client.load_config = AsyncMock(return_value=mock_plant)
+        client.refresh = AsyncMock(return_value=mock_plant)
+
+        result = await coordinator._async_update_data()
+
+        assert result is mock_plant
+        assert coordinator._client is client
+        assert coordinator.consecutive_failures == 0
+
+
 async def test_timeout_increments_consecutive_failures(hass):
     coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
 

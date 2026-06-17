@@ -441,40 +441,54 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         — required for three-phase, AIO-HV, EMS and other non-default topologies.
         """
         self._client = Client(host=self.host, port=self.port)
-        await self._client.connect()
-        topology_confirmed = True
         try:
-            # The library's battery sweep probes additional packs (0x33+) with a
-            # stingy default budget (probe_timeout=0.5s, probe_retries=1) and
-            # BREAKS at the first non-responding slot — so a single transiently
-            # slow BMS during a reconnect truncates the whole battery chain, and
-            # that reduced topology then gets persisted (a 2nd battery silently
-            # vanished after a reconnect this way). Because of the break, a detect
-            # probes at most one empty slot, so a generous probe budget costs only
-            # ~one extra slow probe on a cold sweep — cheap insurance against
-            # dropping a real pack.
-            await self._client.detect(
-                prior=self._prior_capabilities,
-                probe_timeout=PROBE_TIMEOUT_SECONDS,
-                probe_retries=PROBE_RETRIES,
-            )
-        except PlantTopologyMismatch as exc:
-            topology_confirmed = await self._handle_topology_mismatch(exc)
-        if self._client is None:
-            # The entry was unloaded/reloaded while _handle_topology_mismatch
-            # yielded (retry sleeps) and async_close() discarded the client —
-            # nothing to confirm against, we're shutting down.
-            return
-        confirmed = self._client.plant.capabilities
-        if topology_confirmed and self._on_topology_healed is not None and confirmed is not None:
-            # Full expected topology is present — let the caller clear any
-            # stale "device missing" repair and reconcile entities against the
-            # confirmed topology (covers both restart and mid-session recovery).
-            await self._on_topology_healed(confirmed)
-        self._last_inverter_time = None
-        self._unchanged_ticks = 0
-        self._active_tick = 0
-        _LOGGER.info("Connected to inverter at %s:%s", self.host, self.port)
+            await self._client.connect()
+            topology_confirmed = True
+            try:
+                # The library's battery sweep probes additional packs (0x33+) with a
+                # stingy default budget (probe_timeout=0.5s, probe_retries=1) and
+                # BREAKS at the first non-responding slot — so a single transiently
+                # slow BMS during a reconnect truncates the whole battery chain, and
+                # that reduced topology then gets persisted (a 2nd battery silently
+                # vanished after a reconnect this way). Because of the break, a detect
+                # probes at most one empty slot, so a generous probe budget costs only
+                # ~one extra slow probe on a cold sweep — cheap insurance against
+                # dropping a real pack.
+                await self._client.detect(
+                    prior=self._prior_capabilities,
+                    probe_timeout=PROBE_TIMEOUT_SECONDS,
+                    probe_retries=PROBE_RETRIES,
+                )
+            except PlantTopologyMismatch as exc:
+                topology_confirmed = await self._handle_topology_mismatch(exc)
+            if self._client is None:
+                # The entry was unloaded/reloaded while _handle_topology_mismatch
+                # yielded (retry sleeps) and async_close() discarded the client —
+                # nothing to confirm against, we're shutting down.
+                return
+            confirmed = self._client.plant.capabilities
+            if (
+                topology_confirmed
+                and self._on_topology_healed is not None
+                and confirmed is not None
+            ):
+                # Full expected topology is present — let the caller clear any
+                # stale "device missing" repair and reconcile entities against the
+                # confirmed topology (covers both restart and mid-session recovery).
+                await self._on_topology_healed(confirmed)
+            self._last_inverter_time = None
+            self._unchanged_ticks = 0
+            self._active_tick = 0
+            _LOGGER.info("Connected to inverter at %s:%s", self.host, self.port)
+        except Exception:
+            # connect()/detect() failed before capabilities were established (a
+            # PlantTopologyMismatch is handled above and doesn't reach here). Discard
+            # the half-initialised client so the next tick reconnects and re-detects
+            # cleanly — a connected-but-capability-less client would otherwise be kept
+            # by the timeout-tolerance path, and its next refresh() raises
+            # PlantNotDetected ("requires plant capabilities") (#176).
+            await self._reset_client()
+            raise
 
     async def _handle_topology_mismatch(self, exc: PlantTopologyMismatch) -> bool:
         """Resolve a detect() topology mismatch.
