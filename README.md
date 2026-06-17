@@ -399,6 +399,20 @@ The daily counters reset at midnight; Home Assistant's recorder detects the rese
 
 For anything else, please [open an issue](https://github.com/dewet22/givenergy-hass/issues) with the relevant HA log lines and your inverter model.
 
+## Recreating entity IDs
+
+Occasionally an entity's id falls out of step with its name — usually a legacy slug left behind when an entity was renamed across versions (e.g. `…_grid_export_power` for what is now the **Grid Power** sensor), or a duplicate id created by removing and re-adding the integration. The friendly name is authoritative and nothing is functionally broken, so this is cosmetic — but if you'd like the ids tidied, Home Assistant can regenerate them from the device's ⋮ menu:
+
+![Recreate entity IDs in the device ⋮ menu](docs/recreate-entity-ids-menu.png)
+
+1. Go to **Settings → Devices & Services → GivEnergy Local** and open the device.
+2. Open the **⋮** menu (top right) and choose **Recreate entity IDs**.
+3. The dialog shows how many ids will be renamed versus left unchanged — choose **Update**.
+
+![Recreate entity IDs confirmation dialog](docs/recreate-entity-ids-confirm.png)
+
+Home Assistant keeps each entity's history and long-term statistics across the rename. What it does *not* do is update references in your own automations, scripts, scenes, or dashboards — those still point at the old ids and need editing by hand (the dialog warns about this). The integration's bundled dashboard strategy resolves entities live, so it isn't affected.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
