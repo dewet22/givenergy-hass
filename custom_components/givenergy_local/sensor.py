@@ -1523,6 +1523,12 @@ class GivEnergyBatterySensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Sens
         self.entity_description = description
         self._battery_index = battery_index
         battery = coordinator.data.batteries[battery_index]
+        self._source_ir_registers = _source_ir_registers(type(battery), description.key)
+        interval = coordinator.update_interval
+        self._stale_ir_ceiling = max(
+            _STALE_IR_CEILING_FLOOR,
+            _STALE_IR_CEILING_SCANS * (interval.total_seconds() if interval else 0.0),
+        )
         precision = _derive_display_precision(description, battery)
         if precision is not None:
             self._attr_suggested_display_precision = precision
@@ -1536,6 +1542,31 @@ class GivEnergyBatterySensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Sens
             serial_number=serial,
             via_device=(DOMAIN, coordinator.data.inverter_serial_number),
         )
+
+    @property
+    def available(self) -> bool:
+        """Drop to unavailable when this pack's IR bank has stopped committing (#152).
+
+        Mirrors the inverter gate (#152): when the library holds last-good on a
+        sub-bus splice (#256), the battery bank stops being re-stamped and its
+        register_age() grows — past the ceiling the pack's sensors go unavailable
+        instead of showing a confidently-wrong frozen value (the #176 case). A
+        sensor with no resolvable IR source keeps the default coordinator
+        availability, as does a never-committed bank.
+        """
+        if not super().available:
+            return False
+        if not self._source_ir_registers:
+            return True
+        capabilities = self.coordinator.data.capabilities
+        if capabilities is None or self._battery_index >= len(capabilities.lv_battery_addresses):
+            return True
+        address = capabilities.lv_battery_addresses[self._battery_index]
+        for register in self._source_ir_registers:
+            age = self.coordinator.data.register_age(address, register)
+            if age is not None and age > self._stale_ir_ceiling:
+                return False
+        return True
 
     @property
     def native_value(self) -> Any:

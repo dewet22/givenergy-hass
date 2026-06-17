@@ -986,6 +986,88 @@ def test_sensor_without_ir_source_keeps_default_availability(mock_plant):
     mock_plant.register_age.assert_not_called()
 
 
+def _battery_desc(key: str):
+    return next(d for d in BATTERY_SENSORS if d.key == key)
+
+
+def test_battery_sensor_unavailable_when_backing_ir_block_stale(mock_plant):
+    """A battery's IR bank that stopped committing past the ceiling drops the
+    pack's sensors to unavailable — the path that catches the library keeping
+    last-good on a sub-bus splice (#176/#152). Freshness via Plant.register_age()."""
+    from datetime import timedelta
+
+    from givenergy_modbus.model.register import IR
+
+    from custom_components.givenergy_local.sensor import GivEnergyBatterySensor
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    entity = GivEnergyBatterySensor(coordinator, _battery_desc("soc"), 0)
+    # The conftest battery is a MagicMock with no register LUT, so inject the
+    # source registers the resolver would derive from the real Battery model.
+    entity._source_ir_registers = (IR(64),)
+    mock_plant.register_age = MagicMock()
+
+    # Fresh bank: available, and queried against the battery's device address.
+    mock_plant.register_age.return_value = 35.0
+    assert entity.available is True
+    (addr, reg) = mock_plant.register_age.call_args.args
+    assert addr == 0x32  # conftest capabilities.lv_battery_addresses[0]
+    assert (reg.reg_type, reg.index) == ("IR", 64)
+    # Bank stopped committing 10 minutes ago (ceiling at 30 s interval = 300 s).
+    mock_plant.register_age.return_value = 600.0
+    assert entity.available is False
+    # Never committed: stays available (its value reads None/unknown anyway).
+    mock_plant.register_age.return_value = None
+    assert entity.available is True
+    # Coordinator-level failure still wins regardless of bank ages.
+    mock_plant.register_age.return_value = 35.0
+    coordinator.last_update_success = False
+    assert entity.available is False
+
+
+def test_battery_sensor_without_ir_source_keeps_default_availability(mock_plant):
+    """A battery sensor whose key resolves to no IR registers never consults ages."""
+    from datetime import timedelta
+
+    from custom_components.givenergy_local.sensor import GivEnergyBatterySensor
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    entity = GivEnergyBatterySensor(coordinator, _battery_desc("soc"), 0)
+
+    assert entity._source_ir_registers == ()  # mock battery model has no LUT
+    mock_plant.register_age = MagicMock()
+    assert entity.available is True
+    mock_plant.register_age.assert_not_called()
+
+
+def test_battery_sensor_available_when_index_out_of_range(mock_plant):
+    """A pack index beyond the known battery addresses keeps default availability
+    (bounds guard) rather than indexing past the capabilities list."""
+    from datetime import timedelta
+
+    from givenergy_modbus.model.register import IR
+
+    from custom_components.givenergy_local.sensor import GivEnergyBatterySensor
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    entity = GivEnergyBatterySensor(coordinator, _battery_desc("soc"), 0)
+    entity._battery_index = 5  # beyond capabilities.lv_battery_addresses ([0x32])
+    entity._source_ir_registers = (IR(64),)
+    mock_plant.register_age = MagicMock()
+
+    assert entity.available is True
+    mock_plant.register_age.assert_not_called()
+
+
 # --- #142: monotonic clamp must not accept transient dips as counter resets ---
 
 
