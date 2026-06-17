@@ -391,6 +391,11 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda inv: inv.t_battery,
+        # Three-phase units inherit this single-phase register address but their
+        # firmware never populates it, so it reads frozen rather than unavailable
+        # (#174). Real 3ph battery temperature comes from the HV cluster
+        # (Bcu.cluster_cell_temperature) once HV-stack support lands (#179).
+        single_phase_only=True,
     ),
     GivEnergyInverterSensorDescription(
         # key kept (unique_id suffix); the library field was renamed to

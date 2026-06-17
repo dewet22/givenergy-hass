@@ -96,10 +96,11 @@ def test_setup_filter_skips_bad_descriptor_instead_of_crashing():
 
 def test_single_phase_only_sensors_gated_on_three_phase():
     """single_phase_only descriptions are dropped on three-phase plants but kept on
-    single-phase — otherwise the single-phase-only PV/capacity fields surface as
-    permanently-unavailable orphan entities on three-phase inverters (#94)."""
+    single-phase — the single-phase-only PV/capacity fields would otherwise surface as
+    permanently-unavailable orphan entities on three-phase inverters (#94), and
+    t_battery would read a frozen, unpopulated single-phase register there (#174)."""
     inv = MagicMock()
-    gated_keys = {"p_pv", "e_pv_day", "battery_capacity_kwh"}
+    gated_keys = {"p_pv", "e_pv_day", "battery_capacity_kwh", "t_battery"}
 
     # Every gated key must actually carry the flag (guards against silent drift if
     # one is renamed/removed) ...
@@ -154,9 +155,11 @@ async def test_expected_sensor_count(hass, setup_integration):
 async def test_single_phase_only_sensors_absent_on_three_phase(
     hass, mock_client, mock_config_entry
 ):
-    """On a three-phase plant the single-phase-only PV/capacity sensors must not be
-    created — otherwise they render as permanently-unavailable orphans (#94). The
-    default (single-phase) fixture keeps them, asserted by test_expected_sensor_count.
+    """On a three-phase plant the single-phase-only PV/capacity/battery-temperature
+    sensors must not be created — the PV/capacity ones would render as
+    permanently-unavailable orphans (#94), and t_battery reads a frozen, unpopulated
+    single-phase register on three-phase (#174). The default (single-phase) fixture
+    keeps them, asserted by test_expected_sensor_count.
     """
     from givenergy_modbus.model.inverter import Model
     from givenergy_modbus.model.plant import PlantCapabilities
@@ -174,7 +177,7 @@ async def test_single_phase_only_sensors_absent_on_three_phase(
     await hass.async_block_till_done()
 
     registry = er.async_get(hass)
-    for key in ("p_pv", "e_pv_day", "battery_capacity_kwh"):
+    for key in ("p_pv", "e_pv_day", "battery_capacity_kwh", "t_battery"):
         assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is None, (
             f"{key} should be suppressed on three-phase"
         )
