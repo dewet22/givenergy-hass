@@ -1102,6 +1102,75 @@ def test_battery_sensor_available_when_index_out_of_range(mock_plant):
     mock_plant.register_age.assert_not_called()
 
 
+def _aio_desc(key: str):
+    return next(d for d in AIO_MODULE_SENSORS if d.key == key)
+
+
+def test_aio_module_sensor_unavailable_when_backing_ir_block_stale(mock_plant):
+    """An AIO module's IR bank that stopped committing past the ceiling drops its
+    cell sensors to unavailable, queried against the module's own device address
+    (#176/#152). Mirrors the LV-battery gate via AioBatteryModule.REGISTER_GETTER."""
+    from datetime import timedelta
+
+    from givenergy_modbus.model.register import IR
+
+    from custom_components.givenergy_local.sensor import GivEnergyAioModuleSensor
+
+    module = _mock_aio_module("HX2414G831", 0x50)
+    mock_plant.aio_battery_modules = [module]
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    entity = GivEnergyAioModuleSensor(coordinator, _aio_desc("v_cell_01"), 0)
+    # The mock module is a MagicMock with no register LUT, so inject the
+    # source registers the resolver would derive from the real model.
+    entity._source_ir_registers = (IR(60),)
+    mock_plant.register_age = MagicMock()
+
+    # Fresh bank: available, and queried against the module's own device address.
+    mock_plant.register_age.return_value = 35.0
+    assert entity.available is True
+    (addr, reg) = mock_plant.register_age.call_args.args
+    assert addr == 0x50  # module.module_address, not a positional capabilities lookup
+    assert (reg.reg_type, reg.index) == ("IR", 60)
+    # Bank stopped committing past the ceiling: unavailable.
+    mock_plant.register_age.return_value = 600.0
+    assert entity.available is False
+    # Never committed: stays available.
+    mock_plant.register_age.return_value = None
+    assert entity.available is True
+    # Module absent from the poll: unavailable regardless, and freshness isn't
+    # even consulted (the presence gate short-circuits).
+    mock_plant.aio_battery_modules = []
+    mock_plant.register_age.reset_mock()
+    mock_plant.register_age.return_value = 35.0
+    assert entity.available is False
+    mock_plant.register_age.assert_not_called()
+
+
+def test_aio_module_sensor_without_ir_source_keeps_default_availability(mock_plant):
+    """An AIO sensor whose key resolves to no IR registers never consults ages."""
+    from datetime import timedelta
+
+    from custom_components.givenergy_local.sensor import GivEnergyAioModuleSensor
+
+    module = _mock_aio_module("HX2414G831", 0x50)
+    mock_plant.aio_battery_modules = [module]
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    entity = GivEnergyAioModuleSensor(coordinator, _aio_desc("v_cell_01"), 0)
+
+    assert entity._source_ir_registers == ()  # mock module model has no LUT
+    mock_plant.register_age = MagicMock()
+    assert entity.available is True
+    mock_plant.register_age.assert_not_called()
+
+
 # --- #142: monotonic clamp must not accept transient dips as counter resets ---
 
 

@@ -1596,7 +1596,9 @@ class GivEnergyBatterySensor(
         return self.entity_description.value_fn(batteries[self._battery_index])
 
 
-class GivEnergyAioModuleSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
+class GivEnergyAioModuleSensor(
+    _StaleIRGate, CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity
+):
     """Per-cell sensor for one All-in-One removable battery module (#192).
 
     Each module is its own HA device, linked to the AIO inverter as parent via
@@ -1618,8 +1620,10 @@ class GivEnergyAioModuleSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Se
         # is rebuilt every refresh from whichever module caches decoded, so indices
         # shift when a module drops out — resolving by serial keeps each entity tied
         # to its own module instead of cross-wiring to a neighbour's cell data.
-        serial = coordinator.data.aio_battery_modules[module_index].serial_number
+        module = coordinator.data.aio_battery_modules[module_index]
+        serial = module.serial_number
         self._module_serial = serial
+        self._init_stale_gate(coordinator, type(module), description.key)
         self._attr_unique_id = f"{serial}_{description.key}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, serial)},
@@ -1642,8 +1646,15 @@ class GivEnergyAioModuleSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Se
 
     @property
     def available(self) -> bool:
-        # Unavailable (not cross-wired) when this module is absent from the poll.
-        return super().available and self._module() is not None
+        # Unavailable (not cross-wired) when this module is absent from the poll,
+        # then — like the inverter/battery gates (#152) — when its own IR bank has
+        # stopped committing past the ceiling (a frozen/held module, #176).
+        module = self._module()
+        if not super().available or module is None:
+            return False
+        if not self._source_ir_registers:
+            return True
+        return not self._ir_bank_stale(module.module_address)
 
     @property
     def native_value(self) -> Any:
