@@ -715,10 +715,10 @@ def test_format_validation_report_header_distinguishes_mode():
     dry_text, _ = mod.format_validation_report(findings, duplicates=[], mode="dry-run")
     apply_text, _ = mod.format_validation_report(findings, duplicates=[], mode="candidates")
     applied_text, _ = mod.format_validation_report(findings, duplicates=[], mode="post-migration")
-    assert "dry-run" in dry_text and "current series" in dry_text
+    assert "dry-run" in dry_text and "proposed rebuild" in dry_text
     # Apply mode: not a dry-run, and it's the candidates about to be written.
     assert "candidates to write" in apply_text
-    assert "dry-run" not in apply_text and "current series" not in apply_text
+    assert "dry-run" not in apply_text and "proposed rebuild" not in apply_text
     assert "post-migration" in applied_text
     assert "dry-run" not in applied_text
 

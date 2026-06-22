@@ -19,7 +19,7 @@ the checks only flag *large* changes, never flatness/under-counting.
 
 ## Decisions
 
-1. **Two-phase, whole-run gate (validate-all-before-any-write).** Phase A: build
+1. **Three-phase, whole-run gate (validate-all-before-any-write).** Phase A: build
    and validate **every** candidate in-memory (no writes). Phase B: only if the
    entire plan passes, perform `clear_statistics` + `import_statistics` for all
    entities. This stops *validation*-driven partial writes, but Phase B is **not
@@ -27,9 +27,9 @@ the checks only flag *large* changes, never flatness/under-counting.
    rewritten and N cleared. So on any Phase-B error: abort immediately, report
    exactly which entities were written/cleared, and point to the **mandatory
    pre-apply backup** (the `mysqldump` of the statistics tables) for deterministic
-   recovery — restore is the proven net; there is no auto-rollback. Post-apply
-   validation re-reads and confirms each stored series matches its approved
-   candidate.
+   recovery — restore is the proven net; there is no auto-rollback. Phase C:
+   post-apply validation re-reads and confirms each stored series matches its
+   approved candidate.
 2. **Confirm a coherent segment; offset bidirectional, internals non-negative.**
    Buffer held readings; re-baseline only when they form a coherent cumulative
    segment: the initial **offset** (old level → new segment) may be either

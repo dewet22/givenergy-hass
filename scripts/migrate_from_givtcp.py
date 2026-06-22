@@ -1014,7 +1014,7 @@ def find_fake_reset_shapes(rows: list[dict[str, Any]], ceiling: float) -> list[d
 
 
 _REPORT_HEADERS = {
-    "dry-run": "Validation report (dry-run: current series)",
+    "dry-run": "Validation report (dry-run: proposed rebuild)",
     "candidates": "Validation report (candidates to write)",
     "post-migration": "Validation report (post-migration)",
 }
