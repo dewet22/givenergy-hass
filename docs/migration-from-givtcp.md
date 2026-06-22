@@ -418,9 +418,23 @@ The walk is guarded so source glitches do not leak into the rebuilt curve:
 
 Holding the last good value (both `state` and `sum`) means a transient zero or spike is absorbed: the recovery is measured against the last *trusted* reading, so it lands as a small accepted delta instead of booking the bogus jump.
 
+#### Sustained shifts vs transient glitches
+
+Holding indefinitely would flat-line the series if the counter genuinely moved to a new level — a real shift looks, at first reading, exactly like the start of a glitch. The walk resolves the ambiguity by buffering a run of held readings and only acting once it can tell which it is:
+
+- If the held run settles into a *coherent climbing segment* (consecutive readings whose hour-on-hour deltas are individually plausible), the walk re-baselines onto it. The one-time offset from the old level to the new one is **suppressed** — it is treated as a step, not as energy — while the genuine accumulation *within* the segment is booked. So a sustained shift recovers and keeps counting, rather than flat-lining from the moment it began.
+- If the held run never forms a coherent segment (e.g. corrupt readings that oscillate without ever climbing steadily), it is emitted flat at the last good value and flagged as an **`unresolved`** held run. That is a blocking finding under `--apply` (see the apply gate below).
+
+#### Reset-aware smear vs `gap_undercount`
+
+Multi-hour gaps are handled according to whether they cross a counter reset:
+
+- A gap that does **not** cross a reset boundary is reconstructable from its endpoints: the total accumulated across the gap is known, so it is **smeared** evenly across the intervening hours (respecting day boundaries) rather than dumped onto a single hour.
+- A gap that **crosses a DAILY (`_today`) or ANNUAL (`_this_year`) reset boundary** is not reconstructable from the endpoints — the counter zeroed somewhere inside the gap, and the endpoints alone cannot say how much accumulated before and after the zero. The series is carried **flat** across such a gap and flagged as **`gap_undercount`**. This knowingly under-counts the missing interval rather than fabricating a reading the data cannot support.
+
 `--trust-source-sums` opts out of all of this and restores the legacy path: copy GivTCP's `sum` column verbatim and rebase it once at the join so it continues from where GivTCP left off. Use it only when the source sums are known to be clean — it reintroduces the seam-at-join semantics the rebuild was written to avoid.
 
-### Post-migration validation and residue repair
+### Post-migration validation
 
 After the migration plan is built — in both dry-run and `--apply` — the script re-reads each migrated sum series and prints a read-only **validation report**. It flags:
 
@@ -429,9 +443,17 @@ After the migration plan is built — in both dry-run and `--apply` — the scri
 - duplicate series (two `statistic_id`s carrying the same values), and
 - gaps in coverage.
 
-The script exits non-zero when it finds substantive issues (implausible hours, fake resets, duplicates); gaps are reported for information only and do not change the exit code.
+The script exits non-zero when it finds substantive issues (implausible hours, fake resets, duplicates); gaps are reported for information only and do not change the exit code. Under `--apply` the mandatory `--max-kw` ceiling already bounds the rebuild, so these findings render as advisory; in dry-run they stay blocking as the "consider `--max-kw`" signal.
 
-`--repair-residue` (only meaningful together with `--apply`) acts on those findings: for any sum entity still showing implausible hours, it clears and re-imports the rebuilt series. It is off by default — without it the report is purely advisory.
+### The `--apply` gate (validate-all before any write)
+
+`--apply` runs in three phases so that a single bad entity can never leave the recorder half-migrated:
+
+- **Phase A — build and validate every candidate.** All candidates are rebuilt and validated *before* anything is written. If any one of them carries a blocking finding — an unexplained flat span, a source-movement divergence, a post-cutover GE divergence, or an `unresolved` rebuild run — the whole run is refused with a non-zero exit and nothing is written. Validation is read-only, so no write of any kind precedes this gate.
+- **Phase B — write the approved set, all-or-abort.** This phase is **not transactional**: Home Assistant's WebSocket statistics import has no cross-entity rollback. If a write fails partway through, earlier entities are already written, the in-flight one has been cleared (its import may be incomplete), and the rest are untouched. The script reports exactly which entities fall into each bucket — fully written, mid-write, not touched — and stops. The **mandatory pre-apply backup of the recorder database is the recovery mechanism**: restore it and investigate before re-running. (This is why `--apply` insists you have backed up first.)
+- **Phase C — verify the read-back.** Each written series is re-read and compared against the approved candidate. A mismatch is reported and, again, points at the backup.
+
+`--apply` also requires `--max-kw`, which supplies the authoritative plausibility ceiling for the rebuild rather than the dry-run's adaptive estimate.
 
 ### `battery_*_total_kwh` (charge/discharge) — open question
 

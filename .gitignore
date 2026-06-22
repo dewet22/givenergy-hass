@@ -15,6 +15,7 @@ dist/
 # Claude Code — local-only, not shared
 .claude/settings.local.json
 .claude/worktrees/
+.claude/.inbox-seen
 
 # Node / frontend test tooling
 node_modules/

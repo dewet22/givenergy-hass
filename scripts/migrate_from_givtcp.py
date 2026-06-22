@@ -55,6 +55,22 @@ the user-declared --max-kw value (used directly as the authoritative bound under
 --apply) with the adaptive per-entity p99 estimate as the fallback for dry-run
 previews where no cap is given.
 
+Holding the last good value would flat-line indefinitely if the counter genuinely
+shifted to a new level, so the walk buffers a run of held readings and, once they
+form a coherent climbing segment, re-baselines onto it: the one-time offset from
+the old level to the new one is suppressed (not booked as energy), while the
+genuine accumulation *within* the segment is booked. A held run that never resolves
+into a coherent segment is emitted flat and flagged as `unresolved` — a blocking
+finding (see the apply gate below).
+
+Multi-hour gaps are handled by reset class. A gap that does not cross a counter
+reset is reconstructable from its endpoints, so the accumulated delta is smeared
+across the intervening hours (respecting day boundaries). A gap that crosses a
+DAILY or ANNUAL reset boundary is not reconstructable from the endpoints — the
+counter zeroed somewhere inside the gap — so the series is carried flat across it
+and flagged as `gap_undercount`. That knowingly under-counts the missing interval
+rather than fabricating a reading the data cannot support.
+
 Pass --trust-source-sums to restore the legacy behaviour (copy GivTCP's sum
 column verbatim and rebase at the join) for installs whose GivTCP sums are
 known-good.
@@ -95,8 +111,23 @@ Post-migration validation (automatic, read-only, runs in both dry-run and apply)
   Re-reads each migrated sum series and flags residual implausible hours,
   fake-reset shapes, duplicate series, and gaps. Exits non-zero on substantive
   findings; gaps are reported informationally and do not affect the exit code.
-  Pass --repair-residue (only meaningful with --apply) to clear and re-import the
-  rebuilt series for sum entities that still show implausible hours.
+
+--apply is a three-phase, validate-all-before-any-write sequence:
+  Phase A builds and validates EVERY candidate first. If any candidate carries a
+    blocking finding (an unexplained flat span, source-movement divergence,
+    post-cutover GE divergence, or an unresolved rebuild run), the whole run is
+    refused and nothing is written — a single bad entity cannot leave the recorder
+    half-migrated.
+  Phase B writes the approved set all-or-abort. It is NOT transactional: HA's
+    WebSocket import has no cross-entity rollback, so a failure partway through
+    leaves earlier entities written, the in-flight one cleared (import possibly
+    incomplete), and the rest untouched. The script reports exactly which fall in
+    each bucket and stops. The mandatory pre-apply backup of the recorder database
+    is the recovery mechanism — restore it and investigate before re-running.
+  Phase C re-reads each written series and confirms it matches the approved
+    candidate; a mismatch is reported and again points at the backup.
+
+--apply requires --max-kw (the authoritative plausibility ceiling).
 
 See docs/migration-from-givtcp.md for the full sensor catalogue and design notes.
 """
@@ -110,7 +141,7 @@ import math
 import re
 import sys
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from typing import Any
@@ -242,7 +273,8 @@ def build_entity_id_resolver(
     for ent in entity_entries:
         if ent.get("platform") != _GE_PLATFORM:
             continue
-        device_name = device_name_by_id.get(ent.get("device_id"))
+        device_id = ent.get("device_id")
+        device_name = device_name_by_id.get(device_id) if device_id else None
         original_name = ent.get("original_name")
         entity_id = ent.get("entity_id")
         if not device_name or not original_name or not entity_id:
@@ -303,6 +335,20 @@ _CEILING_MIN_SAMPLES = 24
 _CEILING_PERCENTILE = 99.0
 _CEILING_FACTOR = 1.5
 
+_REBASELINE_HOLDS = 3  # consecutive coherent holds before re-baselining
+_FLAT_LINE_MIN_HOURS = 6  # min span for a flat-line finding
+_MOVEMENT_TOLERANCE_PCT = 5.0  # source-vs-rebuilt movement divergence tolerance
+# A candidate flat span is only blocking if the source-of-truth genuinely moved
+# over that same window — cumulative counters legitimately flat-line for hours
+# during inactivity (PV totals overnight, grid import/export idle for days), and
+# blocking those would refuse almost every real migration. The threshold is the
+# rebuild `ceiling` (the per-hour plausibility bound): a flat is blocking only if
+# the source moved more than one plausible hour's worth of energy across the whole
+# span, i.e. the rebuild flat-lined through real accumulation. This is
+# entity-relative (the ceiling already scales to each entity's hourly rate) rather
+# than a fixed kWh floor, so it holds for both small DAILY counters and large
+# LIFETIME totals.
+
 
 def _percentile(sorted_vals: list[float], p: float) -> float:
     """Nearest-rank (floor-index) percentile of an ascending-sorted, non-empty
@@ -313,7 +359,7 @@ def _percentile(sorted_vals: list[float], p: float) -> float:
     return sorted_vals[int((len(sorted_vals) - 1) * p / 100.0)]
 
 
-def adaptive_ceiling(deltas: list[float | None]) -> float | None:
+def adaptive_ceiling(deltas: Sequence[float | None]) -> float | None:
     """Per-hour plausibility ceiling from an entity's positive state-deltas.
 
     Genuine hourly deltas are bounded by the hardware (inverter clip, battery
@@ -386,61 +432,200 @@ def _is_reset_boundary(
 # ---------------------------------------------------------------------------
 
 
+def _elapsed_hours(prev_start: str, start: str) -> float:
+    """Whole-ish hours between two ISO timestamps, floored at 1 (so the per-hour
+    bound applies to adjacent readings and scales up across a gap)."""
+    delta = (_to_utc(start) - _to_utc(prev_start)).total_seconds() / 3600.0
+    return max(1.0, delta)
+
+
+def _gap_crosses_reset(prev_start: str, start: str, reset_class: ResetClass, tz: ZoneInfo) -> bool:
+    """True if a natural reset boundary for *reset_class* falls STRICTLY within
+    (prev_start, start), in local time. A reading exactly on the boundary is a
+    normal reset row, not a crossed gap. LIFETIME never resets."""
+    if reset_class is ResetClass.LIFETIME:
+        return False
+    a = _to_utc(prev_start).astimezone(tz)
+    b = _to_utc(start).astimezone(tz)
+    if b <= a:
+        return False
+    if reset_class is ResetClass.DAILY:
+        first_midnight = (a + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return first_midnight < b  # strictly before b
+    # ANNUAL: first Jan-1 boundary after a, strictly before b
+    first_jan1 = a.replace(
+        year=a.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+    )
+    return first_jan1 < b
+
+
+def _segment_coherent(held: list[tuple[str, float]], ceiling: float, tz: ZoneInfo) -> bool:
+    """True if the held (start, state) readings form a monotonic cumulative
+    segment: every adjacent internal delta is in [0, ceiling × elapsed_pair].
+    The offset from the prior baseline to held[0] is evaluated by the caller
+    (it may be either direction)."""
+    for (sa, va), (sb, vb) in zip(held, held[1:]):
+        if not (0 <= vb - va <= ceiling * _elapsed_hours(sa, sb)):
+            return False
+    return True
+
+
+def _smear_gap(
+    prev_sum: float, total_delta: float, prev_start: str, end_start: str, tz: ZoneInfo
+) -> list[dict[str, Any]]:
+    """Daily-boundary rows climbing linearly from prev_sum across (prev_start,
+    end_start). The caller emits the real end row (carrying prev_sum+total_delta);
+    these fill the gap so each day shows a plausible share, not one spike."""
+    start_dt = _to_utc(prev_start)
+    end_dt = _to_utc(end_start)
+    total = (end_dt - start_dt).total_seconds()
+    if total <= 0:
+        return []
+    rows: list[dict[str, Any]] = []
+    local = start_dt.astimezone(tz)
+    day = (local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    while True:
+        boundary = day.astimezone(UTC)
+        if boundary >= end_dt:
+            break
+        frac = (boundary - start_dt).total_seconds() / total
+        s = round(prev_sum + total_delta * frac, 6)
+        rows.append({"start": _as_iso(boundary), "sum": s, "state": s})
+        day += timedelta(days=1)
+    return rows
+
+
 def rebuild_sum_walk(
     rows: list[dict[str, Any]],
     reset_class: ResetClass,
     ceiling: float,
     tz: ZoneInfo,
     midnight_tol_hours: float = 2.0,
+    events: dict[str, list] | None = None,
 ) -> list[dict[str, Any]]:
-    """Rebuild the ``sum`` column from ``state`` with reset/plausibility guards.
+    """Rebuild a clean cumulative ``sum`` from ``state``; recover from sustained
+    shifts instead of flat-lining. See the design spec for the full rationale.
 
-    ``rows`` are normalised (ISO ``start``, numeric or None ``state``), sorted
-    ascending. Returns copies with ``sum`` set to a clean cumulative total:
-
-    - delta in [0, ceiling]            -> accept, advance running + last-good state
-    - delta < 0 at a reset boundary    -> reset: add post-reset state to running
-    - delta < 0 off-boundary           -> corruption: hold last-good (state + sum)
-    - delta > ceiling                  -> fake spike: hold last-good
-    - missing state (gap)              -> carry running forward
-
-    Holding last-good leaves ``prev_state`` at the last trusted reading, so the
-    recovery after a transient zero/spike is measured against it (a small,
-    accepted delta) instead of booking the bogus jump.
+    ``events`` (if given) accumulates lists under keys: ``rebaseline``, ``smear``,
+    ``gap_undercount``, ``unresolved`` — surfaced by validation.
     """
+
+    def _ev(key: str, payload: dict) -> None:
+        if events is not None:
+            events.setdefault(key, []).append(payload)
+
     out: list[dict[str, Any]] = []
     running = 0.0
     prev_state: float | None = None
+    prev_start: str | None = None
+    held: list[tuple[str, float]] = []  # (start, state) buffered, not yet emitted
+
+    def _emit(start: str, sum_val: float, state_val: float | None) -> None:
+        out.append(
+            {
+                "start": start,
+                "sum": round(sum_val, 6),
+                "state": None if state_val is None else round(state_val, 6),
+            }
+        )
+
+    def _flush_transient() -> None:
+        # The held run was a transient spike: emit each as last-good (flat).
+        for s, _st in held:
+            _emit(s, running, prev_state)
+        held.clear()
+
+    def _flush_segment() -> None:
+        nonlocal running, prev_state, prev_start
+        # Only reached after data has been accepted (held is non-empty), so the
+        # last-good level is established.
+        assert prev_state is not None
+        base = held[0][1]
+        # offset (held[0] - prev_state) is suppressed; internal deltas are booked.
+        for s, st in held:
+            _emit(s, running + (st - base), running + (st - base))
+        _ev(
+            "rebaseline",
+            {"start": held[0][0], "offset": round(base - prev_state, 3), "held": len(held)},
+        )
+        running += held[-1][1] - base
+        prev_state = held[-1][1]
+        prev_start = held[-1][0]
+        held.clear()
+
     for row in rows:
-        r = dict(row)
         state = row.get("state")
+        start = row["start"]
         if state is None:
-            r["sum"] = round(running, 6)
-            out.append(r)
+            # gap row: carry running forward (do not resolve held on a None row).
+            # Before any data is accepted (prev_state is None) there is no
+            # last-good reading to carry, so emit a genuine None rather than
+            # fabricating a 0.0 state that downstream reset/delta logic would
+            # treat as real.
+            _emit(start, running, prev_state)
             continue
         if prev_state is None:
             running = float(state)
             prev_state = float(state)
-            r["sum"] = round(running, 6)
-            out.append(r)
+            prev_start = start
+            _emit(start, running, running)
             continue
+
+        # prev_start is assigned in lockstep with prev_state, so passing the
+        # prev_state-is-None guard above guarantees prev_start is set too.
+        assert prev_start is not None
+        elapsed = _elapsed_hours(prev_start, start)
+        bound = ceiling * elapsed
+        # (1) Reset-crossing gap FIRST, before any delta-sign branch.
+        if elapsed > 1 and _gap_crosses_reset(prev_start, start, reset_class, tz):
+            _flush_transient()
+            _emit(start, running, running)  # carry flat across the gap
+            _ev("gap_undercount", {"start": start, "from": prev_start})
+            prev_state = float(state)
+            prev_start = start
+            continue
+
         delta = state - prev_state
-        if 0 <= delta <= ceiling:
+        # (2) Accept genuine (possibly multi-hour) accumulation.
+        if 0 <= delta <= bound:
+            _flush_transient()
+            if elapsed > 1:
+                smeared = _smear_gap(running, delta, prev_start, start, tz)
+                if smeared:
+                    out.extend(smeared)
+                    _ev(
+                        "smear",
+                        {"start": start, "energy": round(delta, 3), "hours": round(elapsed, 1)},
+                    )
             running += delta
-            prev_state = state
-        elif delta < 0 and _is_reset_boundary(r["start"], reset_class, tz, midnight_tol_hours):
+            prev_state = float(state)
+            prev_start = start
+            _emit(start, running, running)
+            continue
+        # (3) Boundary reset (intra-reading, no gap).
+        if delta < 0 and _is_reset_boundary(start, reset_class, tz, midnight_tol_hours):
+            _flush_transient()
             running += state
-            prev_state = state
-        else:
-            # Corruption (off-boundary drop) or spike (> ceiling): hold last-good
-            # for BOTH sum and state. `r` is a copy of the corrupt row, so its
-            # `state` still carries the bogus 0/spike; overwrite it with the last
-            # trusted reading. Otherwise the imported state timeline stays
-            # corrupt and find_fake_reset_shapes keeps flagging it (and
-            # --repair-residue can't heal it).
-            r["state"] = prev_state
-        r["sum"] = round(running, 6)
-        out.append(r)
+            prev_state = float(state)
+            prev_start = start
+            _emit(start, running, running)
+            continue
+        # (4) Otherwise: buffer as held; try to confirm a coherent segment.
+        #     Coherence bounds each held pair by its OWN elapsed time (passes the
+        #     (start, state) tuples + ceiling), not the single cumulative `bound`.
+        held.append((start, float(state)))
+        if len(held) >= _REBASELINE_HOLDS and _segment_coherent(held, ceiling, tz):
+            _flush_segment()
+
+    if held:
+        _ev("unresolved", {"start": held[0][0], "count": len(held)})
+        _flush_transient()  # emit last-good; the recorded event makes the gate refuse
+    # Held/smeared rows can be appended after a later-timestamped gap row, so the
+    # raw append order is not guaranteed sorted. Restore the ascending-by-start
+    # contract that import + Phase-C verify_written rely on. Every emitted row
+    # (real, held, smeared) carries a normalised UTC ISO start, so lexical sort
+    # order is chronological.
+    out.sort(key=lambda r: r["start"])
     return out
 
 
@@ -620,6 +805,163 @@ def find_implausible_hours(rows: list[dict[str, Any]], ceiling: float) -> list[d
     return flagged
 
 
+_FLAT_EPSILON = 1e-6
+
+
+def find_flat_line_spans(
+    rows: list[dict[str, Any]], min_hours: int = _FLAT_LINE_MIN_HOURS
+) -> list[dict[str, Any]]:
+    """Maximal runs of consecutive equal-sum rows whose DURATION (from timestamps,
+    not row count) is >= min_hours. Epsilon comparison handles float/synthetic
+    sums. Returns {start, end, hours}; the caller exempts spans that overlap a
+    recorded gap_undercount interval."""
+    spans: list[dict[str, Any]] = []
+    run_start = 0
+    for i in range(1, len(rows) + 1):
+        changed = (
+            i == len(rows)
+            or abs((rows[i].get("sum") or 0.0) - (rows[i - 1].get("sum") or 0.0)) > _FLAT_EPSILON
+        )
+        if not changed:
+            continue
+        last = i - 1
+        if last > run_start:  # at least two rows in the run
+            duration = (
+                _to_utc(rows[last]["start"]) - _to_utc(rows[run_start]["start"])
+            ).total_seconds() / 3600.0
+            if duration >= min_hours:
+                spans.append(
+                    {
+                        "start": rows[run_start]["start"],
+                        "end": rows[last]["start"],
+                        "hours": round(duration, 6),
+                    }
+                )
+        run_start = i
+    return spans
+
+
+def _unexplained_flat_portions(
+    span: dict[str, Any], covered_intervals: list[tuple[str, str]]
+) -> list[dict[str, Any]]:
+    """Subtract the covered (gap_undercount) intervals from a flat *span* and
+    return the residual contiguous pieces ``{start, end, hours}`` left unexplained.
+
+    A short accepted reset gap that merely touches a multi-day flat does NOT
+    exempt the whole span — only the overlapping slice is removed, so a residual
+    portion can still be long enough to block.
+    """
+    span_a = _to_utc(span["start"])
+    span_b = _to_utc(span["end"])
+    if span_b <= span_a:
+        return []
+    # Clip each covered interval to the span, keep non-empty overlaps, merge.
+    clipped: list[tuple[datetime, datetime]] = []
+    for cs, ce in covered_intervals:
+        lo = max(span_a, _to_utc(cs))
+        hi = min(span_b, _to_utc(ce))
+        if hi > lo:
+            clipped.append((lo, hi))
+    clipped.sort()
+    merged: list[tuple[datetime, datetime]] = []
+    for lo, hi in clipped:
+        if merged and lo <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+        else:
+            merged.append((lo, hi))
+    # Walk the gaps between the merged covered intervals.
+    residual: list[dict[str, Any]] = []
+    cursor = span_a
+    for lo, hi in merged:
+        if lo > cursor:
+            residual.append(_flat_piece(cursor, lo))
+        cursor = max(cursor, hi)
+    if span_b > cursor:
+        residual.append(_flat_piece(cursor, span_b))
+    return residual
+
+
+def _flat_piece(a: datetime, b: datetime) -> dict[str, Any]:
+    return {
+        "start": _as_iso(a),
+        "end": _as_iso(b),
+        "hours": round((b - a).total_seconds() / 3600.0, 6),
+    }
+
+
+def _flat_span_source_blocking(
+    piece: dict[str, Any],
+    source_rows: list[dict[str, Any]] | None,
+    reset_class: ResetClass,
+    tz: ZoneInfo,
+    ceiling: float | None,
+) -> bool:
+    """Is a residual candidate flat span over ``piece`` actually a lost-energy
+    defect (blocking), or legitimate inactivity (benign)?
+
+    Blocking iff the SOURCE genuinely moved over the same window — i.e. the rebuild
+    flat-lined through real accumulation. The threshold is the rebuild ``ceiling``
+    (one plausible hour's worth of energy); a span where the source moved no more
+    than that is treated as inactivity and dropped (see _FLAT_LINE threshold note).
+
+    Fail-closed: if there is no source reference (``source_rows`` is None, which
+    should not happen for a built candidate) or no ceiling to size the threshold
+    against, fall back to the old behaviour and treat the flat as blocking rather
+    than silently passing.
+    """
+    if source_rows is None or ceiling is None:
+        return True
+    lo, hi = piece["start"], piece["end"]
+    # `start` values are normalised UTC ISO strings, so the inclusive lexical
+    # window matches the chronological [start, end] span.
+    span_source = [s for s in source_rows if lo <= s["start"] <= hi]
+    return _reset_aware_movement(span_source, reset_class, tz) > ceiling
+
+
+def _reset_aware_movement(
+    rows: list[dict[str, Any]], reset_class: ResetClass, tz: ZoneInfo
+) -> float:
+    """Genuine accumulation across *rows*: positive consecutive deltas, plus the
+    post-reset state at a legitimate reset boundary (a reset drops the raw value,
+    so max(0, Δ) would lose that day's pre-reset accumulation otherwise)."""
+    total = 0.0
+    prev = None
+    for r in rows:
+        st = r.get("state")
+        if st is None:
+            continue
+        if prev is not None:
+            if st < prev and _is_reset_boundary(r["start"], reset_class, tz, 2.0):
+                total += st  # post-reset accumulation
+            elif st >= prev:
+                total += st - prev  # genuine forward movement
+            # an off-boundary drop contributes nothing (corruption)
+        prev = st
+    return total
+
+
+def compare_source_movement(
+    source_movement: float,
+    rebuilt_movement: float,
+    upward_offsets: float,
+    tol_pct: float = _MOVEMENT_TOLERANCE_PCT,
+) -> dict[str, Any]:
+    """Compare rebuilt movement to *cleaned expected* = source movement minus the
+    recorded UPWARD rebase offsets the rebuild intentionally dropped. Downward
+    offsets were never in the positive source movement, so they are NOT
+    subtracted. Movements are reset-aware (see _reset_aware_movement) over the
+    same aligned window."""
+    expected = source_movement - upward_offsets
+    denom = abs(expected) if abs(expected) > 1e-9 else 1.0
+    diff_pct = abs(rebuilt_movement - expected) / denom * 100.0
+    return {
+        "expected": round(expected, 3),
+        "rebuilt": round(rebuilt_movement, 3),
+        "diff_pct": round(diff_pct, 2),
+        "flagged": diff_pct > tol_pct,
+    }
+
+
 def _dedup_series(
     series_by_id: dict[str, list[dict[str, Any]]],
     units_by_id: dict[str, str | None],
@@ -630,8 +972,7 @@ def _dedup_series(
     SOC, temperature) carry no sum, so their rows come back with ``sum=None`` and
     two genuinely different mean series over the same hours collapse to identical
     ``(start, None)`` key tuples — a false-positive duplicate.  Only sum entities
-    (those present in ``units_by_id`` — the same signal ``_repairable`` uses) are
-    candidates for duplicate detection.
+    (those present in ``units_by_id``) are candidates for duplicate detection.
     """
     return {sid: rows for sid, rows in series_by_id.items() if sid in units_by_id}
 
@@ -679,51 +1020,175 @@ def find_fake_reset_shapes(rows: list[dict[str, Any]], ceiling: float) -> list[d
     return shapes
 
 
+_REPORT_HEADERS = {
+    "dry-run": "Validation report (dry-run: proposed rebuild)",
+    "candidates": "Validation report (candidates to write)",
+    "post-migration": "Validation report (post-migration)",
+}
+
+
+def _gate_blocking(finding: dict[str, Any]) -> bool:
+    """The single source of truth for what blocks an ``--apply``.
+
+    A finding is gate-blocking iff it carries an unexplained flat span, an
+    unresolved held run, a flagged source-movement divergence, or a flagged
+    post-cutover GE-preservation divergence. Implausible hours, fake-reset
+    shapes and duplicate series are deliberately NOT in this set — under
+    ``--apply`` the mandatory ``--max-kw`` ceiling already bounds the rebuild,
+    so these are diagnostics only and never refuse a run.
+
+    Both :func:`run_validation` (the authoritative gate) and
+    :func:`format_validation_report` (the apply-mode exit code) derive their
+    blocking decision from here, so the two cannot drift.
+    """
+    src = finding.get("source_comparison") or {}
+    ge_pres = finding.get("ge_preservation") or {}
+    return bool(
+        finding.get("flat_lines")
+        or finding.get("unresolved")
+        or src.get("flagged")
+        or ge_pres.get("flagged")
+    )
+
+
 def format_validation_report(
-    findings: dict[str, dict[str, list]],
+    findings: dict[str, dict[str, Any]],
     duplicates: list[tuple[str, str]],
-    applied: bool = True,
+    mode: str = "dry-run",
 ) -> tuple[str, int]:
     """Render the validation findings; return (text, exit_code).
 
-    exit_code is non-zero when substantive issues exist (implausible hours,
-    fake-reset shapes, or duplicate series). Gaps are reported informationally
-    and do not affect the exit code.
+    Each finding renders with an explicit marker. The exit code is mode-aware:
 
-    ``applied`` distinguishes a post-apply run from a dry-run.  On a dry run the
-    series read back are the *current* (pre-migration) series, so any findings
-    reflect pre-existing corruption rather than migration output — the header
-    says so.
+    - In **apply mode** (``candidates`` / ``post-migration``) the exit code is
+      non-zero IFF a gate-blocking finding exists — exactly the set
+      :func:`_gate_blocking` defines (unexplained flat span, unresolved held run,
+      flagged source-movement or GE-preservation divergence). Those render
+      ``[BLOCKING]``. Implausible hours, fake-reset shapes and duplicate series
+      are diagnostics (the ``--max-kw`` ceiling already bounds the rebuild):
+      they render ``[ADVISORY]`` and do NOT set the exit code. The invariant: in
+      apply mode ``exit_code == 0`` iff the gate would allow the apply.
+    - In **dry-run mode** there is no gate, so implausible / fake-reset /
+      duplicate residue stays ``[BLOCKING]`` and exit-affecting — the useful
+      "consider --max-kw" signal.
+
+    ``[ACCEPTED]`` findings (rebaseline / smear / gap-undercount) and gaps print
+    in every mode but never set the exit code. The apply-mode blocking decision
+    derives from :func:`_gate_blocking`, the same source the :func:`run_validation`
+    gate uses, so the report and the gate cannot drift.
+
+    ``mode`` selects the header and names what was validated:
+
+    - ``"dry-run"`` — the in-memory candidate series the script would write,
+      previewed without touching the recorder; findings reflect what migration
+      *would* produce.
+    - ``"candidates"`` — same in-memory candidates, validated under ``--apply``
+      just before Phase B writes them (the apply gate reads this).
+    - ``"post-migration"`` — series re-read from the recorder after a write.
+
+    In every mode the findings are computed against the rebuilt candidate, never
+    the pre-migration series.
     """
-    header = (
-        "Validation report (post-migration)"
-        if applied
-        else "Validation report (dry-run: current series)"
-    )
+    header = _REPORT_HEADERS[mode]
     lines = ["", header, "─" * 72]
-    substantive = False
+    blocking = False
+    # In apply mode the gate (and the repair behind it) own implausible /
+    # fake-reset / duplicate residue, so they are advisory only. In a dry run
+    # they remain exit-affecting diagnostics.
+    apply_mode = mode != "dry-run"
+    diag_marker = "ADVISORY" if apply_mode else "BLOCKING"
     for ge_id, f in findings.items():
         impl = f.get("implausible", [])
         fakes = f.get("fake_resets", [])
         gaps = f.get("gaps", [])
-        if not (impl or fakes or gaps):
+        flat_lines = f.get("flat_lines", [])
+        rebaseline = f.get("rebaseline", [])
+        smear = f.get("smear", [])
+        gap_undercount = f.get("gap_undercount", [])
+        unresolved = f.get("unresolved", [])
+        src = f.get("source_comparison") or {}
+        ge_pres = f.get("ge_preservation") or {}
+        src_flagged = bool(src.get("flagged"))
+        ge_pres_flagged = bool(ge_pres.get("flagged"))
+        if not (
+            impl
+            or fakes
+            or gaps
+            or flat_lines
+            or rebaseline
+            or smear
+            or gap_undercount
+            or unresolved
+            or src_flagged
+            or ge_pres_flagged
+        ):
             continue
         lines.append(f"  {ge_id}")
+        # Diagnostics the apply gate excludes (advisory under --apply, blocking in
+        # a dry run).
         for row in impl:
-            substantive = True
-            lines.append(f"    implausible +{row['change']} at {row['start']}")
+            blocking = blocking or not apply_mode
+            lines.append(f"    [{diag_marker}] implausible +{row['change']} at {row['start']}")
         for row in fakes:
-            substantive = True
-            lines.append(f"    fake-reset shape (+{row['recovery']}) at {row['start']}")
+            blocking = blocking or not apply_mode
+            lines.append(
+                f"    [{diag_marker}] fake-reset shape (+{row['recovery']}) at {row['start']}"
+            )
+        # Gate-blocking findings.
+        for fl in flat_lines:
+            blocking = True
+            lines.append(
+                f"    [BLOCKING] unexplained flat {fl['hours']}h: {fl['start']} -> {fl['end']}"
+            )
+        for u in unresolved:
+            blocking = True
+            lines.append(f"    [BLOCKING] unresolved held run ({u['count']}) at {u['start']}")
+        if src_flagged:
+            blocking = True
+            lines.append(
+                f"    [BLOCKING] source movement divergence {src['diff_pct']}%"
+                f" (expected {src['expected']}, rebuilt {src['rebuilt']})"
+            )
+        if ge_pres_flagged:
+            blocking = True
+            lines.append(
+                f"    [BLOCKING] GE-preservation divergence {ge_pres['diff_pct']}%"
+                f" (expected {ge_pres['expected']}, rebuilt {ge_pres['rebuilt']})"
+            )
+        # Accepted findings (warn-not-block).
+        for rb in rebaseline:
+            lines.append(
+                f"    [ACCEPTED] rebaseline (offset {rb['offset']}, held {rb['held']})"
+                f" at {rb['start']}"
+            )
+        for sm in smear:
+            lines.append(
+                f"    [ACCEPTED] smear ({sm['energy']} over {sm['hours']}h) at {sm['start']}"
+            )
+        for gu in gap_undercount:
+            lines.append(f"    [ACCEPTED] gap-undercount: {gu['from']} -> {gu['start']}")
+        # Informational.
         for g in gaps:
             lines.append(f"    gap {g['hours']}h: {g['after']} -> {g['before']}")
     for a, b in duplicates:
-        substantive = True
-        lines.append(f"  duplicate series: {a} == {b}")
-    if not substantive and not any(f.get("gaps") for f in findings.values()):
+        blocking = blocking or not apply_mode
+        lines.append(f"  [{diag_marker}] duplicate series: {a} == {b}")
+    if (
+        not blocking
+        and not duplicates
+        and not any(
+            f.get("gaps")
+            or f.get("rebaseline")
+            or f.get("smear")
+            or f.get("gap_undercount")
+            or f.get("implausible")
+            or f.get("fake_resets")
+            for f in findings.values()
+        )
+    ):
         lines.append("  no issues found")
     lines.append("─" * 72)
-    return "\n".join(lines), (1 if substantive else 0)
+    return "\n".join(lines), (1 if blocking else 0)
 
 
 # ---------------------------------------------------------------------------
@@ -826,6 +1291,14 @@ class MigrationResult:
         "merged_rows",
         "sum_at_cutover",
         "error",
+        "rebuilt_rows",
+        "events",
+        "source_movement",
+        "upward_offsets",
+        "post_movement",
+        "ge_post_movement",
+        "source_rows",
+        "metadata",
     )
 
     def __init__(self, description: str, ge_id: str, warn_diverged: bool = False) -> None:
@@ -840,6 +1313,18 @@ class MigrationResult:
         self.merged_rows = 0
         self.sum_at_cutover: float | None = None
         self.error: str | None = None
+        # Candidate payload (built in migrate_entity, written in Phase B).
+        self.rebuilt_rows: list[dict[str, Any]] | None = None
+        self.events: dict[str, list] | None = None
+        self.source_movement: float = 0.0
+        self.upward_offsets: float = 0.0
+        self.post_movement: float = 0.0
+        self.ge_post_movement: float = 0.0
+        # Source-of-truth reference state timeline the candidate was built from.
+        # Used by run_validation to source-correlate flat spans: a candidate flat
+        # is only blocking if the source genuinely moved over that same window.
+        self.source_rows: list[dict[str, Any]] | None = None
+        self.metadata: dict[str, Any] | None = None
 
 
 _EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
@@ -852,7 +1337,6 @@ async def migrate_entity(
     description: str,
     cutover: datetime,
     ge_unit: str,
-    apply: bool,
     ge_known: bool,
     reset_class: ResetClass,
     tz: ZoneInfo,
@@ -900,12 +1384,39 @@ async def migrate_entity(
     # but worth surfacing — flag it without blocking.
     r.warn_no_ge_pre = r.ge_pre_rows == 0
 
+    metadata = {
+        "has_mean": False,
+        "has_sum": True,
+        "name": None,
+        "source": "recorder",
+        "statistic_id": ge_id,
+        "unit_of_measurement": ge_unit,
+    }
+
     if trust_source_sums:
         # Legacy path: copy GivTCP sums + rebase GE-post (unchanged behaviour).
         last_givtcp_sum = givtcp_stats[-1].get("sum") or 0.0
         r.sum_at_cutover = last_givtcp_sum
         rebased_post = rebase_sum(ge_post, last_givtcp_sum)
         merged = givtcp_stats + rebased_post
+        r.rebuilt_rows = merged
+        # Source-of-truth reference for flat-span correlation (analogous to the
+        # rebuild branch's merged_states).
+        r.source_rows = givtcp_stats + ge_post
+        # Populate the movement fields so run_validation's comparisons see matching
+        # movement. This path TRUSTS the GivTCP sums, so the candidate pre-cutover
+        # IS the source (`givtcp_stats` by construction) — source and candidate
+        # movement match and compare_source_movement is non-divergent. Without
+        # this, the fields stay at their zero defaults and any trusted-source
+        # migration with real movement is falsely flagged divergent.
+        cutover_str = _as_iso(cutover)
+        pre = [s for s in givtcp_stats if s["start"] < cutover_str]
+        r.source_movement = _reset_aware_movement(pre, reset_class, tz)
+        r.upward_offsets = 0.0  # no rebase offsets suppressed in the trust path
+        post = [s for s in merged if s["start"] >= cutover_str]
+        r.post_movement = _reset_aware_movement(post, reset_class, tz)
+        r.ge_post_movement = _reset_aware_movement(ge_post, reset_class, tz)
+        r.metadata = metadata
     else:
         # Rebuild path (default): one continuous sum from the concatenated state
         # timeline, plausibility- and reset-guarded.
@@ -926,58 +1437,45 @@ async def migrate_entity(
             # refuse rather than import an unguarded sum.
             r.status = "insufficient_data"
             return r
-        merged = rebuild_sum_walk(merged_states, reset_class, ceiling, tz)
-        r.sum_at_cutover = next(
-            (row["sum"] for row in merged if _to_utc(row["start"]) >= cutover), None
-        )
+        events: dict[str, list] = {}
+        merged = rebuild_sum_walk(merged_states, reset_class, ceiling, tz, events=events)
+        r.rebuilt_rows = merged
+        r.events = events
+        # The source-of-truth state timeline the candidate was built from — the
+        # reference run_validation source-correlates flat spans against. Its
+        # timestamps align with the candidate pre-cutover (the candidate derives
+        # from it).
+        r.source_rows = merged_states
+        # reset-aware source movement over the pre-cutover window, the UPWARD
+        # offsets the rebuild suppressed (cleaned comparison), and the rebuilt
+        # movement over the post-cutover window (GE-preservation check). All
+        # `start` values are normalised UTC ISO strings, so lexical `<`/`>=`
+        # against the normalised cutover is chronological.
+        cutover_str = _as_iso(cutover)
+        pre = [s for s in merged_states if s["start"] < cutover_str]
+        r.source_movement = _reset_aware_movement(pre, reset_class, tz)
+        r.upward_offsets = sum(e["offset"] for e in events.get("rebaseline", []) if e["offset"] > 0)
+        post = [s for s in merged if s["start"] >= cutover_str]
+        r.post_movement = _reset_aware_movement(post, reset_class, tz)
+        # original GE rows over the SAME post-cutover window, for preservation check
+        r.ge_post_movement = _reset_aware_movement(ge_post, reset_class, tz)
+        r.sum_at_cutover = next((row["sum"] for row in merged if row["start"] >= cutover_str), None)
+        r.metadata = metadata
     r.merged_rows = len(merged)
-
-    if not apply:
-        r.status = "dry_run"
-        return r
-
-    try:
-        await ws.clear_statistics([ge_id])
-        await ws.import_statistics(
-            metadata={
-                "has_mean": False,
-                "has_sum": True,
-                "name": None,
-                "source": "recorder",
-                "statistic_id": ge_id,
-                "unit_of_measurement": ge_unit,
-            },
-            stats=merged,
-        )
-        r.status = "migrated"
-    except Exception as exc:
-        r.status = "error"
-        r.error = str(exc)
-
+    r.status = "candidate"  # built, not yet validated/written
     return r
 
 
 # ---------------------------------------------------------------------------
-# Post-migration validation + opt-in residue repair
+# Post-migration validation
 # ---------------------------------------------------------------------------
-
-
-def _repairable(ge_id: str, units_by_id: dict[str, str | None], implausible: list) -> bool:
-    """Return True only when *ge_id* is a sum entity AND has implausible findings.
-
-    Mean entities (power, SOC, temperature) are not present in ``units_by_id``
-    (which is built exclusively from the sum migration plan).  Admitting them to
-    the repair path would clear their mean series and re-import them as a sum
-    series, corrupting the data.  This guard is the single enforcement point.
-    """
-    return bool(implausible) and ge_id in units_by_id
 
 
 def _repair_reset_class(
     ge_id: str,
     reset_classes: dict[str, ResetClass] | None,
 ) -> ResetClass:
-    """Reset class for residue repair: prefer the migration plan's authoritative
+    """Reset class for validation: prefer the migration plan's authoritative
     class (keyed by resolved ge_id), falling back to suffix inference. The plan
     value survives user-renamed entity IDs that no longer carry a known suffix.
     """
@@ -993,96 +1491,157 @@ def _state_deltas(rows: list[dict[str, Any]]) -> list[float]:
     ]
 
 
+def _gap_undercount_intervals(events: dict[str, list] | None) -> list[tuple[str, str]]:
+    """The covered intervals for a candidate's accepted reset gaps.
+
+    Each ``gap_undercount`` event carries ``from`` (the prior reading's start) and
+    ``start`` (the post-gap reading); the carried-flat interval is ``[from, start]``.
+    """
+    out: list[tuple[str, str]] = []
+    for e in (events or {}).get("gap_undercount", []):
+        frm, start = e.get("from"), e.get("start")
+        if frm and start:
+            out.append((frm, start))
+    return out
+
+
 async def run_validation(
     ws: HAWebSocket,
     results: list[MigrationResult],
     tz: ZoneInfo,
     units_by_id: dict[str, str | None] | None = None,
     reset_classes: dict[str, ResetClass] | None = None,
-    repair: bool = False,
-    applied: bool = True,
+    applying: bool = False,
     max_kwh: float | None = None,
-) -> int:
-    """Re-read each migrated/previewed sum series, report validation findings.
+    cutover: datetime | None = None,
+) -> tuple[int, bool]:
+    """Validate each built **candidate** (``r.rebuilt_rows``) and report findings.
 
-    Read-only by default — runs in both dry-run and apply. In dry-run mode the
-    series read back are the *current* (unmigrated) HA series, not a
-    post-migration result.  When ``repair`` is set (only when --apply and
-    --repair-residue are both given), entities with residual implausible hours
-    have their rebuilt series cleared and re-imported; ``units_by_id`` supplies
-    the unit of measurement for the re-import metadata.  Only sum entities
-    (those present in ``units_by_id``) are eligible for repair — mean entities
-    are never touched.
-    Returns the validation exit code from ``format_validation_report``.
+    Operates on the in-memory candidate — it does NOT re-read HA — so the same
+    findings drive both the dry-run preview and the Phase-A apply gate. Per
+    candidate it records: ``gaps`` (informational); ``flat_lines`` clipped by the
+    accepted ``gap_undercount`` intervals to the residual *unexplained* portions
+    (a residual portion >= ``_FLAT_LINE_MIN_HOURS`` is blocking); a
+    ``source_comparison`` against the cleaned pre-cutover source movement; a
+    ``ge_preservation`` comparison of the post-cutover rebuilt vs GE-source
+    movement; and the raw rebuild ``events`` (``rebaseline``/``smear``/
+    ``gap_undercount`` are accepted, ``unresolved`` blocks).
+
+    ``applying`` selects the report header: under ``--apply`` the findings describe
+    the candidates about to be written ("candidates to write"); otherwise they are
+    a dry-run preview of the current series.
+
+    This is a read-only validation pass, so no write of any kind ever precedes
+    the apply gate.
+
+    Returns ``(exit_code, blocking)``: the report exit code, and a blocking flag
+    true when any candidate has an unexplained flat >= threshold, a flagged
+    source comparison, a flagged GE-preservation comparison, or an unresolved
+    held run.
     """
     units_by_id = units_by_id or {}
-    findings: dict[str, dict[str, list]] = {}
+    findings: dict[str, dict[str, Any]] = {}
     series_by_id: dict[str, list[dict[str, Any]]] = {}
-    to_repair: list[str] = []
+    blocking = False
 
     for r in results:
-        if r.status not in ("migrated", "dry_run"):
+        if r.status != "candidate":
             continue
-        try:
-            raw = await ws.get_statistics([r.ge_id], _EPOCH)
-        except Exception:  # nosec B112 — validation is best-effort; skip unreadable series
-            continue
-        rows = [_normalise(s) for s in raw.get(r.ge_id, [])]
+        rows = r.rebuilt_rows or []
         if not rows:
             continue
+        events = r.events or {}
         gaps = classify_gaps(rows)
+        rc = _repair_reset_class(r.ge_id, reset_classes)
         ceiling = effective_ceiling(adaptive_ceiling(_state_deltas(rows)), max_kwh)
-        if ceiling is None:
-            # No guard derivable (too little clean data, no cap): record gaps but
-            # skip the ceiling-dependent checks rather than crash on a None bound.
-            findings[r.ge_id] = {"implausible": [], "fake_resets": [], "gaps": gaps}
-            series_by_id[r.ge_id] = rows
-            continue
-        implausible = find_implausible_hours(rows, ceiling)
-        fake_resets = find_fake_reset_shapes(rows, ceiling)
-        findings[r.ge_id] = {
+
+        # Residual unexplained flats: clip each flat span by the accepted
+        # gap_undercount intervals, then keep a contiguous residual >= threshold
+        # only when the SOURCE genuinely moved over that same window. Cumulative
+        # counters legitimately flat-line during inactivity (overnight PV totals,
+        # idle grid import/export), so a flat where the source was also flat is
+        # benign and must not block. See _flat_span_source_blocking.
+        covered = _gap_undercount_intervals(events)
+        flat_lines: list[dict[str, Any]] = []
+        for span in find_flat_line_spans(rows):
+            for piece in _unexplained_flat_portions(span, covered):
+                if piece["hours"] >= _FLAT_LINE_MIN_HOURS and _flat_span_source_blocking(
+                    piece, r.source_rows, rc, tz, ceiling
+                ):
+                    flat_lines.append(piece)
+
+        # Pre-cutover candidate movement vs cleaned source movement. All `start`
+        # values are normalised UTC ISO strings, so lexical `<` against the
+        # normalised cutover is chronological.
+        if cutover is not None:
+            cutover_str = _as_iso(cutover)
+            pre = [s for s in rows if s["start"] < cutover_str]
+        else:
+            pre = rows
+        candidate_pre_movement = _reset_aware_movement(pre, rc, tz)
+        source_comparison = compare_source_movement(
+            r.source_movement, candidate_pre_movement, r.upward_offsets
+        )
+
+        # Post-cutover GE-preservation: rebuilt movement must match GE source.
+        ge_preservation = compare_source_movement(r.ge_post_movement, r.post_movement, 0.0)
+
+        unresolved = events.get("unresolved", [])
+        implausible = find_implausible_hours(rows, ceiling) if ceiling is not None else []
+        fake_resets = find_fake_reset_shapes(rows, ceiling) if ceiling is not None else []
+
+        finding = {
             "implausible": implausible,
             "fake_resets": fake_resets,
             "gaps": gaps,
+            "flat_lines": flat_lines,
+            "source_comparison": source_comparison,
+            "ge_preservation": ge_preservation,
+            "rebaseline": events.get("rebaseline", []),
+            "smear": events.get("smear", []),
+            "gap_undercount": events.get("gap_undercount", []),
+            "unresolved": unresolved,
         }
+        # Authoritative apply gate: derived from the same definition the report's
+        # apply-mode exit code uses, so the gate and the report cannot diverge.
+        blocking = blocking or _gate_blocking(finding)
+        findings[r.ge_id] = finding
         series_by_id[r.ge_id] = rows
-        if repair and _repairable(r.ge_id, units_by_id, implausible):
-            to_repair.append(r.ge_id)
 
     duplicates = find_duplicate_series(_dedup_series(series_by_id, units_by_id))
-    text, exit_code = format_validation_report(findings, duplicates, applied=applied)
+    mode = "candidates" if applying else "dry-run"
+    text, exit_code = format_validation_report(findings, duplicates, mode=mode)
     print(text)
 
-    if repair and to_repair:
-        print()
-        print(
-            f"  Repairing {len(to_repair)} entit{'y' if len(to_repair) == 1 else 'ies'} with"
-            " residual implausible hours …"
-        )
-        for ge_id in to_repair:
-            rows = series_by_id[ge_id]
-            # to_repair is only populated when the ceiling was non-None above, so
-            # this re-derivation is also non-None; assert keeps mypy honest.
-            ceiling = effective_ceiling(adaptive_ceiling(_state_deltas(rows)), max_kwh)
-            assert ceiling is not None
-            rc = _repair_reset_class(ge_id, reset_classes)
-            rebuilt = rebuild_sum_walk(rows, rc, ceiling, tz)
-            unit = units_by_id.get(ge_id)
-            await ws.clear_statistics([ge_id])
-            await ws.import_statistics(
-                metadata={
-                    "has_mean": False,
-                    "has_sum": True,
-                    "name": None,
-                    "source": "recorder",
-                    "statistic_id": ge_id,
-                    "unit_of_measurement": unit,
-                },
-                stats=rebuilt,
-            )
-            print(f"    repaired {ge_id}")
+    return exit_code, blocking
 
-    return exit_code
+
+async def write_candidate(ws: HAWebSocket, r: MigrationResult) -> None:
+    """Phase B: clear + import one approved candidate. Not transactional across
+    entities — the caller aborts + reports on the first failure (backup recovers)."""
+    if r.metadata is None or r.rebuilt_rows is None:
+        # Every entity that reaches "candidate" status has both set (migrate_entity).
+        # Guard before the destructive clear so a malformed candidate can't clear
+        # the existing series and then fail the import, leaving it empty.
+        raise ValueError(f"candidate {r.ge_id} is missing metadata or rebuilt rows")
+    await ws.clear_statistics([r.ge_id])
+    await ws.import_statistics(metadata=r.metadata, stats=r.rebuilt_rows)
+
+
+async def verify_written(ws: HAWebSocket, r: MigrationResult) -> bool:
+    """Phase C: re-read the stored series and confirm it matches the approved
+    candidate — row count, per-row normalized `start` timestamp, AND per-row sum
+    within epsilon (equal sums with shifted/reordered timestamps must NOT pass)."""
+    raw = await ws.get_statistics([r.ge_id], _EPOCH)
+    stored = [_normalise(s) for s in raw.get(r.ge_id, [])]
+    rebuilt = r.rebuilt_rows or []
+    if len(stored) != len(rebuilt):
+        return False
+    return all(
+        a["start"] == b["start"]
+        and abs((a.get("sum") or 0.0) - (b.get("sum") or 0.0)) <= _FLAT_EPSILON
+        for a, b in zip(stored, rebuilt)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1364,16 +1923,15 @@ async def run(args: argparse.Namespace) -> int:
 
     print()
 
-    # Execute
+    # ── Phase A: build every candidate (no writes yet) ──────────────────────
     results: list[MigrationResult] = []
     units_by_id: dict[str, str | None] = {}
-    # Authoritative reset cadence per target, straight from the plan — used by the
-    # residue-repair walk instead of re-deriving from the (renameable) ge_id.
+    # Authoritative reset cadence per target, straight from the plan — used by
+    # validation instead of re-deriving from the (renameable) ge_id.
     reset_classes = {ge_id: reset_class for (_, ge_id, _, _, _, reset_class, _) in plan}
-    for idx, (givtcp_id, ge_id, desc, unit, warn, reset_class, resolved) in enumerate(plan):
+    for givtcp_id, ge_id, desc, unit, warn, reset_class, resolved in plan:
         units_by_id[ge_id] = unit
-        verb = "Applying" if applying else "Previewing"
-        print(f"  {verb}: {desc} …", end=" ", flush=True)
+        print(f"  Building: {desc} …", end=" ", flush=True)
         # `resolved` (registry recognition), not recorder presence, is what makes
         # a target real — so an orphan from a prior broken run is never written.
         r = await migrate_entity(
@@ -1383,7 +1941,6 @@ async def run(args: argparse.Namespace) -> int:
             desc,
             cutover,
             unit,
-            applying,
             resolved,
             reset_class,
             tz,
@@ -1393,24 +1950,108 @@ async def run(args: argparse.Namespace) -> int:
         )
         results.append(r)
         print(r.status)
-        # Pace writes so the single-threaded recorder can drain between entities.
-        if applying and idx < len(plan) - 1:
-            await asyncio.sleep(_ENTITY_PAUSE_SECONDS)
 
-    summary_code = _print_summary(results, applying)
-
-    # Read-only validation of the resulting sum series, in both dry-run and apply.
-    # Residue repair only fires when the user opted in with --apply --repair-residue.
-    validation_exit = await run_validation(
+    # Validate the in-memory candidates and print the findings report. This drives
+    # both the dry-run preview and the Phase-A apply gate from the SAME findings.
+    # Validation is read-only, so no write of any kind precedes the gate below.
+    validation_exit, blocking = await run_validation(
         ws,
         results,
         tz,
         units_by_id=units_by_id,
         reset_classes=reset_classes,
-        repair=applying and args.repair_residue,
-        applied=applying,
+        applying=applying,
         max_kwh=args.max_kw,
+        cutover=cutover,
     )
+
+    # Apply gate: if any candidate has a blocking finding, write NOTHING.
+    if applying and blocking:
+        print(
+            "\n  ✋ Refusing to --apply — validation found blocking issues above "
+            "(unexplained flat span, source-movement divergence, post-cutover "
+            "GE-divergence, or an unresolved rebuild run). Nothing was written. "
+            "Investigate the flagged entities, then re-run.",
+            file=sys.stderr,
+        )
+        await ws.close()
+        return max(2, validation_exit)
+
+    candidates = [r for r in results if r.status == "candidate"]
+
+    # Dry-run stops here: the candidates were never meant to be written.
+    if not applying:
+        for r in candidates:
+            r.status = "dry_run"
+        summary_code = _print_summary(results, applying)
+        await ws.close()
+        return max(summary_code, validation_exit)
+
+    # ── Phase B: write all approved candidates, or abort on the first failure ──
+    written: list[str] = []
+    for idx, r in enumerate(candidates):
+        try:
+            await write_candidate(ws, r)
+        except Exception as exc:
+            still_clean = [r2.ge_id for r2 in candidates[idx + 1 :]]
+            print(
+                f"\n  ✋ Write FAILED on {r.ge_id}: {exc}",
+                file=sys.stderr,
+            )
+            print(
+                "     Fully written : " + (", ".join(written) or "(none)"),
+                file=sys.stderr,
+            )
+            print(
+                f"     Mid-write     : {r.ge_id} (cleared, import may be incomplete)",
+                file=sys.stderr,
+            )
+            print(
+                "     Not touched   : " + (", ".join(still_clean) or "(none)"),
+                file=sys.stderr,
+            )
+            print(
+                "     Restore your recorder database from the backup you took "
+                "before --apply, then investigate before re-running.",
+                file=sys.stderr,
+            )
+            await ws.close()
+            return 1
+        written.append(r.ge_id)
+        # Pace writes so the single-threaded recorder can drain between entities.
+        if idx < len(candidates) - 1:
+            await asyncio.sleep(_ENTITY_PAUSE_SECONDS)
+
+    # ── Phase C: re-read each stored series and confirm it matches the candidate ──
+    for r in candidates:
+        try:
+            ok = await verify_written(ws, r)
+        except Exception as exc:
+            print(
+                f"\n  ✋ Post-write verification FAILED to re-read {r.ge_id}: {exc}\n"
+                "     The series were written but could not be verified. Restore your "
+                "recorder database from the backup you took before --apply and "
+                "investigate before re-running.",
+                file=sys.stderr,
+            )
+            await ws.close()
+            return 1
+        if not ok:
+            print(
+                f"\n  ✋ Post-write verification FAILED for {r.ge_id}: the stored "
+                "series does not match the approved candidate. Restore your recorder "
+                "database from the backup you took before --apply and investigate "
+                "before re-running.",
+                file=sys.stderr,
+            )
+            await ws.close()
+            return 1
+
+    # Only now is the write proven good.
+    for r in candidates:
+        r.status = "migrated"
+
+    summary_code = _print_summary(results, applying)
 
     await ws.close()
 
@@ -1494,14 +2135,6 @@ def main() -> None:
             "used directly as the authoritative rebuild bound (the adaptive p99 "
             "estimate is only the dry-run fallback). Must be positive. Required "
             "with --apply."
-        ),
-    )
-    p.add_argument(
-        "--repair-residue",
-        action="store_true",
-        help=(
-            "After validation, clear + re-import the rebuilt series for entities "
-            "with residual implausible hours. Off by default (report only)."
         ),
     )
     args = p.parse_args()
