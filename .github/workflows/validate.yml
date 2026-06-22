@@ -44,8 +44,9 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync
-      # Same invocation as the prek local hook; checks `files` from pyproject.
-      - run: uv run mypy custom_components
+      # Same invocation as the prek local hook; checks `files` from pyproject
+      # (custom_components + scripts).
+      - run: uv run mypy
 
   tests:
     name: tests

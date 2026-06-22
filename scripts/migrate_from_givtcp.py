@@ -141,7 +141,7 @@ import math
 import re
 import sys
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from typing import Any
@@ -273,7 +273,8 @@ def build_entity_id_resolver(
     for ent in entity_entries:
         if ent.get("platform") != _GE_PLATFORM:
             continue
-        device_name = device_name_by_id.get(ent.get("device_id"))
+        device_id = ent.get("device_id")
+        device_name = device_name_by_id.get(device_id) if device_id else None
         original_name = ent.get("original_name")
         entity_id = ent.get("entity_id")
         if not device_name or not original_name or not entity_id:
@@ -358,7 +359,7 @@ def _percentile(sorted_vals: list[float], p: float) -> float:
     return sorted_vals[int((len(sorted_vals) - 1) * p / 100.0)]
 
 
-def adaptive_ceiling(deltas: list[float | None]) -> float | None:
+def adaptive_ceiling(deltas: Sequence[float | None]) -> float | None:
     """Per-hour plausibility ceiling from an entity's positive state-deltas.
 
     Genuine hourly deltas are bounded by the hardware (inverter clip, battery
@@ -536,6 +537,9 @@ def rebuild_sum_walk(
 
     def _flush_segment() -> None:
         nonlocal running, prev_state, prev_start
+        # Only reached after data has been accepted (held is non-empty), so the
+        # last-good level is established.
+        assert prev_state is not None
         base = held[0][1]
         # offset (held[0] - prev_state) is suppressed; internal deltas are booked.
         for s, st in held:
@@ -567,6 +571,9 @@ def rebuild_sum_walk(
             _emit(start, running, running)
             continue
 
+        # prev_start is assigned in lockstep with prev_state, so passing the
+        # prev_state-is-None guard above guarantees prev_start is set too.
+        assert prev_start is not None
         elapsed = _elapsed_hours(prev_start, start)
         bound = ceiling * elapsed
         # (1) Reset-crossing gap FIRST, before any delta-sign branch.
@@ -1045,7 +1052,7 @@ def _gate_blocking(finding: dict[str, Any]) -> bool:
 
 
 def format_validation_report(
-    findings: dict[str, dict[str, list]],
+    findings: dict[str, dict[str, Any]],
     duplicates: list[tuple[str, str]],
     mode: str = "dry-run",
 ) -> tuple[str, int]:
@@ -1533,7 +1540,7 @@ async def run_validation(
     held run.
     """
     units_by_id = units_by_id or {}
-    findings: dict[str, dict[str, list]] = {}
+    findings: dict[str, dict[str, Any]] = {}
     series_by_id: dict[str, list[dict[str, Any]]] = {}
     blocking = False
 
@@ -1612,6 +1619,11 @@ async def run_validation(
 async def write_candidate(ws: HAWebSocket, r: MigrationResult) -> None:
     """Phase B: clear + import one approved candidate. Not transactional across
     entities — the caller aborts + reports on the first failure (backup recovers)."""
+    if r.metadata is None or r.rebuilt_rows is None:
+        # Every entity that reaches "candidate" status has both set (migrate_entity).
+        # Guard before the destructive clear so a malformed candidate can't clear
+        # the existing series and then fail the import, leaving it empty.
+        raise ValueError(f"candidate {r.ge_id} is missing metadata or rebuilt rows")
     await ws.clear_statistics([r.ge_id])
     await ws.import_statistics(metadata=r.metadata, stats=r.rebuilt_rows)
 
