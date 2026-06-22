@@ -675,7 +675,7 @@ async def test_refresh_failed_mixed_group_cause_resets_immediately(hass, mock_pl
         with pytest.raises(UpdateFailed, match="Error communicating"):
             await coordinator._async_update_data()
 
-        client.close.assert_called_once()
+        client.close.assert_awaited_once()
         assert coordinator._client is None
         assert coordinator.total_failures == 1
 
