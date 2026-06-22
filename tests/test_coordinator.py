@@ -113,6 +113,20 @@ async def test_async_close_closes_client(hass, mock_client, setup_integration):
     assert coordinator._client is None
 
 
+async def test_reset_client_discards_even_if_close_raises(hass):
+    """If close() raises while tearing the socket down, the client is still
+    discarded so the next tick reconnects rather than reusing a dead client."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+    client = AsyncMock()
+    client.close = AsyncMock(side_effect=OSError("close failed"))
+    coordinator._client = client
+
+    await coordinator._reset_client()  # must NOT raise
+
+    client.close.assert_awaited_once()
+    assert coordinator._client is None
+
+
 async def test_timeout_raises_update_failed(hass):
     coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
 
@@ -642,6 +656,30 @@ async def test_refresh_failed_nontimeout_cause_resets_immediately(hass, mock_pla
         assert coordinator.total_failures == 1
 
 
+async def test_refresh_failed_mixed_group_cause_resets_immediately(hass, mock_plant):
+    """A RefreshFailed whose ExceptionGroup mixes a timeout with a non-timeout is
+    NOT treated as a transient timeout: it resets the client and fails at once,
+    rather than serving stale within the tolerance window."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30, timeout_tolerance=3)
+    mixed = _refresh_failed(TimeoutError(), ConnectionResetError("peer reset"))
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh = AsyncMock(side_effect=mixed)
+        mock_cls.return_value = client
+        coordinator._client = client
+        coordinator.data = mock_plant  # present, but must not be served
+
+        with pytest.raises(UpdateFailed, match="Error communicating"):
+            await coordinator._async_update_data()
+
+        client.close.assert_called_once()
+        assert coordinator._client is None
+        assert coordinator.total_failures == 1
+
+
 # ---------------------------------------------------------------------------
 # Active / passive refresh cadence
 # ---------------------------------------------------------------------------
@@ -1127,6 +1165,27 @@ async def test_loss_retried_then_heals(hass, mock_plant):
     on_changed.assert_not_awaited()
     on_healed.assert_awaited_once()
     assert coordinator._prior_capabilities is prior  # full prior never overwritten
+
+
+async def test_healed_callback_failure_does_not_break_connection(hass, mock_plant):
+    """A crash inside the topology-healed callback must not discard the freshly
+    connected client or fail the connect — the link is up, so we log and carry on."""
+    on_healed = AsyncMock(side_effect=RuntimeError("reload failed"))
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, on_topology_healed=on_healed
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.detect = AsyncMock()  # clean detect → topology confirmed, callback fires
+        mock_cls.return_value = client
+
+        await coordinator._connect()  # must NOT raise despite the callback blowing up
+
+    on_healed.assert_awaited_once()
+    assert coordinator._client is client  # connection kept, not discarded
 
 
 async def test_persistent_loss_invokes_on_devices_missing(hass, mock_plant):
