@@ -58,7 +58,10 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync
-      - run: uv run pytest
+      # --cov reads its source/branch/fail_under config from pyproject's
+      # [tool.coverage.*]. term-missing surfaces the uncovered lines in the log
+      # so the fail_under floor can be ratcheted up as coverage improves.
+      - run: uv run pytest --cov --cov-report=term-missing
 
   deprecations:
     name: deprecation watch

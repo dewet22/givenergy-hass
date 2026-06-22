@@ -2,11 +2,13 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from givenergy_modbus.exceptions import PlantTopologyMismatch
 from givenergy_modbus.model.inverter import Model
 from givenergy_modbus.model.plant import PlantCapabilities
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
@@ -22,7 +24,10 @@ from custom_components.givenergy_local.const import (
     CONF_TIMEOUT_TOLERANCE,
     DOMAIN,
     EXPOSE_RECOMMENDED_ENTITY_KEYS,
+    SERVICE_CALIBRATE_BATTERY_SOC,
+    SERVICE_CAPTURE_FRAMES,
     SERVICE_EXPOSE_RECOMMENDED_ENTITIES,
+    SERVICE_REBOOT_INVERTER,
     SERVICE_REDETECT_PLANT,
     SERVICE_SET_SYSTEM_DATETIME,
 )
@@ -216,6 +221,133 @@ async def test_set_system_datetime_service_sends_command(hass, mock_client, setu
         blocking=True,
     )
     mock_client.one_shot_command.assert_called_once()
+
+
+def _inverter_device_id(hass, entry_id):
+    """Return the HA device_id of the inverter registered for `entry_id`."""
+    device_reg = dr.async_get(hass)
+    return next(d for d in device_reg.devices.values() if entry_id in d.config_entries).id
+
+
+async def test_reboot_inverter_service_sends_command(hass, mock_client, setup_integration):
+    """The reboot_inverter service issues a one-shot reboot command for the device."""
+    device_id = _inverter_device_id(hass, setup_integration.entry_id)
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_REBOOT_INVERTER,
+        {"device_id": device_id},
+        blocking=True,
+    )
+    mock_client.one_shot_command.assert_called_once()
+
+
+async def test_calibrate_battery_soc_service_sends_command(hass, mock_client, setup_integration):
+    """The calibrate_battery_soc service issues a one-shot calibration command."""
+    device_id = _inverter_device_id(hass, setup_integration.entry_id)
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CALIBRATE_BATTERY_SOC,
+        {"device_id": device_id},
+        blocking=True,
+    )
+    mock_client.one_shot_command.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "service",
+    [SERVICE_REBOOT_INVERTER, SERVICE_CALIBRATE_BATTERY_SOC, SERVICE_SET_SYSTEM_DATETIME],
+)
+async def test_device_services_reject_unknown_device(hass, mock_client, setup_integration, service):
+    """Hardware-command services raise (and send nothing) for an unknown device_id."""
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            service,
+            {"device_id": "does-not-exist"},
+            blocking=True,
+        )
+    mock_client.one_shot_command.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "service",
+    [SERVICE_REBOOT_INVERTER, SERVICE_CALIBRATE_BATTERY_SOC, SERVICE_SET_SYSTEM_DATETIME],
+)
+async def test_device_services_reject_disconnected_client(
+    hass, mock_client, setup_integration, service
+):
+    """Hardware-command services refuse to act while the inverter is offline."""
+    device_id = _inverter_device_id(hass, setup_integration.entry_id)
+    mock_client.connected = False
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            service,
+            {"device_id": device_id},
+            blocking=True,
+        )
+    mock_client.one_shot_command.assert_not_called()
+
+
+async def test_set_system_datetime_resolves_by_serial(hass, mock_client, setup_integration):
+    """set_system_datetime also accepts a `serial` target (the unique_id path)."""
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_SYSTEM_DATETIME,
+        {"serial": setup_integration.unique_id},
+        blocking=True,
+    )
+    mock_client.one_shot_command.assert_called_once()
+
+
+async def test_set_system_datetime_unknown_serial_raises(hass, mock_client, setup_integration):
+    """An unmatched serial surfaces a HomeAssistantError and sends nothing."""
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_SYSTEM_DATETIME,
+            {"serial": "NOPE0000X1"},
+            blocking=True,
+        )
+    mock_client.one_shot_command.assert_not_called()
+
+
+async def test_capture_frames_unknown_device_raises(hass, mock_client, setup_integration):
+    """capture_frames rejects an unknown device_id before touching the wire."""
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_CAPTURE_FRAMES,
+            {"device_id": "does-not-exist", "duration": 10},
+            blocking=True,
+        )
+    mock_client.capture_frames.assert_not_called()
+
+
+async def test_capture_frames_no_connected_inverter_raises(hass, mock_client, setup_integration):
+    """With no device_id and every inverter offline, capture_frames raises."""
+    mock_client.connected = False
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_CAPTURE_FRAMES,
+            {"duration": 10},
+            blocking=True,
+        )
+    mock_client.capture_frames.assert_not_called()
+
+
+async def test_expose_recommended_entities_unknown_device_raises(
+    hass, mock_client, setup_integration
+):
+    """expose_recommended_entities raises for a device_id that isn't registered."""
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_EXPOSE_RECOMMENDED_ENTITIES,
+            {"device_id": "does-not-exist"},
+            blocking=True,
+        )
 
 
 async def test_topology_mismatch_persists_actual_and_raises_repairs_issue(
