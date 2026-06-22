@@ -482,7 +482,18 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                 # Full expected topology is present — let the caller clear any
                 # stale "device missing" repair and reconcile entities against the
                 # confirmed topology (covers both restart and mid-session recovery).
-                await self._on_topology_healed(confirmed)
+                try:
+                    await self._on_topology_healed(confirmed)
+                except Exception:  # noqa: BLE001
+                    # The connection is up and detect() succeeded; a failure in
+                    # the caller's reconcile/repair callback must not discard the
+                    # freshly-connected client (which the outer BaseException
+                    # handler would do) or fail the poll. Log and carry on — the
+                    # stale repair issue, if any, simply clears on a later heal.
+                    _LOGGER.warning(
+                        "topology-healed callback failed; connection is up, continuing",
+                        exc_info=True,
+                    )
             self._last_inverter_time = None
             self._unchanged_ticks = 0
             self._active_tick = 0
@@ -600,8 +611,16 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         """Close and discard the client so the next tick triggers a reconnect."""
         if self._client is not None:
             _LOGGER.info("Closing connection to %s:%s", self.host, self.port)
-            await self._client.close()
-            self._client = None
+            try:
+                await self._client.close()
+            except Exception as exc:  # noqa: BLE001
+                # A failure tearing the socket down must not strand a dead
+                # client: the finally below guarantees we discard it so the
+                # next tick reconnects cleanly. CancelledError is deliberately
+                # left to propagate (not an Exception).
+                _LOGGER.debug("Error while closing client (ignored): %s", exc)
+            finally:
+                self._client = None
 
     async def async_close(self) -> None:
         await self._reset_client()

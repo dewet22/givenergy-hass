@@ -299,10 +299,35 @@ async def test_bms_status_warning_rendered_as_hex(hass, setup_integration):
     assert hass.states.get(_entity_id(hass, "sensor", "BT1234A001_status_3")).state == "0xA5"
     assert hass.states.get(_entity_id(hass, "sensor", "BT1234A001_status_1")).state == "0x00"
     assert hass.states.get(_entity_id(hass, "sensor", "BT1234A001_warning_1")).state == "0x00"
+    # The remaining status_* registers (every index 1–7 is wired up in a loop)
+    # and warning_2 are all exposed too, each rendered as 0x00 from the fixture.
+    for key in ("status_2", "status_4", "status_5", "status_6", "status_7", "warning_2"):
+        assert hass.states.get(_entity_id(hass, "sensor", f"BT1234A001_{key}")).state == "0x00"
     # Hex-formatted sensors deliberately omit state_class so HA doesn't
     # try to roll them into long-term statistics.
     state = hass.states.get(_entity_id(hass, "sensor", "BT1234A001_status_3"))
     assert "state_class" not in state.attributes
+
+
+def test_battery_hex_formatter_branches():
+    """The _battery_hex value_fn: formats ints, unwraps Enum-like `.value`, and
+    fails soft (None) on missing or non-numeric attributes."""
+    from types import SimpleNamespace
+
+    from custom_components.givenergy_local.sensor import _battery_hex
+
+    fn = _battery_hex("status_1", width=2)
+    # Plain int → fixed-width hex.
+    assert fn(SimpleNamespace(status_1=0xA5)) == "0xA5"
+    # Enum-like object → underlying numeric value is pulled before formatting
+    # (mirrors the inverter's usb_device_inserted having gone Enum upstream).
+    assert fn(SimpleNamespace(status_1=SimpleNamespace(value=0x07))) == "0x07"
+    # Missing attribute → None (surfaces as `unknown`, never raises).
+    assert fn(SimpleNamespace()) is None
+    # Present but non-numeric → None rather than a formatting crash.
+    assert fn(SimpleNamespace(status_1="oops")) is None
+    # Width is honoured (uint16 fields render as 4 chars).
+    assert _battery_hex("warning_2", width=4)(SimpleNamespace(warning_2=0x08)) == "0x0008"
 
 
 async def test_cell_voltages_attached_to_battery_device(hass, setup_integration):
@@ -861,12 +886,17 @@ def test_grid_split_power_helpers_resolve_both_directions():
 
     exporting = MagicMock(p_grid_out=1500)
     importing = MagicMock(p_grid_out=-800)
+    balanced = MagicMock(p_grid_out=0)
     unpolled = MagicMock(p_grid_out=None)
 
     assert _grid_export_power(exporting) == 1500
     assert _grid_import_power(exporting) == 0
     assert _grid_import_power(importing) == 800
     assert _grid_export_power(importing) == 0
+    # A balanced grid (p_grid_out == 0) reads 0 on both, not unknown — 0 is a
+    # real reading and must survive the falsy-vs-None distinction.
+    assert _grid_export_power(balanced) == 0
+    assert _grid_import_power(balanced) == 0
     assert _grid_export_power(unpolled) is None
     assert _grid_import_power(unpolled) is None
 
