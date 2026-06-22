@@ -173,7 +173,14 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self.partial_failures: int = 0
         # The ReadFailure records from the most recent partial poll, surfaced as
         # a diagnostic sensor attribute so users can see *which* device dropped.
+        # Deliberately NOT cleared by a subsequent clean poll (#176): an
+        # intermittent failure would otherwise be un-diagnosable after the fact —
+        # the detail must outlive the recovery so the sensor can still name the
+        # bank that dropped, paired with last_partial_at below.
         self.last_partial_failures: list[ReadFailure] = []
+        # When the most recent partial poll occurred (UTC), retained alongside
+        # last_partial_failures so the diagnostic sensor can show how long ago.
+        self.last_partial_at: datetime | None = None
         # Length of the current unbroken run of partial polls, used only to
         # throttle the partial log (see _record_partial). Reset by a clean poll.
         self._consecutive_partials: int = 0
@@ -211,11 +218,10 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                 else await self._active_update()
             )
 
-            # A fully clean poll — clear any stale partial-failure detail so the
-            # diagnostic sensor stops naming devices that have since recovered,
-            # and end the partial run so the next one warns afresh.
-            # (The cumulative partial_failures counter is left untouched.)
-            self.last_partial_failures = []
+            # A fully clean poll ends the partial run so the next one warns afresh.
+            # The last_partial_failures detail and last_partial_at are deliberately
+            # retained (#176) so the diagnostic sensor can still name the bank that
+            # dropped after an intermittent failure has recovered.
             self._consecutive_partials = 0
             self._mark_success(plant)
             return plant
@@ -309,6 +315,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         """
         self.partial_failures += 1
         self.last_partial_failures = exc.failures
+        self.last_partial_at = dt_util.utcnow()
         self._consecutive_partials += 1
         if self._consecutive_partials == 1:
             _LOGGER.warning(
@@ -441,40 +448,56 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         — required for three-phase, AIO-HV, EMS and other non-default topologies.
         """
         self._client = Client(host=self.host, port=self.port)
-        await self._client.connect()
-        topology_confirmed = True
         try:
-            # The library's battery sweep probes additional packs (0x33+) with a
-            # stingy default budget (probe_timeout=0.5s, probe_retries=1) and
-            # BREAKS at the first non-responding slot — so a single transiently
-            # slow BMS during a reconnect truncates the whole battery chain, and
-            # that reduced topology then gets persisted (a 2nd battery silently
-            # vanished after a reconnect this way). Because of the break, a detect
-            # probes at most one empty slot, so a generous probe budget costs only
-            # ~one extra slow probe on a cold sweep — cheap insurance against
-            # dropping a real pack.
-            await self._client.detect(
-                prior=self._prior_capabilities,
-                probe_timeout=PROBE_TIMEOUT_SECONDS,
-                probe_retries=PROBE_RETRIES,
-            )
-        except PlantTopologyMismatch as exc:
-            topology_confirmed = await self._handle_topology_mismatch(exc)
-        if self._client is None:
-            # The entry was unloaded/reloaded while _handle_topology_mismatch
-            # yielded (retry sleeps) and async_close() discarded the client —
-            # nothing to confirm against, we're shutting down.
-            return
-        confirmed = self._client.plant.capabilities
-        if topology_confirmed and self._on_topology_healed is not None and confirmed is not None:
-            # Full expected topology is present — let the caller clear any
-            # stale "device missing" repair and reconcile entities against the
-            # confirmed topology (covers both restart and mid-session recovery).
-            await self._on_topology_healed(confirmed)
-        self._last_inverter_time = None
-        self._unchanged_ticks = 0
-        self._active_tick = 0
-        _LOGGER.info("Connected to inverter at %s:%s", self.host, self.port)
+            await self._client.connect()
+            topology_confirmed = True
+            try:
+                # The library's battery sweep probes additional packs (0x33+) with a
+                # stingy default budget (probe_timeout=0.5s, probe_retries=1) and
+                # BREAKS at the first non-responding slot — so a single transiently
+                # slow BMS during a reconnect truncates the whole battery chain, and
+                # that reduced topology then gets persisted (a 2nd battery silently
+                # vanished after a reconnect this way). Because of the break, a detect
+                # probes at most one empty slot, so a generous probe budget costs only
+                # ~one extra slow probe on a cold sweep — cheap insurance against
+                # dropping a real pack.
+                await self._client.detect(
+                    prior=self._prior_capabilities,
+                    probe_timeout=PROBE_TIMEOUT_SECONDS,
+                    probe_retries=PROBE_RETRIES,
+                )
+            except PlantTopologyMismatch as exc:
+                topology_confirmed = await self._handle_topology_mismatch(exc)
+            if self._client is None:
+                # The entry was unloaded/reloaded while _handle_topology_mismatch
+                # yielded (retry sleeps) and async_close() discarded the client —
+                # nothing to confirm against, we're shutting down.
+                return
+            confirmed = self._client.plant.capabilities
+            if (
+                topology_confirmed
+                and self._on_topology_healed is not None
+                and confirmed is not None
+            ):
+                # Full expected topology is present — let the caller clear any
+                # stale "device missing" repair and reconcile entities against the
+                # confirmed topology (covers both restart and mid-session recovery).
+                await self._on_topology_healed(confirmed)
+            self._last_inverter_time = None
+            self._unchanged_ticks = 0
+            self._active_tick = 0
+            _LOGGER.info("Connected to inverter at %s:%s", self.host, self.port)
+        except BaseException:
+            # connect()/detect() failed before capabilities were established (a
+            # PlantTopologyMismatch is handled above and doesn't reach here). Discard
+            # the half-initialised client so the next tick reconnects and re-detects
+            # cleanly — a connected-but-capability-less client would otherwise be kept
+            # by the timeout-tolerance path, and its next refresh() raises
+            # PlantNotDetected ("requires plant capabilities") (#176). BaseException,
+            # not Exception, so a CancelledError (HA cancelling the connect mid-flight)
+            # also cleans up rather than leaking the client; re-raised either way.
+            await self._reset_client()
+            raise
 
     async def _handle_topology_mismatch(self, exc: PlantTopologyMismatch) -> bool:
         """Resolve a detect() topology mismatch.

@@ -1,5 +1,6 @@
 """Tests for the GivEnergy Local sensor platform."""
 
+from datetime import UTC
 from unittest.mock import MagicMock
 
 import pytest
@@ -96,10 +97,11 @@ def test_setup_filter_skips_bad_descriptor_instead_of_crashing():
 
 def test_single_phase_only_sensors_gated_on_three_phase():
     """single_phase_only descriptions are dropped on three-phase plants but kept on
-    single-phase — otherwise the single-phase-only PV/capacity fields surface as
-    permanently-unavailable orphan entities on three-phase inverters (#94)."""
+    single-phase — the single-phase-only PV/capacity fields would otherwise surface as
+    permanently-unavailable orphan entities on three-phase inverters (#94), and
+    t_battery would read a frozen, unpopulated single-phase register there (#174)."""
     inv = MagicMock()
-    gated_keys = {"p_pv", "e_pv_day", "battery_capacity_kwh"}
+    gated_keys = {"p_pv", "e_pv_day", "battery_capacity_kwh", "t_battery"}
 
     # Every gated key must actually carry the flag (guards against silent drift if
     # one is renamed/removed) ...
@@ -154,9 +156,11 @@ async def test_expected_sensor_count(hass, setup_integration):
 async def test_single_phase_only_sensors_absent_on_three_phase(
     hass, mock_client, mock_config_entry
 ):
-    """On a three-phase plant the single-phase-only PV/capacity sensors must not be
-    created — otherwise they render as permanently-unavailable orphans (#94). The
-    default (single-phase) fixture keeps them, asserted by test_expected_sensor_count.
+    """On a three-phase plant the single-phase-only PV/capacity/battery-temperature
+    sensors must not be created — the PV/capacity ones would render as
+    permanently-unavailable orphans (#94), and t_battery reads a frozen, unpopulated
+    single-phase register on three-phase (#174). The default (single-phase) fixture
+    keeps them, asserted by test_expected_sensor_count.
     """
     from givenergy_modbus.model.inverter import Model
     from givenergy_modbus.model.plant import PlantCapabilities
@@ -174,7 +178,7 @@ async def test_single_phase_only_sensors_absent_on_three_phase(
     await hass.async_block_till_done()
 
     registry = er.async_get(hass)
-    for key in ("p_pv", "e_pv_day", "battery_capacity_kwh"):
+    for key in ("p_pv", "e_pv_day", "battery_capacity_kwh", "t_battery"):
         assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is None, (
             f"{key} should be suppressed on three-phase"
         )
@@ -388,6 +392,39 @@ async def test_diagnostic_sensors_available_during_coordinator_failure(
 async def test_partial_failures_starts_at_zero(hass, setup_integration):
     state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_partial_failures"))
     assert state.state == "0"
+
+
+def test_partial_failure_attributes_name_device_and_time():
+    """The diagnostic attributes name the dropped bank, count, per-bank detail and
+    when it last happened — retained past a clean poll so an intermittent failure
+    stays diagnosable (#176)."""
+    from datetime import datetime
+
+    from givenergy_modbus.exceptions import ReadFailure
+
+    from custom_components.givenergy_local.sensor import _partial_failure_attributes
+
+    coordinator = MagicMock()
+    coordinator.last_partial_failures = [
+        ReadFailure(
+            device_address=0x34,
+            request_type="ReadInputRegisters",
+            base_register=60,
+            register_count=60,
+        )
+    ]
+    stamp = datetime(2026, 6, 17, 12, 0, tzinfo=UTC)
+    coordinator.last_partial_at = stamp
+
+    attrs = _partial_failure_attributes(coordinator)
+    assert attrs["last_failed_devices"] == ["0x34"]
+    assert attrs["last_failure_count"] == 1
+    assert attrs["last_failures"] == ["0x34 ReadInputRegisters @ 60+60"]
+    assert attrs["last_partial_at"] == stamp.isoformat()
+
+    # No failures recorded → no attributes.
+    coordinator.last_partial_failures = []
+    assert _partial_failure_attributes(coordinator) is None
 
 
 async def test_partial_failures_increments_and_attributes_name_device(
@@ -978,6 +1015,157 @@ def test_sensor_without_ir_source_keeps_default_availability(mock_plant):
 
     assert entity._source_ir_registers == ()
     # Freshness must not even be consulted.
+    mock_plant.register_age = MagicMock()
+    assert entity.available is True
+    mock_plant.register_age.assert_not_called()
+
+
+def _battery_desc(key: str):
+    return next(d for d in BATTERY_SENSORS if d.key == key)
+
+
+def test_battery_sensor_unavailable_when_backing_ir_block_stale(mock_plant):
+    """A battery's IR bank that stopped committing past the ceiling drops the
+    pack's sensors to unavailable — the path that catches the library keeping
+    last-good on a sub-bus splice (#176/#152). Freshness via Plant.register_age()."""
+    from datetime import timedelta
+
+    from givenergy_modbus.model.register import IR
+
+    from custom_components.givenergy_local.sensor import GivEnergyBatterySensor
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    entity = GivEnergyBatterySensor(coordinator, _battery_desc("soc"), 0)
+    # The conftest battery is a MagicMock with no register LUT, so inject the
+    # source registers the resolver would derive from the real Battery model.
+    entity._source_ir_registers = (IR(64),)
+    mock_plant.register_age = MagicMock()
+
+    # Fresh bank: available, and queried against the battery's device address.
+    mock_plant.register_age.return_value = 35.0
+    assert entity.available is True
+    (addr, reg) = mock_plant.register_age.call_args.args
+    assert addr == 0x32  # conftest capabilities.lv_battery_addresses[0]
+    assert (reg.reg_type, reg.index) == ("IR", 64)
+    # Bank stopped committing 10 minutes ago (ceiling at 30 s interval = 300 s).
+    mock_plant.register_age.return_value = 600.0
+    assert entity.available is False
+    # Never committed: stays available (its value reads None/unknown anyway).
+    mock_plant.register_age.return_value = None
+    assert entity.available is True
+    # Coordinator-level failure still wins regardless of bank ages.
+    mock_plant.register_age.return_value = 35.0
+    coordinator.last_update_success = False
+    assert entity.available is False
+
+
+def test_battery_sensor_without_ir_source_keeps_default_availability(mock_plant):
+    """A battery sensor whose key resolves to no IR registers never consults ages."""
+    from datetime import timedelta
+
+    from custom_components.givenergy_local.sensor import GivEnergyBatterySensor
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    entity = GivEnergyBatterySensor(coordinator, _battery_desc("soc"), 0)
+
+    assert entity._source_ir_registers == ()  # mock battery model has no LUT
+    mock_plant.register_age = MagicMock()
+    assert entity.available is True
+    mock_plant.register_age.assert_not_called()
+
+
+def test_battery_sensor_available_when_index_out_of_range(mock_plant):
+    """A pack index beyond the known battery addresses keeps default availability
+    (bounds guard) rather than indexing past the capabilities list."""
+    from datetime import timedelta
+
+    from givenergy_modbus.model.register import IR
+
+    from custom_components.givenergy_local.sensor import GivEnergyBatterySensor
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    entity = GivEnergyBatterySensor(coordinator, _battery_desc("soc"), 0)
+    entity._battery_index = 5  # beyond capabilities.lv_battery_addresses ([0x32])
+    entity._source_ir_registers = (IR(64),)
+    mock_plant.register_age = MagicMock()
+
+    assert entity.available is True
+    mock_plant.register_age.assert_not_called()
+
+
+def _aio_desc(key: str):
+    return next(d for d in AIO_MODULE_SENSORS if d.key == key)
+
+
+def test_aio_module_sensor_unavailable_when_backing_ir_block_stale(mock_plant):
+    """An AIO module's IR bank that stopped committing past the ceiling drops its
+    cell sensors to unavailable, queried against the module's own device address
+    (#176/#152). Mirrors the LV-battery gate via AioBatteryModule.REGISTER_GETTER."""
+    from datetime import timedelta
+
+    from givenergy_modbus.model.register import IR
+
+    from custom_components.givenergy_local.sensor import GivEnergyAioModuleSensor
+
+    module = _mock_aio_module("HX2414G831", 0x50)
+    mock_plant.aio_battery_modules = [module]
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    entity = GivEnergyAioModuleSensor(coordinator, _aio_desc("v_cell_01"), 0)
+    # The mock module is a MagicMock with no register LUT, so inject the
+    # source registers the resolver would derive from the real model.
+    entity._source_ir_registers = (IR(60),)
+    mock_plant.register_age = MagicMock()
+
+    # Fresh bank: available, and queried against the module's own device address.
+    mock_plant.register_age.return_value = 35.0
+    assert entity.available is True
+    (addr, reg) = mock_plant.register_age.call_args.args
+    assert addr == 0x50  # module.module_address, not a positional capabilities lookup
+    assert (reg.reg_type, reg.index) == ("IR", 60)
+    # Bank stopped committing past the ceiling: unavailable.
+    mock_plant.register_age.return_value = 600.0
+    assert entity.available is False
+    # Never committed: stays available.
+    mock_plant.register_age.return_value = None
+    assert entity.available is True
+    # Module absent from the poll: unavailable regardless, and freshness isn't
+    # even consulted (the presence gate short-circuits).
+    mock_plant.aio_battery_modules = []
+    mock_plant.register_age.reset_mock()
+    mock_plant.register_age.return_value = 35.0
+    assert entity.available is False
+    mock_plant.register_age.assert_not_called()
+
+
+def test_aio_module_sensor_without_ir_source_keeps_default_availability(mock_plant):
+    """An AIO sensor whose key resolves to no IR registers never consults ages."""
+    from datetime import timedelta
+
+    from custom_components.givenergy_local.sensor import GivEnergyAioModuleSensor
+
+    module = _mock_aio_module("HX2414G831", 0x50)
+    mock_plant.aio_battery_modules = [module]
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    entity = GivEnergyAioModuleSensor(coordinator, _aio_desc("v_cell_01"), 0)
+
+    assert entity._source_ir_registers == ()  # mock module model has no LUT
     mock_plant.register_age = MagicMock()
     assert entity.available is True
     mock_plant.register_age.assert_not_called()

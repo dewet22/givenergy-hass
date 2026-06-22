@@ -391,6 +391,11 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda inv: inv.t_battery,
+        # Three-phase units inherit this single-phase register address but their
+        # firmware never populates it, so it reads frozen rather than unavailable
+        # (#174). Real 3ph battery temperature comes from the HV cluster
+        # (Bcu.cluster_cell_temperature) once HV-stack support lands (#179).
+        single_phase_only=True,
     ),
     GivEnergyInverterSensorDescription(
         # key kept (unique_id suffix); the library field was renamed to
@@ -1086,12 +1091,14 @@ def _partial_failure_attributes(
     """Summarise the most recent partial poll's failed reads for the UI.
 
     Names the device(s) that dropped (e.g. "0x34" for a battery) plus the
-    per-bank detail, so a flaky device can be identified even though its
-    entities stay available with stale data.
+    per-bank detail and when it last happened, so a flaky device can be
+    identified even after the poll has recovered (the detail is retained past
+    a clean poll — #176).
     """
     failures = coordinator.last_partial_failures
     if not failures:
         return None
+    last_partial_at = coordinator.last_partial_at
     return {
         "last_failed_devices": sorted({f"0x{f.device_address:02x}" for f in failures}),
         "last_failure_count": len(failures),
@@ -1101,6 +1108,7 @@ def _partial_failure_attributes(
             f"@ {f.base_register}+{f.register_count}"
             for f in failures
         ],
+        "last_partial_at": last_partial_at.isoformat() if last_partial_at else None,
     }
 
 
@@ -1319,8 +1327,50 @@ def _source_ir_registers(model_cls: type, key: str) -> tuple[Register, ...]:
     return tuple(r for r in getter.registers_of(key) if r.reg_type == "IR")
 
 
+class _StaleIRGate:
+    """Marks a sensor unavailable when a backing input-register bank has stopped
+    committing past a ceiling (#152).
+
+    Shared by the inverter, battery and AIO-module sensors — each resolves its own
+    device address (the inverter's is fixed, the per-pack/per-module ones come from
+    capabilities or the module itself), while this mixin owns the register
+    resolution, the staleness ceiling, and the per-bank age check. Freshness comes
+    from the library's Plant.register_age() (2.3.0, #248), which scans the stamped
+    block windows generically. A held/rejected bank stops being re-stamped, so its
+    age grows past the ceiling and the device's sensors go unavailable instead of
+    showing a confidently-wrong frozen value (#176).
+    """
+
+    coordinator: GivEnergyUpdateCoordinator
+    _source_ir_registers: tuple[Register, ...]
+    _stale_ir_ceiling: float
+
+    def _init_stale_gate(
+        self, coordinator: GivEnergyUpdateCoordinator, model_cls: type, key: str
+    ) -> None:
+        self._source_ir_registers = _source_ir_registers(model_cls, key)
+        interval = coordinator.update_interval
+        self._stale_ir_ceiling = max(
+            _STALE_IR_CEILING_FLOOR,
+            _STALE_IR_CEILING_SCANS * (interval.total_seconds() if interval else 0.0),
+        )
+
+    def _ir_bank_stale(self, device_address: int) -> bool:
+        """True if any backing IR bank for ``device_address`` is older than the ceiling.
+
+        False when there is no resolvable IR source (computed / HR-backed fields) or
+        a bank was never committed — neither is a staleness signal.
+        """
+        plant = self.coordinator.data
+        for register in self._source_ir_registers:
+            age = plant.register_age(device_address, register)
+            if age is not None and age > self._stale_ir_ceiling:
+                return True
+        return False
+
+
 class GivEnergyInverterSensor(
-    CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity, RestoreEntity
+    _StaleIRGate, CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity, RestoreEntity
 ):
     _attr_has_entity_name = True
     entity_description: GivEnergyInverterSensorDescription
@@ -1337,13 +1387,10 @@ class GivEnergyInverterSensor(
         self._monotonic_last_read: datetime | None = None
         self._monotonic_reset_pending: bool | None = False
         self._monotonic_prior_day_value: float | None = None
-        self._source_ir_registers = _source_ir_registers(
-            type(coordinator.data.inverter), description.source_field or description.key
-        )
-        interval = coordinator.update_interval
-        self._stale_ir_ceiling = max(
-            _STALE_IR_CEILING_FLOOR,
-            _STALE_IR_CEILING_SCANS * (interval.total_seconds() if interval else 0.0),
+        self._init_stale_gate(
+            coordinator,
+            type(coordinator.data.inverter),
+            description.source_field or description.key,
         )
         precision = _derive_display_precision(description, coordinator.data.inverter)
         if precision is not None:
@@ -1389,14 +1436,7 @@ class GivEnergyInverterSensor(
 
     @property
     def available(self) -> bool:
-        """Drop to unavailable when a backing IR bank has stopped committing (#152).
-
-        Freshness comes from the library's Plant.register_age() (2.3.0, #248),
-        which scans the stamped block windows generically — which banks a
-        device serves varies by model and address. Sensors with no resolvable
-        IR source (computed fields, HR-backed config) keep the default
-        coordinator availability, as does a never-committed bank.
-        """
+        """Drop to unavailable when a backing IR bank has stopped committing (#152)."""
         if not super().available:
             return False
         if not self._source_ir_registers:
@@ -1404,11 +1444,7 @@ class GivEnergyInverterSensor(
         capabilities = self.coordinator.data.capabilities
         if capabilities is None:
             return True
-        for register in self._source_ir_registers:
-            age = self.coordinator.data.register_age(capabilities.inverter_address, register)
-            if age is not None and age > self._stale_ir_ceiling:
-                return False
-        return True
+        return not self._ir_bank_stale(capabilities.inverter_address)
 
     @property
     def native_value(self) -> Any:
@@ -1504,7 +1540,9 @@ class GivEnergyInverterSensor(
         return value
 
 
-class GivEnergyBatterySensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
+class GivEnergyBatterySensor(
+    _StaleIRGate, CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity
+):
     _attr_has_entity_name = True
     entity_description: GivEnergyBatterySensorDescription
 
@@ -1518,6 +1556,7 @@ class GivEnergyBatterySensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Sens
         self.entity_description = description
         self._battery_index = battery_index
         battery = coordinator.data.batteries[battery_index]
+        self._init_stale_gate(coordinator, type(battery), description.key)
         precision = _derive_display_precision(description, battery)
         if precision is not None:
             self._attr_suggested_display_precision = precision
@@ -1533,6 +1572,23 @@ class GivEnergyBatterySensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Sens
         )
 
     @property
+    def available(self) -> bool:
+        """Drop to unavailable when this pack's IR bank has stopped committing (#152).
+
+        Catches the library holding last-good on a sub-bus splice (#256): the bank
+        stops being re-stamped and ages past the ceiling, so the pack's sensors go
+        unavailable rather than showing a frozen value (the #176 case).
+        """
+        if not super().available:
+            return False
+        if not self._source_ir_registers:
+            return True
+        capabilities = self.coordinator.data.capabilities
+        if capabilities is None or self._battery_index >= len(capabilities.lv_battery_addresses):
+            return True
+        return not self._ir_bank_stale(capabilities.lv_battery_addresses[self._battery_index])
+
+    @property
     def native_value(self) -> Any:
         batteries = self.coordinator.data.batteries
         if self._battery_index >= len(batteries):
@@ -1540,7 +1596,9 @@ class GivEnergyBatterySensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Sens
         return self.entity_description.value_fn(batteries[self._battery_index])
 
 
-class GivEnergyAioModuleSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
+class GivEnergyAioModuleSensor(
+    _StaleIRGate, CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity
+):
     """Per-cell sensor for one All-in-One removable battery module (#192).
 
     Each module is its own HA device, linked to the AIO inverter as parent via
@@ -1562,8 +1620,10 @@ class GivEnergyAioModuleSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Se
         # is rebuilt every refresh from whichever module caches decoded, so indices
         # shift when a module drops out — resolving by serial keeps each entity tied
         # to its own module instead of cross-wiring to a neighbour's cell data.
-        serial = coordinator.data.aio_battery_modules[module_index].serial_number
+        module = coordinator.data.aio_battery_modules[module_index]
+        serial = module.serial_number
         self._module_serial = serial
+        self._init_stale_gate(coordinator, type(module), description.key)
         self._attr_unique_id = f"{serial}_{description.key}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, serial)},
@@ -1586,8 +1646,15 @@ class GivEnergyAioModuleSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], Se
 
     @property
     def available(self) -> bool:
-        # Unavailable (not cross-wired) when this module is absent from the poll.
-        return super().available and self._module() is not None
+        # Unavailable (not cross-wired) when this module is absent from the poll,
+        # then — like the inverter/battery gates (#152) — when its own IR bank has
+        # stopped committing past the ceiling (a frozen/held module, #176).
+        module = self._module()
+        if not super().available or module is None:
+            return False
+        if not self._source_ir_registers:
+            return True
+        return not self._ir_bank_stale(module.module_address)
 
     @property
     def native_value(self) -> Any:
