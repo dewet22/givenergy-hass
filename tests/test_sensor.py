@@ -1418,6 +1418,53 @@ def test_monotonic_clock_lag_reset_after_date_flip(mock_plant, freezer):
     assert _read(entity, mock_plant, 0.3) == 0.3
 
 
+def test_monotonic_deferred_reset_admitted_after_gap(mock_plant, freezer):
+    """The deferred owed-reset call honours the elapsed-scaled band too: after a
+    skewed (negative) boundary reading defers the decision, a reset that lands a
+    couple of hours later — above the 0.5 kWh floor but within 15 kW × elapsed —
+    is admitted rather than held as an ambiguous sag."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, -1.0) == 0.0  # boundary skew: decision deferred
+    # Two hours later the reset surfaces at 1.8 kWh — over the floor, so only the
+    # elapsed-scaled ceiling (15 kW × 2 h = 30 kWh) lets it through.
+    freezer.tick(2 * 3600)
+    assert _read(entity, mock_plant, 1.8) == 1.8
+
+
+def test_monotonic_deferred_branch_tolerates_missing_last_read(mock_plant, freezer):
+    """Defensive: the deferred branch falls back to the 0.5 kWh floor when there
+    is no prior-read timestamp to scale against (``_monotonic_last_read`` unset),
+    rather than dividing against None."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 14.3) == 14.3
+    freezer.tick(24 * 3600)
+    assert _read(entity, mock_plant, -1.0) == 0.0  # boundary skew defers the call
+    # Force the no-timestamp edge, then a plausible (sub-floor) post-reset value
+    # still settles the deferred call against the bare floor.
+    entity._monotonic_last_read = None
+    assert _read(entity, mock_plant, 0.2) == 0.2
+
+
+def test_monotonic_max_none_invariant_guard(mock_plant, freezer):
+    """Defensive: if the running max is ever absent while the date is current
+    (an invariant the branches below rely on), a read floors it at max(value, 0)
+    instead of raising."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity = _monotonic_entity(mock_plant)
+
+    assert _read(entity, mock_plant, 10.0) == 10.0
+    # Break the invariant: same day, decision already settled, but no running max.
+    entity._monotonic_max = None
+    assert _read(entity, mock_plant, 5.2) == 5.2
+    assert entity._monotonic_max == 5.2
+
+
 async def test_monotonic_restore_floors_negative(hass, mock_plant):
     """A persisted negative state (recorded by pre-fix versions) must not
     re-seed a negative baseline after restart."""
