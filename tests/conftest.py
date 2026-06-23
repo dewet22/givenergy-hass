@@ -181,6 +181,8 @@ def mock_plant(mock_inverter, mock_battery) -> MagicMock:
     plant.number_batteries = 1
     # Non-AIO by default — AIO per-module tests override this with mock modules.
     plant.aio_battery_modules = []
+    # No HV battery stacks by default — HV-stack tests override this (#95).
+    plant.hv_stacks = []
     # No EMS by default; the EMS-specific tests override this with a mock Ems so
     # the EMS scheduling entities are only created for EMS plants.
     plant.ems = None

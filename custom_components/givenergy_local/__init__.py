@@ -421,6 +421,11 @@ def _migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
             break
 
 
+async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the entry when its options change (registered as an update listener)."""
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Clear any legacy dashboard_outdated issues left by the now-removed
     # generate_dashboard service so the Repairs UI doesn't show a broken Fix button.
@@ -540,6 +545,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator._prior_capabilities = live_capabilities
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+
+    # Reload the entry when its options change (e.g. the battery-data-only toggle,
+    # #95), so the platforms re-enumerate with the new filter. No listener exists
+    # otherwise, so an options change would have no effect until a manual reload.
+    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
 
     # Re-point any entities under renamed unique_ids before the platforms create
     # them, so the existing entity (and its history) is reused rather than orphaned.

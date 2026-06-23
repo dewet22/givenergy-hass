@@ -5,6 +5,7 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PORT
 
 from custom_components.givenergy_local.const import (
+    CONF_BATTERY_DATA_ONLY,
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
     DOMAIN,
@@ -202,3 +203,36 @@ async def test_reconfigure_cannot_connect_shows_error(hass, mock_client, setup_i
     assert result["type"] == "form"
     assert result["errors"] == {"base": "cannot_connect"}
     assert setup_integration.data[CONF_HOST] == "192.168.1.100"
+
+
+async def test_options_flow_sets_battery_data_only(hass, mock_client, setup_integration):
+    """The options flow persists the battery-data-only toggle and reloads the entry."""
+    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    assert result["type"] == "form"
+    assert result["step_id"] == "init"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_BATTERY_DATA_ONLY: True}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert setup_integration.options[CONF_BATTERY_DATA_ONLY] is True
+    # The update listener reloaded the entry, so it's loaded and serving again.
+    assert setup_integration.state is config_entries.ConfigEntryState.LOADED
+
+
+async def test_options_flow_prefills_existing_value(hass, mock_client, setup_integration):
+    """Re-opening the options form when the value is already True must pre-fill True,
+    proving add_suggested_values_to_schema round-trips the saved option."""
+    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_BATTERY_DATA_ONLY: True}
+    )
+    await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    assert result["type"] == "form"
+    markers = {marker.schema: marker for marker in result["data_schema"].schema}
+    suggested = markers[CONF_BATTERY_DATA_ONLY].description.get("suggested_value")
+    assert suggested is True

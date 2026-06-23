@@ -7,11 +7,12 @@ import pytest
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.givenergy_local.const import DOMAIN
+from custom_components.givenergy_local.const import CONF_BATTERY_DATA_ONLY, DOMAIN
 from custom_components.givenergy_local.sensor import (
     AIO_MODULE_SENSORS,
     BATTERY_SENSORS,
     COORDINATOR_SENSORS,
+    HV_STACK_SENSORS,
     INVERTER_SENSORS,
     GivEnergyInverterSensorDescription,
     _include_inverter_sensor,
@@ -872,6 +873,284 @@ def test_aio_module_sensor_descriptions_cover_expected_cells():
     assert len(keys) == len(set(keys))
     assert {k for k in keys if k.startswith("v_cell_")} == {f"v_cell_{i:02d}" for i in range(1, 25)}
     assert {k for k in keys if k.startswith("t_cell_")} == {f"t_cell_{i:02d}" for i in range(1, 13)}
+
+
+# ---------------------------------------------------------------------------
+# HV battery stack (BCU) device + sensors (#95)
+# ---------------------------------------------------------------------------
+
+
+def _mock_bcu(version: str = "GA000009", **overrides) -> MagicMock:
+    """A stand-in BCU with the pack-level fields the HV-stack sensors read."""
+    bcu = MagicMock()
+    bcu.pack_software_version = version
+    bcu.is_valid.return_value = bool(version)
+    defaults = {
+        "battery_voltage": 220.0,
+        "battery_current": 12.5,
+        "battery_power": 2.5,
+        "battery_soc_max": 99,
+        "battery_soc_min": 97,
+        "battery_soh": 100,
+        "charge_energy_total": 1234.5,
+        "discharge_energy_total": 1100.2,
+        "charge_energy_today": 5.5,
+        "discharge_energy_today": 4.4,
+        "battery_nominal_capacity_ah": 160.0,
+        "remaining_battery_capacity_ah": 158.9,
+        "number_of_cycles": 123.0,
+    }
+    for name, value in {**defaults, **overrides}.items():
+        setattr(bcu, name, value)
+    return bcu
+
+
+def _mock_hv_stack(address: int, bcu: MagicMock) -> MagicMock:
+    stack = MagicMock()
+    stack.device_address = address
+    stack.bcu = bcu
+    return stack
+
+
+def _setup_hv_plant(mock_client, stacks: list[MagicMock]) -> None:
+    """Reshape the mock plant into an All-in-One exposing HV `stacks`."""
+    from givenergy_modbus.model.inverter import Model
+    from givenergy_modbus.model.plant import PlantCapabilities
+
+    mock_client.plant.hv_stacks = stacks
+    mock_client.plant.capabilities = PlantCapabilities(
+        device_type=Model.ALL_IN_ONE,
+        inverter_address=0x31,
+        meter_addresses=[],
+        lv_battery_addresses=[],
+        bcu_stacks=[(s.device_address - 0x70, 4) for s in stacks],
+    )
+
+
+@pytest.fixture
+async def hv_setup(hass, mock_client, mock_config_entry):
+    """Set up the integration as an All-in-One with one HV battery stack at 0x70."""
+    _setup_hv_plant(mock_client, [_mock_hv_stack(0x70, _mock_bcu())])
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    return mock_config_entry
+
+
+async def test_hv_stack_creates_one_device(hass, hv_setup):
+    """The HV stack is its own device, keyed by inverter serial + address and
+    linked to the inverter; its headline battery_voltage sensor exists."""
+    registry = er.async_get(hass)
+    dev_registry = dr.async_get(hass)
+    device_id = "SA1234G123_hvstack_0x70"
+    entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{device_id}_battery_voltage")
+    assert entity_id is not None, "HV stack has no battery_voltage sensor"
+    device = dev_registry.async_get(registry.async_get(entity_id).device_id)
+    assert device is not None
+    assert (DOMAIN, device_id) in device.identifiers
+    assert device.name == "GivEnergy HV Battery Stack"
+    assert device.model == "HV Battery Stack (BCU)"
+    assert device.sw_version == "GA000009"
+    inverter_device = dev_registry.async_get_device(identifiers={(DOMAIN, "SA1234G123")})
+    assert inverter_device is not None
+    assert device.via_device_id == inverter_device.id
+    # The value comes off the BCU pack voltage (fixes the inverter-level Unknown).
+    state = hass.states.get(entity_id)
+    assert float(state.state) == 220.0
+    assert state.attributes["unit_of_measurement"] == "V"
+
+
+async def test_non_hv_plant_creates_no_stack_entities(hass, setup_integration):
+    """The default (non-HV) fixture must not create any HV-stack devices."""
+    dev_registry = dr.async_get(hass)
+    stacks = [
+        d
+        for d in dr.async_entries_for_config_entry(dev_registry, setup_integration.entry_id)
+        if d.model == "HV Battery Stack (BCU)"
+    ]
+    assert stacks == []
+
+
+def test_hv_stack_sensor_descriptions_cover_expected_fields():
+    """Exact key set, and the headline bug-fix sensor (battery_voltage) is a
+    VOLTAGE sensor in volts."""
+    from homeassistant.components.sensor import SensorDeviceClass
+
+    keys = {d.key for d in HV_STACK_SENSORS}
+    assert keys == {
+        "battery_voltage",
+        "battery_current",
+        "battery_power",
+        "battery_soc_max",
+        "battery_soc_min",
+        "battery_soh",
+        "charge_energy_total",
+        "discharge_energy_total",
+        "charge_energy_today",
+        "discharge_energy_today",
+        "battery_nominal_capacity_ah",
+        "remaining_battery_capacity_ah",
+        "number_of_cycles",
+        "pack_software_version",
+    }
+    voltage = next(d for d in HV_STACK_SENSORS if d.key == "battery_voltage")
+    assert voltage.device_class == SensorDeviceClass.VOLTAGE
+    assert voltage.native_unit_of_measurement == "V"
+    # Power is kW (the modbus C.milli converter divides IR79 by 1000), not W — a
+    # unit typo here would render readings 1000x off, so pin it.
+    power = next(d for d in HV_STACK_SENSORS if d.key == "battery_power")
+    assert power.native_unit_of_measurement == "kW"
+    energy = next(d for d in HV_STACK_SENSORS if d.key == "charge_energy_total")
+    assert energy.native_unit_of_measurement == "kWh"
+
+
+async def test_hv_stack_resolves_by_address_not_index(hass, mock_client, mock_config_entry):
+    """If a stack drops out and the list reindexes, each entity keeps reporting
+    its own stack by device address, and the dropped one goes unavailable."""
+    _setup_hv_plant(
+        mock_client,
+        [
+            _mock_hv_stack(0x70, _mock_bcu()),
+            _mock_hv_stack(0x71, _mock_bcu(battery_voltage=333.0)),
+        ],
+    )
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][mock_config_entry.entry_id]
+    # The first stack (0x70) drops out; only 0x71 remains, now at index 0.
+    coordinator.data.hv_stacks = [_mock_hv_stack(0x71, _mock_bcu(battery_voltage=333.0))]
+    coordinator.async_set_updated_data(coordinator.data)
+    await hass.async_block_till_done()
+
+    survivor_id = _entity_id(hass, "sensor", "SA1234G123_hvstack_0x71_battery_voltage")
+    assert float(hass.states.get(survivor_id).state) == 333.0
+    dropped_id = _entity_id(hass, "sensor", "SA1234G123_hvstack_0x70_battery_voltage")
+    assert hass.states.get(dropped_id).state == "unavailable"
+
+
+async def test_hv_stack_with_invalid_bcu_is_skipped(hass, mock_client, mock_config_entry):
+    """A stack whose BCU didn't decode (no pack version) anchors no device."""
+    _setup_hv_plant(
+        mock_client,
+        [_mock_hv_stack(0x70, _mock_bcu()), _mock_hv_stack(0x71, _mock_bcu(version=""))],
+    )
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    dev_registry = dr.async_get(hass)
+    stacks = [
+        d
+        for d in dr.async_entries_for_config_entry(dev_registry, mock_config_entry.entry_id)
+        if d.model == "HV Battery Stack (BCU)"
+    ]
+    assert len(stacks) == 1
+    assert (DOMAIN, "SA1234G123_hvstack_0x70") in stacks[0].identifiers
+
+
+def test_hv_stack_sensor_unavailable_when_backing_ir_block_stale(mock_plant):
+    """A BCU IR bank that stopped committing past the ceiling drops the stack's
+    sensors to unavailable, queried against the stack's own device address (0x70)."""
+    from datetime import timedelta
+
+    from givenergy_modbus.model.register import IR
+
+    from custom_components.givenergy_local.sensor import GivEnergyHvStackSensor
+
+    stack = _mock_hv_stack(0x70, _mock_bcu())
+    mock_plant.hv_stacks = [stack]
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    desc = next(d for d in HV_STACK_SENSORS if d.key == "battery_voltage")
+    entity = GivEnergyHvStackSensor(coordinator, desc, 0)
+    # Mock BCU has no register LUT, so inject the source register the resolver
+    # would derive from the real model (battery_voltage = IR73).
+    entity._source_ir_registers = (IR(73),)
+    mock_plant.register_age = MagicMock()
+
+    mock_plant.register_age.return_value = 35.0
+    assert entity.available is True
+    (addr, reg) = mock_plant.register_age.call_args.args
+    assert addr == 0x70  # the stack's device address, not a list index
+    assert (reg.reg_type, reg.index) == ("IR", 73)
+    mock_plant.register_age.return_value = 600.0
+    assert entity.available is False
+    mock_plant.register_age.return_value = None
+    assert entity.available is True
+    # Stack absent from the poll: unavailable, freshness not even consulted.
+    mock_plant.hv_stacks = []
+    mock_plant.register_age.reset_mock()
+    mock_plant.register_age.return_value = 35.0
+    assert entity.available is False
+    mock_plant.register_age.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Battery-data-only option (#95)
+# ---------------------------------------------------------------------------
+
+
+async def _setup_battery_data_only(hass, mock_client, *, enabled: bool):
+    """Set up an HV+battery plant with the battery-data-only option set."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    _setup_hv_plant(mock_client, [_mock_hv_stack(0x70, _mock_bcu())])
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "192.168.1.100", "port": 8899, "scan_interval": 30, "passive": False},
+        options={CONF_BATTERY_DATA_ONLY: enabled},
+        unique_id="SA1234G123",
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
+async def test_battery_data_only_suppresses_control_platforms(hass, mock_client):
+    """With the option on, no control entities (switch/number/select/time) exist."""
+    entry = await _setup_battery_data_only(hass, mock_client, enabled=True)
+    registry = er.async_get(hass)
+    control_domains = {
+        e.domain
+        for e in er.async_entries_for_config_entry(registry, entry.entry_id)
+        if e.domain in ("switch", "number", "select", "time")
+    }
+    assert control_domains == set()
+
+
+async def test_battery_data_only_keeps_battery_drops_inverter_sensors(hass, mock_client):
+    """With the option on, battery/stack/coordinator sensors remain while
+    inverter-level system sensors (incl. the misleading derived ones) are gone."""
+    await _setup_battery_data_only(hass, mock_client, enabled=True)
+    registry = er.async_get(hass)
+
+    def has(unique_id: str) -> bool:
+        return registry.async_get_entity_id("sensor", DOMAIN, unique_id) is not None
+
+    # Kept: HV stack, LV battery pack, coordinator diagnostics.
+    assert has("SA1234G123_hvstack_0x70_battery_voltage")
+    assert has("BT1234A001_soc")
+    assert has("SA1234G123_last_successful_refresh")
+    # Dropped: inverter-level system + derived sensors AberDino flagged.
+    assert not has("SA1234G123_p_pv")
+    assert not has("SA1234G123_e_consumption_today")
+    assert not has("SA1234G123_e_discharge_year")
+    assert not has("SA1234G123_battery_soc")
+
+
+async def test_battery_data_only_off_creates_controls_and_inverter_sensors(hass, mock_client):
+    """Sanity guard against inverted logic: option off yields the full set."""
+    entry = await _setup_battery_data_only(hass, mock_client, enabled=False)
+    registry = er.async_get(hass)
+    entities = er.async_entries_for_config_entry(registry, entry.entry_id)
+    assert any(e.domain == "switch" for e in entities)
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_p_pv") is not None
 
 
 # ---------------------------------------------------------------------------
