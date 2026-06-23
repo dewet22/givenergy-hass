@@ -1,11 +1,14 @@
 """Tests for the GivEnergy Local sensor platform."""
 
 from datetime import UTC
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from homeassistant.components.sensor import SensorStateClass
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.entity import EntityCategory
 
 from custom_components.givenergy_local.const import CONF_BATTERY_DATA_ONLY, DOMAIN
 from custom_components.givenergy_local.sensor import (
@@ -187,6 +190,39 @@ async def test_expected_sensor_count(hass, setup_integration):
     assert len(sensors) == expected
 
 
+def test_comms_counter_descriptions_compute_total_and_breakdown():
+    """The CRC/splice diagnostic counters sum across devices and expose a
+    per-device breakdown attribute (None when nothing has been counted)."""
+    by_key = {d.key: d for d in COORDINATOR_SENSORS}
+    coord = SimpleNamespace(
+        crc_failures_by_device={0x33: 2, 0x32: 1},
+        splice_rejections_by_device={},
+        splice_holds_by_device={0x70: 5},
+        read_retries_by_device={0x33: 8},
+    )
+
+    for key in ("crc_failures", "splice_rejections", "splice_holds", "read_retries"):
+        desc = by_key[key]
+        assert desc.state_class == SensorStateClass.TOTAL_INCREASING
+        assert desc.entity_category == EntityCategory.DIAGNOSTIC
+        assert desc.attributes_fn is not None
+
+    assert by_key["crc_failures"].value_fn(coord) == 3
+    assert by_key["crc_failures"].attributes_fn(coord) == {"per_device": {"0x32": 1, "0x33": 2}}
+    assert by_key["splice_rejections"].value_fn(coord) == 0
+    assert by_key["splice_rejections"].attributes_fn(coord) is None
+    assert by_key["splice_holds"].value_fn(coord) == 5
+    assert by_key["read_retries"].value_fn(coord) == 8
+
+
+async def test_comms_counter_sensors_default_to_zero(hass, setup_integration):
+    """The four noise-floor counters are created and read 0 on a clean plant."""
+    for key in ("crc_failures", "splice_rejections", "splice_holds", "read_retries"):
+        state = hass.states.get(_entity_id(hass, "sensor", f"SA1234G123_{key}"))
+        assert state is not None, f"{key} sensor should be created"
+        assert state.state == "0"
+
+
 async def test_single_phase_only_sensors_absent_on_three_phase(
     hass, mock_client, mock_config_entry
 ):
@@ -346,7 +382,6 @@ async def test_bms_status_warning_rendered_as_hex(hass, setup_integration):
 def test_battery_hex_formatter_branches():
     """The _battery_hex value_fn: formats ints, unwraps Enum-like `.value`, and
     fails soft (None) on missing or non-numeric attributes."""
-    from types import SimpleNamespace
 
     from custom_components.givenergy_local.sensor import _battery_hex
 

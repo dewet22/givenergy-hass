@@ -181,6 +181,19 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         # When the most recent partial poll occurred (UTC), retained alongside
         # last_partial_failures so the diagnostic sensor can show how long ago.
         self.last_partial_at: datetime | None = None
+        # Comms-quality noise floor: per-device cumulative counts of CRC-failed
+        # responses, splice-guard trips, and read retries consumed — mirrored
+        # from the library's own Plant counters (which reset on each Client/Plant
+        # re-instantiation). We accumulate reset-aware deltas here so the
+        # diagnostic sensors stay monotonic across reconnects, like
+        # total_failures. Keyed by device address; the headline sensor value is
+        # the sum across devices.
+        self.crc_failures_by_device: dict[int, int] = {}
+        self.splice_rejections_by_device: dict[int, int] = {}
+        self.splice_holds_by_device: dict[int, int] = {}
+        self.read_retries_by_device: dict[int, int] = {}
+        # Last cumulative value seen per library attr per device, for delta-ing.
+        self._comms_last_seen: dict[str, dict[int, int]] = {}
         # Length of the current unbroken run of partial polls, used only to
         # throttle the partial log (see _record_partial). Reset by a clean poll.
         self._consecutive_partials: int = 0
@@ -298,6 +311,42 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self._last_inverter_time = plant.inverter.system_time
         self.last_successful_refresh = dt_util.utcnow()
         self.consecutive_failures = 0
+        self._accumulate_comms_counters(plant)
+
+    # (library Plant attr, our per-device cumulative dict attr)
+    _COMMS_COUNTER_SOURCES = (
+        ("crc_failure_count", "crc_failures_by_device"),
+        ("splice_reject_count", "splice_rejections_by_device"),
+        ("splice_held_count", "splice_holds_by_device"),
+        ("retry_count", "read_retries_by_device"),
+    )
+
+    def _accumulate_comms_counters(self, plant: Plant) -> None:
+        """Fold the library's per-device comms-quality counters into our own.
+
+        givenergy-modbus exposes cumulative-since-construction counters for
+        CRC-failed responses and splice-guard trips (keyed by device address);
+        they reset whenever the Client/Plant is re-instantiated (e.g. on a
+        reconnect). We mirror them into coordinator-level dicts that survive
+        reconnects, accumulating reset-aware deltas so the diagnostic sensors
+        stay monotonic (like total_failures). Reads are defensive: on a modbus
+        build that predates these counters the attribute is absent (or, under a
+        MagicMock test plant, not a dict), so the counters simply stay at zero.
+        """
+        for lib_attr, dest_attr in self._COMMS_COUNTER_SOURCES:
+            lib_counts = getattr(plant, lib_attr, None)
+            if not isinstance(lib_counts, dict):
+                continue
+            dest: dict[int, int] = getattr(self, dest_attr)
+            last_seen = self._comms_last_seen.setdefault(lib_attr, {})
+            for device, current in lib_counts.items():
+                last = last_seen.get(device, 0)
+                # current < last ⇒ the library counter reset (fresh Plant);
+                # treat the new value as the delta rather than going negative.
+                delta = current - last if current >= last else current
+                if delta:
+                    dest[device] = dest.get(device, 0) + delta
+                last_seen[device] = current
 
     def _record_failure(self) -> None:
         """Count a poll that yielded no usable data."""
@@ -448,6 +497,12 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         — required for three-phase, AIO-HV, EMS and other non-default topologies.
         """
         self._client = Client(host=self.host, port=self.port)
+        # A fresh Client means a fresh Plant with its comms counters zeroed, so
+        # drop the per-device last-seen baselines: the next poll then captures
+        # the full post-reconnect value as the delta. Without this, a counter
+        # that climbs back past its pre-reconnect value before the first poll
+        # would be mistaken for monotonic growth and undercounted.
+        self._comms_last_seen.clear()
         try:
             await self._client.connect()
             topology_confirmed = True
