@@ -1098,6 +1098,18 @@ async def test_hv_stack_creates_one_device(hass, hv_setup):
     assert state.attributes["unit_of_measurement"] == "V"
 
 
+async def test_aio_model_suppresses_pv_sensors_even_with_empty_modules(hass, hv_setup):
+    """The AIO gate keys off the detected model (Model.ALL_IN_ONE, restored from the
+    capabilities cache), not decoded module telemetry. hv_setup is an AIO whose
+    aio_battery_modules list is empty (the cold-start / transient-drop case), yet the
+    PV/solar-only inverter sensors must still be suppressed (#95, review)."""
+    registry = er.async_get(hass)
+    for key in ("num_mppt", "e_solar_diverter", "e_discharge_year"):
+        assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is None, key
+    # Sanity: the inverter-sensor loop did run (only the PV/solar fields were gated).
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_system_mode") is not None
+
+
 async def test_non_hv_plant_creates_no_stack_entities(hass, setup_integration):
     """The default (non-HV) fixture must not create any HV-stack devices."""
     dev_registry = dr.async_get(hass)

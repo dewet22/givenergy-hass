@@ -1512,9 +1512,12 @@ async def async_setup_entry(
     inverter = coordinator.data.inverter
     capabilities = coordinator.data.capabilities
     is_three_phase = bool(capabilities and capabilities.is_three_phase)
-    # An AIO (battery-only) plant carries per-module battery devices; its inverter
-    # exposes PV/solar fields that read meaningless values, so gate those out (#95).
-    is_aio = bool(coordinator.data.aio_battery_modules)
+    # A pure All-in-One is battery-only, so its inverter's PV/solar fields read
+    # meaningless values — gate those sensors out (#95). Key off the detected model
+    # (restored from the on-disk capabilities cache), NOT decoded module telemetry:
+    # an AIO whose modules drop out on the setup poll must still be recognised, and
+    # ALL_IN_ONE_HYBRID genuinely has PV so is deliberately excluded.
+    is_aio = bool(capabilities) and capabilities.device_type is Model.ALL_IN_ONE
     battery_data_only = entry.options.get(CONF_BATTERY_DATA_ONLY, DEFAULT_BATTERY_DATA_ONLY)
 
     entities: list[SensorEntity] = []
