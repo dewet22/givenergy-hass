@@ -1421,7 +1421,7 @@ def test_monotonic_clock_lag_reset_after_date_flip(mock_plant, freezer):
 def test_monotonic_deferred_reset_admitted_after_gap(mock_plant, freezer):
     """The deferred owed-reset call honours the elapsed-scaled band too: after a
     skewed (negative) boundary reading defers the decision, a reset that lands a
-    couple of hours later — above the 0.5 kWh floor but within 15 kW × elapsed —
+    couple of hours later — above the 0.5 kWh floor but within 15 kW x elapsed —
     is admitted rather than held as an ambiguous sag."""
     freezer.move_to("2026-06-12 12:00:00+00:00")
     entity = _monotonic_entity(mock_plant)
@@ -1430,7 +1430,7 @@ def test_monotonic_deferred_reset_admitted_after_gap(mock_plant, freezer):
     freezer.tick(24 * 3600)
     assert _read(entity, mock_plant, -1.0) == 0.0  # boundary skew: decision deferred
     # Two hours later the reset surfaces at 1.8 kWh — over the floor, so only the
-    # elapsed-scaled ceiling (15 kW × 2 h = 30 kWh) lets it through.
+    # elapsed-scaled ceiling (15 kW x 2 h = 30 kWh) lets it through.
     freezer.tick(2 * 3600)
     assert _read(entity, mock_plant, 1.8) == 1.8
 
