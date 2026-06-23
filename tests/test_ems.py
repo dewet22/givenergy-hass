@@ -264,13 +264,15 @@ async def test_realignment_issue_raised_for_stale_inverter_prefixed_entities(
     mock_inverter.model = Model.EMS
     mock_config_entry.add_to_hass(hass)
 
-    # Pre-seed a stale entity id (as a pre-rename install would have).
+    # Pre-seed a surviving entity (a coordinator diagnostic) under the stale
+    # givenergy_inverter_ prefix. Inverter sensors are removed on EMS now (#201),
+    # so the realignment prompt must key off an entity that actually persists.
     er.async_get(hass).async_get_or_create(
         "sensor",
         DOMAIN,
-        "SA1234G123_status",
+        "SA1234G123_total_failures",
         config_entry=mock_config_entry,
-        suggested_object_id="givenergy_inverter_sa1234g123_status",
+        suggested_object_id="givenergy_inverter_sa1234g123_total_failures",
     )
 
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
@@ -376,6 +378,47 @@ async def test_inverter_controls_suppressed_on_ems_plant(hass, ems_setup):
     assert _entity_id(hass, "number", "SA1234G123_charge_target_soc") is None
     assert _entity_id(hass, "select", "SA1234G123_battery_power_mode") is None
     assert _entity_id(hass, "time", "SA1234G123_charge_slot_1_start") is None
+
+
+async def test_upgrade_removes_retired_inverter_entities_on_ems(
+    hass, mock_client, mock_plant, mock_inverter, mock_ems, mock_config_entry
+):
+    """Upgrade path (#201): inverter sensor/control rows a pre-#201 EMS install
+    created are removed from the registry, while coordinator and EMS entities
+    survive. Suppressing creation alone wouldn't clean up an existing entry — HA
+    keeps registry rows a platform stops adding."""
+    mock_plant.ems = mock_ems
+    mock_inverter.model = Model.EMS
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    # Rows a pre-#201 EMS controller would carry, across every affected platform.
+    for domain, unique_id in (
+        ("sensor", "SA1234G123_status"),
+        ("sensor", "SA1234G123_p_load_demand"),
+        ("switch", "SA1234G123_enable_charge"),
+        ("number", "SA1234G123_charge_target_soc"),
+        ("select", "SA1234G123_battery_power_mode"),
+        ("time", "SA1234G123_charge_slot_1_start"),
+    ):
+        registry.async_get_or_create(domain, DOMAIN, unique_id, config_entry=mock_config_entry)
+    # A coordinator diagnostic that must survive the reconciliation.
+    registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_total_failures", config_entry=mock_config_entry
+    )
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Retired inverter sensors + controls removed.
+    assert _entity_id(hass, "sensor", "SA1234G123_status") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_p_load_demand") is None
+    assert _entity_id(hass, "switch", "SA1234G123_enable_charge") is None
+    assert _entity_id(hass, "number", "SA1234G123_charge_target_soc") is None
+    assert _entity_id(hass, "select", "SA1234G123_battery_power_mode") is None
+    assert _entity_id(hass, "time", "SA1234G123_charge_slot_1_start") is None
+    # Coordinator diagnostic and EMS telemetry survive.
+    assert _entity_id(hass, "sensor", "SA1234G123_total_failures") is not None
+    assert _entity_id(hass, "sensor", "SA1234G123_ems_grid_meter_power") is not None
 
 
 # ---------------------------------------------------------------------------

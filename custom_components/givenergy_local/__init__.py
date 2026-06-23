@@ -421,6 +421,55 @@ def _migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
             break
 
 
+def _retired_inverter_unique_ids(serial: str) -> set[str]:
+    """Unique IDs of the inverter-level entities retired on an EMS plant (#201).
+
+    On an EMS controller the inverter sensors and inverter-level controls are no
+    longer created — the 0x11 device is a controller, not an inverter. Built from
+    the exact description tuples the EMS setup path now skips, keyed by the
+    controller serial. Coordinator, EMS-specific, battery, AIO and managed-inverter
+    entities use different keys or their own serials, so they're excluded.
+    """
+    # Local imports: these platform modules are imported by the platform setup
+    # anyway, and importing them at module scope here risks a load-order cycle.
+    from .number import AC_COUPLED_NUMBER_DESCRIPTIONS, NUMBER_DESCRIPTIONS
+    from .select import AC_COUPLED_SELECT_DESCRIPTIONS, SELECT_DESCRIPTIONS
+    from .sensor import INVERTER_SENSORS
+    from .switch import AC_COUPLED_SWITCH_DESCRIPTIONS, SWITCH_DESCRIPTIONS
+    from .time import SMART_LOAD_TIME_DESCRIPTIONS, TIME_DESCRIPTIONS
+
+    retired = (
+        *INVERTER_SENSORS,
+        *SWITCH_DESCRIPTIONS,
+        *AC_COUPLED_SWITCH_DESCRIPTIONS,
+        *NUMBER_DESCRIPTIONS,
+        *AC_COUPLED_NUMBER_DESCRIPTIONS,
+        *SELECT_DESCRIPTIONS,
+        *AC_COUPLED_SELECT_DESCRIPTIONS,
+        *TIME_DESCRIPTIONS,
+        *SMART_LOAD_TIME_DESCRIPTIONS,
+    )
+    return {f"{serial}_{description.key}" for description in retired}
+
+
+def _reconcile_ems_entities(hass: HomeAssistant, entry: ConfigEntry, serial: str) -> None:
+    """Remove inverter-level entities retired on an EMS plant (#201).
+
+    Suppressing creation only affects fresh installs: on an upgraded EMS entry HA
+    keeps the existing registry rows when a platform stops adding those entities,
+    so the controller would otherwise stay cluttered with orphaned/unavailable
+    inverter sensors and controls. Remove exactly those rows (matched by the
+    controller serial + a retired key), leaving coordinator, battery, AIO,
+    managed-inverter and EMS-specific entities untouched.
+    """
+    registry = er.async_get(hass)
+    retired = _retired_inverter_unique_ids(serial)
+    for ent in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if ent.unique_id in retired:
+            _LOGGER.info("Removing inverter entity %s retired on EMS plant (#201)", ent.entity_id)
+            registry.async_remove(ent.entity_id)
+
+
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload the entry when its options change (registered as an update listener)."""
     await hass.config_entries.async_reload(entry.entry_id)
@@ -554,6 +603,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Re-point any entities under renamed unique_ids before the platforms create
     # them, so the existing entity (and its history) is reused rather than orphaned.
     _migrate_unique_ids(hass, entry)
+
+    # On an EMS plant the 0x11 device is a controller, not an inverter (#201). An
+    # upgraded entry still carries the inverter sensors/controls an earlier version
+    # created; remove them so the controller falls to its lean EMS set instead of
+    # keeping them as orphaned/unavailable rows. Fresh installs match nothing.
+    if coordinator.data.ems is not None:
+        _reconcile_ems_entities(hass, entry, coordinator.data.inverter_serial_number)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
