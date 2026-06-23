@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 from givenergy_modbus.model import TimeSlot
 from givenergy_modbus.model.devices import InverterSummary
-from givenergy_modbus.model.inverter import Model
+from givenergy_modbus.model.inverter import Model, Status
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
@@ -42,6 +42,14 @@ def mock_ems() -> MagicMock:
     ems.export_power_limit = 3600
     ems.plant_enabled = True
     ems.managed_inverters = []
+    # Plant-level aggregate telemetry (#201) surfaced as EMS_SENSORS.
+    ems.ems_status = Status.NORMAL
+    ems.inverter_count = 2
+    ems.calc_load_power = 1234
+    ems.measured_load_power = 1300
+    ems.grid_meter_power = -500
+    ems.total_battery_power = 800
+    ems.remaining_battery_wh = 5000
     return ems
 
 
@@ -256,13 +264,15 @@ async def test_realignment_issue_raised_for_stale_inverter_prefixed_entities(
     mock_inverter.model = Model.EMS
     mock_config_entry.add_to_hass(hass)
 
-    # Pre-seed a stale entity id (as a pre-rename install would have).
+    # Pre-seed a surviving entity (a coordinator diagnostic) under the stale
+    # givenergy_inverter_ prefix. Inverter sensors are removed on EMS now (#201),
+    # so the realignment prompt must key off an entity that actually persists.
     er.async_get(hass).async_get_or_create(
         "sensor",
         DOMAIN,
-        "SA1234G123_status",
+        "SA1234G123_total_failures",
         config_entry=mock_config_entry,
-        suggested_object_id="givenergy_inverter_sa1234g123_status",
+        suggested_object_id="givenergy_inverter_sa1234g123_total_failures",
     )
 
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
@@ -346,3 +356,91 @@ async def test_managed_inverter_dedup_duplicate_serial(
         if d.model == "Managed Inverter (EMS)"
     ]
     assert len(managed) == 1
+
+
+# ---------------------------------------------------------------------------
+# Inverter-entity suppression on EMS (#201)
+# ---------------------------------------------------------------------------
+
+
+async def test_inverter_sensors_suppressed_on_ems_plant(hass, ems_setup):
+    """The EMS controller is not an inverter, so the inverter sensor set is
+    suppressed — it would otherwise be a wall of permanently-unavailable
+    entities. The EMS aggregates below take their place."""
+    assert _entity_id(hass, "sensor", "SA1234G123_status") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_p_load_demand") is None
+
+
+async def test_inverter_controls_suppressed_on_ems_plant(hass, ems_setup):
+    """Inverter-level controls are redundant on an EMS plant — the EMS slots are
+    authoritative — so they're suppressed across switch/number/select/time."""
+    assert _entity_id(hass, "switch", "SA1234G123_enable_charge") is None
+    assert _entity_id(hass, "number", "SA1234G123_charge_target_soc") is None
+    assert _entity_id(hass, "select", "SA1234G123_battery_power_mode") is None
+    assert _entity_id(hass, "time", "SA1234G123_charge_slot_1_start") is None
+
+
+async def test_upgrade_removes_retired_inverter_entities_on_ems(
+    hass, mock_client, mock_plant, mock_inverter, mock_ems, mock_config_entry
+):
+    """Upgrade path (#201): inverter sensor/control rows a pre-#201 EMS install
+    created are removed from the registry, while coordinator and EMS entities
+    survive. Suppressing creation alone wouldn't clean up an existing entry — HA
+    keeps registry rows a platform stops adding."""
+    mock_plant.ems = mock_ems
+    mock_inverter.model = Model.EMS
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    # Rows a pre-#201 EMS controller would carry, across every affected platform.
+    for domain, unique_id in (
+        ("sensor", "SA1234G123_status"),
+        ("sensor", "SA1234G123_p_load_demand"),
+        ("switch", "SA1234G123_enable_charge"),
+        ("number", "SA1234G123_charge_target_soc"),
+        ("select", "SA1234G123_battery_power_mode"),
+        ("time", "SA1234G123_charge_slot_1_start"),
+    ):
+        registry.async_get_or_create(domain, DOMAIN, unique_id, config_entry=mock_config_entry)
+    # A coordinator diagnostic that must survive the reconciliation.
+    registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_total_failures", config_entry=mock_config_entry
+    )
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Retired inverter sensors + controls removed.
+    assert _entity_id(hass, "sensor", "SA1234G123_status") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_p_load_demand") is None
+    assert _entity_id(hass, "switch", "SA1234G123_enable_charge") is None
+    assert _entity_id(hass, "number", "SA1234G123_charge_target_soc") is None
+    assert _entity_id(hass, "select", "SA1234G123_battery_power_mode") is None
+    assert _entity_id(hass, "time", "SA1234G123_charge_slot_1_start") is None
+    # Coordinator diagnostic and EMS telemetry survive.
+    assert _entity_id(hass, "sensor", "SA1234G123_total_failures") is not None
+    assert _entity_id(hass, "sensor", "SA1234G123_ems_grid_meter_power") is not None
+
+
+# ---------------------------------------------------------------------------
+# EMS plant-level telemetry sensors (#201)
+# ---------------------------------------------------------------------------
+
+
+async def test_ems_sensors_created_and_read(hass, ems_setup):
+    """The EMS aggregate telemetry surfaces on the controller device."""
+    assert hass.states.get(_entity_id(hass, "sensor", "SA1234G123_ems_status")).state == "normal"
+    assert hass.states.get(_entity_id(hass, "sensor", "SA1234G123_ems_inverter_count")).state == "2"
+    grid = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_ems_grid_meter_power"))
+    assert grid.state == "-500"
+    assert grid.attributes["unit_of_measurement"] == "W"
+    assert grid.attributes["device_class"] == "power"
+    remaining = hass.states.get(
+        _entity_id(hass, "sensor", "SA1234G123_ems_remaining_battery_energy")
+    )
+    assert remaining.state == "5000"
+
+
+async def test_no_ems_sensors_for_non_ems_plant(hass, setup_integration):
+    """A non-EMS plant must not get the EMS aggregate sensors."""
+    assert _entity_id(hass, "sensor", "SA1234G123_ems_grid_meter_power") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_ems_status") is None
