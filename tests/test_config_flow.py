@@ -40,6 +40,24 @@ async def test_successful_setup_creates_entry(hass, mock_client):
     assert result["data"] == VALID_USER_INPUT
 
 
+async def test_setup_with_battery_data_only_sets_option(hass, mock_client):
+    """Ticking battery-data-only at add time lands in entry.options (where it's read
+    everywhere), not data — so a parallel-mode AIO can be added without its
+    inverter-level sensors ever being created then going unavailable (#95)."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**VALID_USER_INPUT, CONF_BATTERY_DATA_ONLY: True}
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert result["options"] == {CONF_BATTERY_DATA_ONLY: True}
+    assert CONF_BATTERY_DATA_ONLY not in result["data"]
+    assert result["data"] == VALID_USER_INPUT
+
+
 async def test_cannot_connect_shows_error(hass, mock_client):
     mock_client.connect.side_effect = ConnectionRefusedError()
 

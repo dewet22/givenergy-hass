@@ -56,6 +56,11 @@ class GivEnergyInverterSensorDescription(SensorEntityDescription):
     value_fn: Callable[[InverterModel], Any] = field(default=lambda _: None)
     # If True, the entity is not created when value_fn returns None at first refresh.
     skip_if_none: bool = False
+    # If True, the entity is not created on an AIO (battery-only) plant, where the
+    # field reads a meaningless value rather than None (MPPT count 0, a solar
+    # diverter total, a static yearly discharge figure), so skip_if_none can't
+    # catch it (#95).
+    skip_if_aio: bool = False
     # If True, the entity is not created on three-phase inverters, where the
     # underlying field is single-phase-only (e.g. a p_pv1+p_pv2 sum) and so would
     # be meaningless or surface as a permanently-unavailable orphan entity.
@@ -723,7 +728,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_discharge_year,
-        # None on AIO (IR29 unpopulated) — drop rather than show "Unknown" (#194).
+        # AIO reports a static, meaningless figure here (not None), so skip_if_none
+        # never caught it — gate on AIO topology instead (#95). skip_if_none still
+        # drops it on any non-AIO model where the register is genuinely absent.
+        skip_if_aio=True,
         skip_if_none=True,
     ),
     # --- Lifetime battery energy totals (routed per-model in givenergy-modbus
@@ -757,6 +765,8 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
+        # No PV/solar on a battery-only AIO; reads 0.0 not None, so gate on AIO (#95).
+        skip_if_aio=True,
         skip_if_none=True,
         value_fn=lambda inv: inv.e_solar_diverter,
     ),
@@ -841,7 +851,8 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         key="num_mppt",
         name="MPPT Count",
         value_fn=lambda inv: inv.num_mppt,
-        # None on AIO (HR3 high byte unpopulated) — drop rather than "Unknown" (#194).
+        # No PV strings on a battery-only AIO; reads 0 not None, so gate on AIO (#95).
+        skip_if_aio=True,
         skip_if_none=True,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
@@ -1188,14 +1199,6 @@ HV_STACK_SENSORS: tuple[GivEnergyHvStackSensorDescription, ...] = (
         value_fn=_bcu_attr("battery_current"),
     ),
     GivEnergyHvStackSensorDescription(
-        key="battery_power",
-        name="Battery Power",
-        native_unit_of_measurement=UnitOfPower.KILO_WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=_bcu_attr("battery_power"),
-    ),
-    GivEnergyHvStackSensorDescription(
         key="battery_soc_max",
         name="Battery SOC Max",
         native_unit_of_measurement=PERCENTAGE,
@@ -1468,6 +1471,7 @@ def _include_inverter_sensor(
     description: GivEnergyInverterSensorDescription,
     inverter: InverterModel,
     is_three_phase: bool,
+    is_aio: bool = False,
 ) -> bool:
     """Whether to create an inverter sensor at setup.
 
@@ -1483,6 +1487,8 @@ def _include_inverter_sensor(
     skip the offending sensor with a warning, but keep the rest.
     """
     if description.single_phase_only and is_three_phase:
+        return False
+    if description.skip_if_aio and is_aio:
         return False
     if not description.skip_if_none:
         return True
@@ -1506,6 +1512,12 @@ async def async_setup_entry(
     inverter = coordinator.data.inverter
     capabilities = coordinator.data.capabilities
     is_three_phase = bool(capabilities and capabilities.is_three_phase)
+    # A pure All-in-One is battery-only, so its inverter's PV/solar fields read
+    # meaningless values — gate those sensors out (#95). Key off the detected model
+    # (restored from the on-disk capabilities cache), NOT decoded module telemetry:
+    # an AIO whose modules drop out on the setup poll must still be recognised, and
+    # ALL_IN_ONE_HYBRID genuinely has PV so is deliberately excluded.
+    is_aio = bool(capabilities) and capabilities.device_type is Model.ALL_IN_ONE
     battery_data_only = entry.options.get(CONF_BATTERY_DATA_ONLY, DEFAULT_BATTERY_DATA_ONLY)
 
     entities: list[SensorEntity] = []
@@ -1518,7 +1530,7 @@ async def async_setup_entry(
         entities.extend(
             GivEnergyInverterSensor(coordinator, description)
             for description in INVERTER_SENSORS
-            if _include_inverter_sensor(description, inverter, is_three_phase)
+            if _include_inverter_sensor(description, inverter, is_three_phase, is_aio)
         )
 
     for battery_index, battery in enumerate(coordinator.data.batteries):
