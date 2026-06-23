@@ -1297,6 +1297,25 @@ def _partial_failure_attributes(
     }
 
 
+def _comms_counter_attributes(
+    by_device_attr: str,
+) -> Callable[[GivEnergyUpdateCoordinator], dict[str, Any] | None]:
+    """Build an attributes_fn exposing a per-device breakdown of a comms counter.
+
+    Mirrors _partial_failure_attributes: returns None when nothing has been
+    counted, else a hex-keyed {device: count} map so a noisy device (a flaky
+    bus, one splice-rejecting pack) can be spotted against the plant total.
+    """
+
+    def _attrs(coordinator: GivEnergyUpdateCoordinator) -> dict[str, Any] | None:
+        by_device: dict[int, int] = getattr(coordinator, by_device_attr)
+        if not by_device:
+            return None
+        return {"per_device": {f"0x{addr:02x}": count for addr, count in sorted(by_device.items())}}
+
+    return _attrs
+
+
 COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
     GivEnergyCoordinatorSensorDescription(
         key="last_successful_refresh",
@@ -1331,6 +1350,50 @@ COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda coord: coord.partial_failures,
         attributes_fn=_partial_failure_attributes,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyCoordinatorSensorDescription(
+        key="crc_failures",
+        name="CRC Errors",
+        # Per-device CRC-failed responses the library skipped (keep-last-good).
+        # A few a day is the normal noise floor; a climbing rate on one device
+        # flags a degrading link. The attributes name which device(s).
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda coord: sum(coord.crc_failures_by_device.values()),
+        attributes_fn=_comms_counter_attributes("crc_failures_by_device"),
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyCoordinatorSensorDescription(
+        key="splice_rejections",
+        name="Splice Guard Rejections",
+        # Battery banks hard-rejected by the sub-bus splice guard (keep-last-
+        # good). Expected to be near-zero; a sustained climb on one pack points
+        # at sub-bus corruption or a poisoned baseline.
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda coord: sum(coord.splice_rejections_by_device.values()),
+        attributes_fn=_comms_counter_attributes("splice_rejections_by_device"),
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyCoordinatorSensorDescription(
+        key="splice_holds",
+        name="Splice Guard Holds",
+        # Banks escrowed for one poll pending confirmation — the softer splice
+        # signal (often benign). Counts hold events, not currently-held banks.
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda coord: sum(coord.splice_holds_by_device.values()),
+        attributes_fn=_comms_counter_attributes("splice_holds_by_device"),
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyCoordinatorSensorDescription(
+        key="read_retries",
+        name="Read Retries",
+        # Register reads that needed at least one re-request before succeeding
+        # (or giving up). The earliest creeping-degradation signal — a read that
+        # recovers on retry is otherwise reported as a clean success. A climbing
+        # rate on one device flags a link starting to struggle.
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda coord: sum(coord.read_retries_by_device.values()),
+        attributes_fn=_comms_counter_attributes("read_retries_by_device"),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
 )

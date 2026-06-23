@@ -3,7 +3,8 @@
 import asyncio
 import logging
 from datetime import datetime
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from givenergy_modbus.exceptions import (
@@ -420,6 +421,72 @@ async def test_partial_success_increments_partial_failures_cumulatively(hass, mo
     assert coordinator.partial_failures == 3
     assert coordinator.consecutive_failures == 0
     assert coordinator.total_failures == 0
+
+
+def _comms_plant(crc=None, reject=None, held=None, retry=None, system_time=None) -> SimpleNamespace:
+    """A minimal plant stub carrying the library's comms-quality counters."""
+    return SimpleNamespace(
+        inverter=SimpleNamespace(system_time=system_time),
+        crc_failure_count=crc if crc is not None else {},
+        splice_reject_count=reject if reject is not None else {},
+        splice_held_count=held if held is not None else {},
+        retry_count=retry if retry is not None else {},
+    )
+
+
+async def test_comms_counters_accumulate_per_device(hass):
+    """Each poll mirrors the library's per-device counters, accruing only deltas."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+
+    coordinator._accumulate_comms_counters(
+        _comms_plant(crc={0x32: 2, 0x33: 1}, reject={0x33: 4}, held={0x70: 5}, retry={0x33: 6})
+    )
+    assert coordinator.crc_failures_by_device == {0x32: 2, 0x33: 1}
+    assert coordinator.splice_rejections_by_device == {0x33: 4}
+    assert coordinator.splice_holds_by_device == {0x70: 5}
+    assert coordinator.read_retries_by_device == {0x33: 6}
+
+    # A later poll with higher cumulative values accrues only the delta.
+    coordinator._accumulate_comms_counters(
+        _comms_plant(crc={0x32: 5, 0x33: 1}, reject={0x33: 4}, held={0x70: 9}, retry={0x33: 10})
+    )
+    assert coordinator.crc_failures_by_device == {0x32: 5, 0x33: 1}
+    assert coordinator.splice_rejections_by_device == {0x33: 4}
+    assert coordinator.splice_holds_by_device == {0x70: 9}
+    assert coordinator.read_retries_by_device == {0x33: 10}
+
+
+async def test_comms_counters_monotonic_across_plant_reset(hass):
+    """A reconnect resets the library counter; our mirror stays monotonic."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+
+    coordinator._accumulate_comms_counters(_comms_plant(crc={0x32: 5}))
+    # Reconnect → fresh library Plant, counter resets to a lower value.
+    coordinator._accumulate_comms_counters(_comms_plant(crc={0x32: 2}))
+    assert coordinator.crc_failures_by_device == {0x32: 7}  # 5 banked + 2 new
+    coordinator._accumulate_comms_counters(_comms_plant(crc={0x32: 4}))
+    assert coordinator.crc_failures_by_device == {0x32: 9}  # + (4 - 2)
+
+
+async def test_comms_counters_absent_leaves_zero(hass):
+    """An older modbus (attrs absent) or a MagicMock plant no-ops cleanly."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+
+    coordinator._accumulate_comms_counters(SimpleNamespace())  # attrs absent
+    coordinator._accumulate_comms_counters(MagicMock())  # auto-attrs, not dicts
+    assert coordinator.crc_failures_by_device == {}
+    assert coordinator.splice_rejections_by_device == {}
+    assert coordinator.splice_holds_by_device == {}
+    assert coordinator.read_retries_by_device == {}
+
+
+async def test_mark_success_accumulates_comms_counters(hass):
+    """The accumulation is wired into _mark_success (every data-bearing poll)."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+
+    coordinator._mark_success(_comms_plant(crc={0x32: 3}, system_time=datetime.now()))
+    assert coordinator.crc_failures_by_device == {0x32: 3}
+    assert coordinator.last_successful_refresh is not None
 
 
 async def test_partial_log_throttled_and_resets(hass, mock_plant, caplog):
