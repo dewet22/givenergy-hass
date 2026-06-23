@@ -9,6 +9,7 @@ from typing import Any
 from givenergy_modbus.model.aio_battery import AioBatteryModule
 from givenergy_modbus.model.battery import Battery, BatteryMaintenance
 from givenergy_modbus.model.devices import InverterSummary
+from givenergy_modbus.model.ems import Ems
 from givenergy_modbus.model.hv_bcu import Bcu, HvStack
 from givenergy_modbus.model.inverter import (
     BatteryCalibrationStage,
@@ -125,6 +126,11 @@ def _bcu_attr(name: str) -> Callable[[Bcu], Any]:
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyManagedInverterSensorDescription(SensorEntityDescription):
     value_fn: Callable[[InverterSummary], Any] = field(default=lambda _: None)
+
+
+@dataclass(frozen=True, kw_only=True)
+class GivEnergyEmsSensorDescription(SensorEntityDescription):
+    value_fn: Callable[[Ems], Any] = field(default=lambda _: None)
 
 
 def _summary_attr(name: str) -> Callable[[InverterSummary], Any]:
@@ -1327,6 +1333,89 @@ MANAGED_INVERTER_SENSORS: tuple[GivEnergyManagedInverterSensorDescription, ...] 
 )
 
 
+def _ems_attr(name: str) -> Callable[[Ems], Any]:
+    """Return a value_fn that reads `name` off the EMS plant model."""
+    return lambda ems: getattr(ems, name)
+
+
+def _ems_status_label(ems: Ems) -> str | None:
+    """Render the EMS runtime status (IR2040) as a lowercase Status name.
+
+    `Ems` is built with use_enum_values, so `ems_status` is the raw int; map it
+    back through Status for a friendly label, returning None for an unread or
+    unrecognised value rather than raising.
+    """
+    raw = ems.ems_status
+    if raw is None:
+        return None
+    try:
+        return Status(raw).name.lower()
+    except ValueError:
+        return None
+
+
+# Plant-level telemetry for an EMS controller (device 0x11), surfaced in place of
+# the inverter sensor set (suppressed on EMS — see async_setup_entry). Names carry
+# an "EMS" prefix so they group together on the controller device.
+EMS_SENSORS: tuple[GivEnergyEmsSensorDescription, ...] = (
+    GivEnergyEmsSensorDescription(
+        key="ems_status",
+        name="EMS Status",
+        device_class=SensorDeviceClass.ENUM,
+        options=[s.name.lower() for s in Status],
+        value_fn=_ems_status_label,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyEmsSensorDescription(
+        key="ems_inverter_count",
+        name="EMS Managed Inverter Count",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_ems_attr("inverter_count"),
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyEmsSensorDescription(
+        key="ems_calc_load_power",
+        name="EMS Calculated Load Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_ems_attr("calc_load_power"),
+    ),
+    GivEnergyEmsSensorDescription(
+        key="ems_measured_load_power",
+        name="EMS Measured Load Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_ems_attr("measured_load_power"),
+    ),
+    GivEnergyEmsSensorDescription(
+        key="ems_grid_meter_power",
+        name="EMS Grid Meter Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_ems_attr("grid_meter_power"),
+    ),
+    GivEnergyEmsSensorDescription(
+        key="ems_total_battery_power",
+        name="EMS Total Battery Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_ems_attr("total_battery_power"),
+    ),
+    GivEnergyEmsSensorDescription(
+        key="ems_remaining_battery_energy",
+        name="EMS Remaining Battery Energy",
+        native_unit_of_measurement=UnitOfEnergy.WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY_STORAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_ems_attr("remaining_battery_wh"),
+    ),
+)
+
+
 def _partial_failure_attributes(
     coordinator: GivEnergyUpdateCoordinator,
 ) -> dict[str, Any] | None:
@@ -1519,19 +1608,31 @@ async def async_setup_entry(
     # ALL_IN_ONE_HYBRID genuinely has PV so is deliberately excluded.
     is_aio = bool(capabilities) and capabilities.device_type is Model.ALL_IN_ONE
     battery_data_only = entry.options.get(CONF_BATTERY_DATA_ONLY, DEFAULT_BATTERY_DATA_ONLY)
+    ems = coordinator.data.ems
 
     entities: list[SensorEntity] = []
 
+    # On an EMS plant the 0x11 device is a controller, not an inverter: its inverter
+    # registers (PV/battery/grid/AC) are absent, so the whole inverter sensor set
+    # would surface as permanently-unavailable orphans (#201). Suppress them and
+    # emit the EMS plant-level aggregates instead.
+    #
     # Battery-data-only (#95): a parallel-mode AIO is controlled by its Gateway,
     # so its own inverter-level sensors (PV/grid/load/derived consumption) are
     # misleading. Drop them; keep the battery pack / HV stack / module / coordinator
     # data below. Control platforms suppress themselves the same way.
-    if not battery_data_only:
+    if not battery_data_only and ems is None:
         entities.extend(
             GivEnergyInverterSensor(coordinator, description)
             for description in INVERTER_SENSORS
             if _include_inverter_sensor(description, inverter, is_three_phase, is_aio)
         )
+
+    if ems is not None:
+        # EMS controller plant-level telemetry (#201): status, managed-inverter
+        # count, calculated/measured load, grid-meter power, total battery power and
+        # remaining battery energy — the controller's actually-useful data.
+        entities.extend(GivEnergyEmsSensor(coordinator, description) for description in EMS_SENSORS)
 
     for battery_index, battery in enumerate(coordinator.data.batteries):
         entities.extend(
@@ -1585,7 +1686,6 @@ async def async_setup_entry(
     # (status/power/SoC/temp). Surface each as its own device parented to the
     # controller. managed_inverters already filters empty slots; dedup by serial
     # defensively, mirroring the AIO loop.
-    ems = coordinator.data.ems
     if ems is not None:
         seen_managed_serials: set[str] = set()
         for summary in ems.managed_inverters:
@@ -2178,6 +2278,51 @@ class GivEnergyManagedInverterSensor(CoordinatorEntity[GivEnergyUpdateCoordinato
         if summary is None:
             return None
         return self.entity_description.value_fn(summary)
+
+
+class GivEnergyEmsSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
+    """Plant-level telemetry sensor for an EMS controller (device 0x11).
+
+    On an EMS plant the 0x11 device is the controller, not an inverter, so its
+    inverter registers (PV/battery/grid/AC) are absent and the inverter sensor set
+    is suppressed (#201). This surfaces the EMS aggregates instead — status,
+    managed-inverter count, load / grid / battery power and remaining energy — on
+    the same controller device, which it also names (the inverter sensors that used
+    to define the device are gone on EMS).
+    """
+
+    _attr_has_entity_name = True
+    entity_description: GivEnergyEmsSensorDescription
+
+    def __init__(
+        self,
+        coordinator: GivEnergyUpdateCoordinator,
+        description: GivEnergyEmsSensorDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        serial = coordinator.data.inverter_serial_number
+        self._attr_unique_id = f"{serial}_{description.key}"
+        model = coordinator.data.inverter.model
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, serial)},
+            name=f"GivEnergy {_device_kind(model)} {serial}",
+            manufacturer="GivEnergy",
+            model=_MODEL_NAMES.get(model, model.name),
+            sw_version=coordinator.data.inverter.firmware_version,
+            serial_number=serial,
+        )
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.data.ems is not None
+
+    @property
+    def native_value(self) -> Any:
+        ems = self.coordinator.data.ems
+        if ems is None:
+            return None
+        return self.entity_description.value_fn(ems)
 
 
 class GivEnergyCoordinatorSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):

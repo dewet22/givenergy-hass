@@ -119,15 +119,19 @@ async def async_setup_entry(
     if entry.options.get(CONF_BATTERY_DATA_ONLY, False):
         # Battery-data-only (#95): this unit's controls are owned by its Gateway.
         return
-    entities: list[SelectEntity] = [
-        GivEnergySelectEntity(coordinator, description) for description in SELECT_DESCRIPTIONS
-    ]
-    caps = coordinator.data.capabilities
-    if caps is not None and caps.has_ac_config_block and not caps.is_three_phase:
+    entities: list[SelectEntity] = []
+    if coordinator.data.ems is None:
+        # Inverter-level selects (battery power/pause mode) are redundant on an EMS
+        # plant (#201); there are no EMS-specific selects, so the controller gets none.
         entities.extend(
-            GivEnergySelectEntity(coordinator, description)
-            for description in AC_COUPLED_SELECT_DESCRIPTIONS
+            GivEnergySelectEntity(coordinator, description) for description in SELECT_DESCRIPTIONS
         )
+        caps = coordinator.data.capabilities
+        if caps is not None and caps.has_ac_config_block and not caps.is_three_phase:
+            entities.extend(
+                GivEnergySelectEntity(coordinator, description)
+                for description in AC_COUPLED_SELECT_DESCRIPTIONS
+            )
     async_add_entities(entities)
 
 

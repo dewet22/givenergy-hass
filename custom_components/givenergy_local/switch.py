@@ -99,20 +99,25 @@ async def async_setup_entry(
     if entry.options.get(CONF_BATTERY_DATA_ONLY, False):
         # Battery-data-only (#95): this unit's controls are owned by its Gateway.
         return
-    entities: list[SwitchEntity] = [
-        GivEnergySwitchEntity(coordinator, description) for description in SWITCH_DESCRIPTIONS
-    ]
-    caps = coordinator.data.capabilities
-    if caps is not None and caps.has_ac_config_block and not caps.is_three_phase:
-        entities.extend(
-            GivEnergySwitchEntity(coordinator, description)
-            for description in AC_COUPLED_SWITCH_DESCRIPTIONS
-        )
+    entities: list[SwitchEntity] = []
     if coordinator.data.ems is not None:
+        # EMS plant: inverter-level switches are redundant — only Flexi EMS Control
+        # applies (#201). The controller is authoritative and its managed inverters
+        # are blinded.
         entities.extend(
             GivEnergyEmsSwitchEntity(coordinator, description)
             for description in EMS_SWITCH_DESCRIPTIONS
         )
+    else:
+        entities.extend(
+            GivEnergySwitchEntity(coordinator, description) for description in SWITCH_DESCRIPTIONS
+        )
+        caps = coordinator.data.capabilities
+        if caps is not None and caps.has_ac_config_block and not caps.is_three_phase:
+            entities.extend(
+                GivEnergySwitchEntity(coordinator, description)
+                for description in AC_COUPLED_SWITCH_DESCRIPTIONS
+            )
     async_add_entities(entities)
 
 

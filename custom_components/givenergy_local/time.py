@@ -210,19 +210,21 @@ async def async_setup_entry(
     if entry.options.get(CONF_BATTERY_DATA_ONLY, False):
         # Battery-data-only (#95): this unit's controls are owned by its Gateway.
         return
-    entities: list[TimeEntity] = [
-        GivEnergyTimeEntity(coordinator, description) for description in TIME_DESCRIPTIONS
-    ]
+    entities: list[TimeEntity] = []
     if coordinator.data.ems is not None:
         # EMS plant: the controller owns scheduling. Expose its slots and skip the
-        # inverter-level Smart Load slots — the library only populates HR(554-573)
-        # on non-EMS inverters, so creating them here would leave a block of
-        # permanently-unavailable config entities with silent-no-op writes.
+        # inverter-level charge/discharge and Smart Load slots — redundant when the
+        # EMS is authoritative, and the library only populates the inverter slot
+        # registers (incl. HR554-573) on non-EMS inverters, so they'd be a block of
+        # permanently-unavailable config entities with silent-no-op writes (#201).
         entities.extend(
             GivEnergyEmsTimeEntity(coordinator, description)
             for description in EMS_TIME_DESCRIPTIONS
         )
     else:
+        entities.extend(
+            GivEnergyTimeEntity(coordinator, description) for description in TIME_DESCRIPTIONS
+        )
         entities.extend(
             GivEnergyTimeEntity(coordinator, description)
             for description in SMART_LOAD_TIME_DESCRIPTIONS
