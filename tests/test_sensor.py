@@ -199,9 +199,16 @@ def test_comms_counter_descriptions_compute_total_and_breakdown():
         splice_rejections_by_device={},
         splice_holds_by_device={0x70: 5},
         read_retries_by_device={0x33: 8},
+        cold_start_held_by_device={0x32: 3},
     )
 
-    for key in ("crc_failures", "splice_rejections", "splice_holds", "read_retries"):
+    for key in (
+        "crc_failures",
+        "splice_rejections",
+        "splice_holds",
+        "read_retries",
+        "cold_start_holds",
+    ):
         desc = by_key[key]
         assert desc.state_class == SensorStateClass.TOTAL_INCREASING
         assert desc.entity_category == EntityCategory.DIAGNOSTIC
@@ -213,11 +220,18 @@ def test_comms_counter_descriptions_compute_total_and_breakdown():
     assert by_key["splice_rejections"].attributes_fn(coord) is None
     assert by_key["splice_holds"].value_fn(coord) == 5
     assert by_key["read_retries"].value_fn(coord) == 8
+    assert by_key["cold_start_holds"].value_fn(coord) == 3
 
 
 async def test_comms_counter_sensors_default_to_zero(hass, setup_integration):
-    """The four noise-floor counters are created and read 0 on a clean plant."""
-    for key in ("crc_failures", "splice_rejections", "splice_holds", "read_retries"):
+    """The five noise-floor counters are created and read 0 on a clean plant."""
+    for key in (
+        "crc_failures",
+        "splice_rejections",
+        "splice_holds",
+        "read_retries",
+        "cold_start_holds",
+    ):
         state = hass.states.get(_entity_id(hass, "sensor", f"SA1234G123_{key}"))
         assert state is not None, f"{key} sensor should be created"
         assert state.state == "0"

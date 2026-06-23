@@ -1450,6 +1450,17 @@ COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
         attributes_fn=_comms_counter_attributes("read_retries_by_device"),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
+    GivEnergyCoordinatorSensorDescription(
+        key="cold_start_holds",
+        name="Cold Start Holds",
+        # Battery banks held one extra poll at cold start awaiting baseline
+        # corroboration (modbus #289). A benign "establishing baseline" signal —
+        # distinct from Splice Guard Holds (which means corruption is being held).
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda coord: sum(coord.cold_start_held_by_device.values()),
+        attributes_fn=_comms_counter_attributes("cold_start_held_by_device"),
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
 )
 
 

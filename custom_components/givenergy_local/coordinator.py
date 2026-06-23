@@ -192,6 +192,9 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self.splice_rejections_by_device: dict[int, int] = {}
         self.splice_holds_by_device: dict[int, int] = {}
         self.read_retries_by_device: dict[int, int] = {}
+        # Cold-start battery-baseline holds (modbus #289, 2.5.5): a benign
+        # "establishing baseline" signal, distinct from splice_holds (corruption).
+        self.cold_start_held_by_device: dict[int, int] = {}
         # Last cumulative value seen per library attr per device, for delta-ing.
         self._comms_last_seen: dict[str, dict[int, int]] = {}
         # Length of the current unbroken run of partial polls, used only to
@@ -319,6 +322,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         ("splice_reject_count", "splice_rejections_by_device"),
         ("splice_held_count", "splice_holds_by_device"),
         ("retry_count", "read_retries_by_device"),
+        ("cold_start_held_count", "cold_start_held_by_device"),
     )
 
     def _accumulate_comms_counters(self, plant: Plant) -> None:
