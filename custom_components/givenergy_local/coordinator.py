@@ -497,6 +497,12 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         — required for three-phase, AIO-HV, EMS and other non-default topologies.
         """
         self._client = Client(host=self.host, port=self.port)
+        # A fresh Client means a fresh Plant with its comms counters zeroed, so
+        # drop the per-device last-seen baselines: the next poll then captures
+        # the full post-reconnect value as the delta. Without this, a counter
+        # that climbs back past its pre-reconnect value before the first poll
+        # would be mistaken for monotonic growth and undercounted.
+        self._comms_last_seen.clear()
         try:
             await self._client.connect()
             topology_confirmed = True

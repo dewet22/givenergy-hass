@@ -489,6 +489,42 @@ async def test_mark_success_accumulates_comms_counters(hass):
     assert coordinator.last_successful_refresh is not None
 
 
+async def test_reconnect_clears_comms_baseline(hass):
+    """A reconnect builds a fresh Client/Plant with zeroed counters, so _connect
+    must drop the last-seen baselines (else the next poll diffs against a stale
+    pre-reconnect value and undercounts)."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+    coordinator._comms_last_seen = {"crc_failure_count": {0x32: 9}}
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = False
+        client.connect.side_effect = OSError("connection refused")
+        mock_cls.return_value = client
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    # The clear runs at Client construction, before connect() is even attempted.
+    assert coordinator._comms_last_seen == {}
+
+
+async def test_comms_counters_full_count_after_baseline_reset(hass):
+    """With the baseline cleared on reconnect, a counter that climbs back past
+    its pre-reconnect value is counted in full, not diffed against the stale
+    baseline (Gemini #197)."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+
+    coordinator._accumulate_comms_counters(_comms_plant(crc={0x32: 2}))
+    assert coordinator.crc_failures_by_device == {0x32: 2}
+
+    # Reconnect: _connect() clears the baselines (fresh Plant, counters zeroed).
+    coordinator._comms_last_seen.clear()
+
+    # 3 errors before the first post-reconnect poll → current 3 (>= old last 2).
+    coordinator._accumulate_comms_counters(_comms_plant(crc={0x32: 3}))
+    assert coordinator.crc_failures_by_device == {0x32: 5}  # 2 + 3, not 2 + 1
+
+
 async def test_partial_log_throttled_and_resets(hass, mock_plant, caplog):
     """First partial of a run warns; subsequent ones drop to debug; a clean poll
     ends the run so the next partial warns afresh. (partial_failures unaffected.)"""
