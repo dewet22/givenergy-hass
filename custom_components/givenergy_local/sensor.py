@@ -108,10 +108,12 @@ class GivEnergyHvStackSensorDescription(SensorEntityDescription):
 def _bcu_attr(name: str) -> Callable[[Bcu], Any]:
     """Return a value_fn that reads `name` off an HV battery stack's BCU.
 
-    Per-stack counterpart of `_battery_attr`/`_module_attr`; returns None for a
-    missing attribute so the sensor surfaces as `unknown` rather than raising.
+    Per-stack counterpart of `_battery_attr`/`_module_attr`; like them it reads
+    without a default, so a renamed/typo'd field (library drift) fails loudly in
+    tests rather than silently surfacing as `unknown`. The BCU fields are
+    guaranteed present by the pinned givenergy-modbus model.
     """
-    return lambda bcu: getattr(bcu, name, None)
+    return lambda bcu: getattr(bcu, name)
 
 
 def _battery_hex(name: str, width: int) -> Callable[[Battery], Any]:
