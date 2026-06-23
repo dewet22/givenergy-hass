@@ -1294,7 +1294,7 @@ MANAGED_INVERTER_SENSORS: tuple[GivEnergyManagedInverterSensorDescription, ...] 
         key="status",
         name="Status",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda summary: getattr(summary.status, "name", summary.status),
+        value_fn=lambda summary: summary.status.name if summary.status is not None else None,
     ),
     GivEnergyManagedInverterSensorDescription(
         key="power",
