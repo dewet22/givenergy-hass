@@ -33,6 +33,17 @@
       "reconfigure_successful": "Reconfiguration was successful."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "GivEnergy Local options",
+        "description": "Battery-data-only mode suppresses all control entities and inverter-level system sensors (PV, grid, load, derived consumption), leaving only the battery pack, HV stack, AIO module, and diagnostic data. Use this when this unit is controlled by a Gateway in a parallel group, where its per-unit controls and derived figures are misleading.",
+        "data": {
+          "battery_data_only": "Battery data only (suppress controls and system sensors)"
+        }
+      }
+    }
+  },
   "issues": {
     "expected_devices_missing": {
       "title": "GivEnergy device not responding",

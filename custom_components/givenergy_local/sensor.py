@@ -8,6 +8,7 @@ from typing import Any
 
 from givenergy_modbus.model.aio_battery import AioBatteryModule
 from givenergy_modbus.model.battery import Battery, BatteryMaintenance
+from givenergy_modbus.model.hv_bcu import Bcu, HvStack
 from givenergy_modbus.model.inverter import (
     BatteryCalibrationStage,
     BatteryType,
@@ -43,7 +44,7 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import CONF_BATTERY_DATA_ONLY, DEFAULT_BATTERY_DATA_ONLY, DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 
 _LOGGER = logging.getLogger(__name__)
@@ -97,6 +98,20 @@ def _module_attr(name: str) -> Callable[[AioBatteryModule], Any]:
     attribute name so the bulk-defined per-cell entities don't share one.
     """
     return lambda module: getattr(module, name)
+
+
+@dataclass(frozen=True, kw_only=True)
+class GivEnergyHvStackSensorDescription(SensorEntityDescription):
+    value_fn: Callable[[Bcu], Any] = field(default=lambda _: None)
+
+
+def _bcu_attr(name: str) -> Callable[[Bcu], Any]:
+    """Return a value_fn that reads `name` off an HV battery stack's BCU.
+
+    Per-stack counterpart of `_battery_attr`/`_module_attr`; returns None for a
+    missing attribute so the sensor surfaces as `unknown` rather than raising.
+    """
+    return lambda bcu: getattr(bcu, name, None)
 
 
 def _battery_hex(name: str, width: int) -> Callable[[Battery], Any]:
@@ -1085,6 +1100,129 @@ AIO_MODULE_SENSORS: tuple[GivEnergyAioModuleSensorDescription, ...] = (
 )
 
 
+# All-in-One / HV battery stack (BCU) sensors (#95). The library decodes a
+# cluster-level Battery Control Unit per HV stack (device 0x70+offset); these
+# surface its pack-level metrics, which were previously unavailable — including
+# the correct pack voltage (the inverter-level `v_battery` is a sub-100V field
+# that reads Unknown on an HV stack). Power/energy go on the main device page;
+# the rest are DIAGNOSTIC, matching the inverter/battery analogues.
+HV_STACK_SENSORS: tuple[GivEnergyHvStackSensorDescription, ...] = (
+    GivEnergyHvStackSensorDescription(
+        key="battery_voltage",
+        name="Battery Voltage",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_bcu_attr("battery_voltage"),
+    ),
+    GivEnergyHvStackSensorDescription(
+        key="battery_current",
+        name="Battery Current",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_bcu_attr("battery_current"),
+    ),
+    GivEnergyHvStackSensorDescription(
+        key="battery_power",
+        name="Battery Power",
+        native_unit_of_measurement=UnitOfPower.KILO_WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_bcu_attr("battery_power"),
+    ),
+    GivEnergyHvStackSensorDescription(
+        key="battery_soc_max",
+        name="Battery SOC Max",
+        native_unit_of_measurement=PERCENTAGE,
+        device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_bcu_attr("battery_soc_max"),
+    ),
+    GivEnergyHvStackSensorDescription(
+        key="battery_soc_min",
+        name="Battery SOC Min",
+        native_unit_of_measurement=PERCENTAGE,
+        device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_bcu_attr("battery_soc_min"),
+    ),
+    GivEnergyHvStackSensorDescription(
+        key="battery_soh",
+        name="Battery State of Health",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_bcu_attr("battery_soh"),
+    ),
+    GivEnergyHvStackSensorDescription(
+        key="charge_energy_total",
+        name="Battery Charge Total",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=_bcu_attr("charge_energy_total"),
+    ),
+    GivEnergyHvStackSensorDescription(
+        key="discharge_energy_total",
+        name="Battery Discharge Total",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=_bcu_attr("discharge_energy_total"),
+    ),
+    GivEnergyHvStackSensorDescription(
+        key="charge_energy_today",
+        name="Battery Charge Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=_bcu_attr("charge_energy_today"),
+    ),
+    GivEnergyHvStackSensorDescription(
+        key="discharge_energy_today",
+        name="Battery Discharge Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=_bcu_attr("discharge_energy_today"),
+    ),
+    GivEnergyHvStackSensorDescription(
+        key="battery_nominal_capacity_ah",
+        name="Battery Nominal Capacity",
+        native_unit_of_measurement="Ah",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_bcu_attr("battery_nominal_capacity_ah"),
+    ),
+    GivEnergyHvStackSensorDescription(
+        key="remaining_battery_capacity_ah",
+        name="Remaining Capacity",
+        native_unit_of_measurement="Ah",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_bcu_attr("remaining_battery_capacity_ah"),
+    ),
+    GivEnergyHvStackSensorDescription(
+        key="number_of_cycles",
+        name="Charge Cycles",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_bcu_attr("number_of_cycles"),
+    ),
+    GivEnergyHvStackSensorDescription(
+        key="pack_software_version",
+        name="Pack Software Version",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_bcu_attr("pack_software_version"),
+    ),
+)
+
+
 def _partial_failure_attributes(
     coordinator: GivEnergyUpdateCoordinator,
 ) -> dict[str, Any] | None:
@@ -1193,12 +1331,20 @@ async def async_setup_entry(
     inverter = coordinator.data.inverter
     capabilities = coordinator.data.capabilities
     is_three_phase = bool(capabilities and capabilities.is_three_phase)
+    battery_data_only = entry.options.get(CONF_BATTERY_DATA_ONLY, DEFAULT_BATTERY_DATA_ONLY)
 
-    entities: list[SensorEntity] = [
-        GivEnergyInverterSensor(coordinator, description)
-        for description in INVERTER_SENSORS
-        if _include_inverter_sensor(description, inverter, is_three_phase)
-    ]
+    entities: list[SensorEntity] = []
+
+    # Battery-data-only (#95): a parallel-mode AIO is controlled by its Gateway,
+    # so its own inverter-level sensors (PV/grid/load/derived consumption) are
+    # misleading. Drop them; keep the battery pack / HV stack / module / coordinator
+    # data below. Control platforms suppress themselves the same way.
+    if not battery_data_only:
+        entities.extend(
+            GivEnergyInverterSensor(coordinator, description)
+            for description in INVERTER_SENSORS
+            if _include_inverter_sensor(description, inverter, is_three_phase)
+        )
 
     for battery_index, battery in enumerate(coordinator.data.batteries):
         entities.extend(
@@ -1218,6 +1364,18 @@ async def async_setup_entry(
         entities.extend(
             GivEnergyAioModuleSensor(coordinator, description, module_index)
             for description in AIO_MODULE_SENSORS
+        )
+
+    # HV battery stack (BCU) devices (#95) — empty on non-HV plants. Each stack
+    # is its own device, parented to the inverter, identified by the inverter
+    # serial + the stack's fixed device address (the BCU carries no serial of its
+    # own). A stack whose BCU didn't decode is skipped, mirroring the AIO loop.
+    for stack_index, stack in enumerate(coordinator.data.hv_stacks):
+        if not stack.bcu.is_valid():
+            continue
+        entities.extend(
+            GivEnergyHvStackSensor(coordinator, description, stack_index)
+            for description in HV_STACK_SENSORS
         )
 
     entities.extend(
@@ -1662,6 +1820,80 @@ class GivEnergyAioModuleSensor(
         if module is None:
             return None
         return self.entity_description.value_fn(module)
+
+
+class GivEnergyHvStackSensor(
+    _StaleIRGate, CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity
+):
+    """Pack-level sensor for one HV battery stack's BCU (#95).
+
+    Each HV stack is its own HA device, parented to the inverter via `via_device`.
+    The BCU carries no serial, so the device is identified by the inverter serial
+    plus the stack's fixed device address (0x70+offset).
+    """
+
+    _attr_has_entity_name = True
+    entity_description: GivEnergyHvStackSensorDescription
+
+    def __init__(
+        self,
+        coordinator: GivEnergyUpdateCoordinator,
+        description: GivEnergyHvStackSensorDescription,
+        stack_index: int,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        # Bind to the stack's fixed device address, not its list position, so the
+        # entity stays tied to its own stack if the list reorders or shrinks.
+        stacks = coordinator.data.hv_stacks
+        stack = stacks[stack_index]
+        self._stack_address = stack.device_address
+        self._init_stale_gate(coordinator, type(stack.bcu), description.key)
+        inv_serial = coordinator.data.inverter_serial_number
+        device_id = f"{inv_serial}_hvstack_{stack.device_address:#04x}"
+        # Only disambiguate the device name by address when there's more than one
+        # stack, so the common single-stack case stays clean.
+        name = "GivEnergy HV Battery Stack"
+        if len(stacks) > 1:
+            name = f"{name} {stack.device_address:#04x}"
+        self._attr_unique_id = f"{device_id}_{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, device_id)},
+            name=name,
+            manufacturer="GivEnergy",
+            model="HV Battery Stack (BCU)",
+            sw_version=stack.bcu.pack_software_version,
+            via_device=(DOMAIN, inv_serial),
+        )
+
+    def _stack(self) -> HvStack | None:
+        """Resolve this entity's stack by device address in the latest data."""
+        data = self.coordinator.data
+        if data is None:
+            return None
+        return next(
+            (s for s in data.hv_stacks if s.device_address == self._stack_address),
+            None,
+        )
+
+    @property
+    def available(self) -> bool:
+        # Unavailable when this stack is absent from the poll, then — like the
+        # inverter/battery/module gates (#152) — when its BCU IR bank has stopped
+        # committing past the ceiling (a frozen/held stack, #176).
+        stack = self._stack()
+        if not super().available or stack is None:
+            return False
+        if not self._source_ir_registers:
+            return True
+        return not self._ir_bank_stale(self._stack_address)
+
+    @property
+    def native_value(self) -> Any:
+        stack = self._stack()
+        if stack is None:
+            return None
+        return self.entity_description.value_fn(stack.bcu)
 
 
 class GivEnergyCoordinatorSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):

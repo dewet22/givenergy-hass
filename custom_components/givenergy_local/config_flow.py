@@ -6,12 +6,20 @@ from typing import Any
 import voluptuous as vol
 from givenergy_modbus.client.client import Client
 from givenergy_modbus.exceptions import RefreshPartiallySucceeded
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_HOST, CONF_PORT
+from homeassistant.core import callback
 
 from .const import (
+    CONF_BATTERY_DATA_ONLY,
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
+    DEFAULT_BATTERY_DATA_ONLY,
     DEFAULT_PASSIVE,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
@@ -32,6 +40,11 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 
 class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 2
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> GivEnergyLocalOptionsFlow:
+        return GivEnergyLocalOptionsFlow()
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -119,3 +132,26 @@ class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             return "", "cannot_connect"
         finally:
             await client.close()
+
+
+class GivEnergyLocalOptionsFlow(OptionsFlow):
+    """Per-entry options.
+
+    Currently just the battery-data-only toggle (#95): for a unit controlled by a
+    Gateway in a parallel group, suppress its control entities and inverter-level
+    system sensors, leaving only battery / HV-stack / module / diagnostic data.
+    Changing it reloads the entry (see the update listener in __init__).
+    """
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_BATTERY_DATA_ONLY, default=DEFAULT_BATTERY_DATA_ONLY): bool,
+            }
+        )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(schema, self.config_entry.options),
+        )

@@ -5,6 +5,12 @@ DEFAULT_SCAN_INTERVAL = 30
 
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_PASSIVE = "passive"
+# When enabled (per-entry option), suppress control entities and inverter-level
+# system sensors, leaving only battery pack / HV stack / AIO module / diagnostic
+# data. For a unit controlled by a Gateway in a parallel group, where its own
+# per-unit controls and derived consumption figures are misleading (#95).
+CONF_BATTERY_DATA_ONLY = "battery_data_only"
+DEFAULT_BATTERY_DATA_ONLY = False
 # Retained only for migrating older config entries — see async_migrate_entry.
 # The current defaults live as constructor defaults on GivEnergyUpdateCoordinator.
 CONF_TIMEOUT_TOLERANCE = "timeout_tolerance"

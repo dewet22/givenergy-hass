@@ -13,7 +13,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import CONF_BATTERY_DATA_ONLY, DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 from .sensor import _device_kind
 
@@ -202,6 +202,9 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: GivEnergyUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    if entry.options.get(CONF_BATTERY_DATA_ONLY, False):
+        # Battery-data-only (#95): this unit's controls are owned by its Gateway.
+        return
     entities: list[NumberEntity] = [
         GivEnergyNumberEntity(coordinator, description) for description in NUMBER_DESCRIPTIONS
     ]
