@@ -8,6 +8,7 @@ from typing import Any
 
 from givenergy_modbus.model.aio_battery import AioBatteryModule
 from givenergy_modbus.model.battery import Battery, BatteryMaintenance
+from givenergy_modbus.model.devices import InverterSummary
 from givenergy_modbus.model.hv_bcu import Bcu, HvStack
 from givenergy_modbus.model.inverter import (
     BatteryCalibrationStage,
@@ -114,6 +115,20 @@ def _bcu_attr(name: str) -> Callable[[Bcu], Any]:
     guaranteed present by the pinned givenergy-modbus model.
     """
     return lambda bcu: getattr(bcu, name)
+
+
+@dataclass(frozen=True, kw_only=True)
+class GivEnergyManagedInverterSensorDescription(SensorEntityDescription):
+    value_fn: Callable[[InverterSummary], Any] = field(default=lambda _: None)
+
+
+def _summary_attr(name: str) -> Callable[[InverterSummary], Any]:
+    """Return a value_fn that reads `name` off an EMS managed-inverter summary.
+
+    Counterpart of `_module_attr`/`_bcu_attr` for the blinded `InverterSummary`
+    rollup an EMS controller exposes per managed inverter.
+    """
+    return lambda summary: getattr(summary, name)
 
 
 def _battery_hex(name: str, width: int) -> Callable[[Battery], Any]:
@@ -1270,6 +1285,45 @@ HV_STACK_SENSORS: tuple[GivEnergyHvStackSensorDescription, ...] = (
 )
 
 
+# EMS managed-inverter summary sensors. On an EMS plant the 0x11 device is the
+# controller; each inverter it manages is reported only as a blinded rollup
+# summary (status/power/SoC/temp — no per-string detail). One HA device per
+# managed inverter, keyed by its own serial. See GivEnergyManagedInverterSensor.
+MANAGED_INVERTER_SENSORS: tuple[GivEnergyManagedInverterSensorDescription, ...] = (
+    GivEnergyManagedInverterSensorDescription(
+        key="status",
+        name="Status",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda summary: getattr(summary.status, "name", summary.status),
+    ),
+    GivEnergyManagedInverterSensorDescription(
+        key="power",
+        name="Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_summary_attr("p_inverter_out"),
+    ),
+    GivEnergyManagedInverterSensorDescription(
+        key="battery_soc",
+        name="Battery SOC",
+        native_unit_of_measurement=PERCENTAGE,
+        device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_summary_attr("battery_soc"),
+    ),
+    GivEnergyManagedInverterSensorDescription(
+        key="temperature",
+        name="Temperature",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_summary_attr("t_inverter_heatsink"),
+    ),
+)
+
+
 def _partial_failure_attributes(
     coordinator: GivEnergyUpdateCoordinator,
 ) -> dict[str, Any] | None:
@@ -1502,6 +1556,27 @@ async def async_setup_entry(
             GivEnergyHvStackSensor(coordinator, description, stack_index)
             for description in HV_STACK_SENSORS
         )
+
+    # EMS-managed inverters — empty unless this is an EMS plant. The 0x11 device
+    # is the EMS controller; each inverter it manages is a blinded rollup summary
+    # (status/power/SoC/temp). Surface each as its own device parented to the
+    # controller. managed_inverters already filters empty slots; dedup by serial
+    # defensively, mirroring the AIO loop.
+    ems = coordinator.data.ems
+    if ems is not None:
+        seen_managed_serials: set[str] = set()
+        for summary in ems.managed_inverters:
+            if summary.serial_number in seen_managed_serials:
+                _LOGGER.warning(
+                    "Skipping EMS managed inverter: duplicate serial %s",
+                    summary.serial_number,
+                )
+                continue
+            seen_managed_serials.add(summary.serial_number)
+            entities.extend(
+                GivEnergyManagedInverterSensor(coordinator, description, summary.serial_number)
+                for description in MANAGED_INVERTER_SENSORS
+            )
 
     entities.extend(
         GivEnergyCoordinatorSensor(coordinator, description) for description in COORDINATOR_SENSORS
@@ -2019,6 +2094,67 @@ class GivEnergyHvStackSensor(
         if stack is None:
             return None
         return self.entity_description.value_fn(stack.bcu)
+
+
+class GivEnergyManagedInverterSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
+    """Summary sensor for one EMS-managed inverter.
+
+    On an EMS plant the 0x11 device is the EMS *controller*; the inverters it
+    manages appear only as blinded rollup summaries (status / power / SoC /
+    heatsink temp — no per-string detail). Each managed inverter becomes its own
+    HA device, parented to the controller via `via_device` and identified by its
+    own serial. The rollup lives in the EMS block on 0x11 (there's no per-inverter
+    register bank), so there's no stale gate: availability is simply whether the
+    serial is still present in the latest poll.
+    """
+
+    _attr_has_entity_name = True
+    entity_description: GivEnergyManagedInverterSensorDescription
+
+    def __init__(
+        self,
+        coordinator: GivEnergyUpdateCoordinator,
+        description: GivEnergyManagedInverterSensorDescription,
+        serial: str,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        # Bind to the managed inverter's serial, not its slot position: the rollup
+        # is rebuilt each refresh and a dropped slot shifts the rest, so resolving
+        # by serial keeps each entity tied to its own inverter.
+        self._serial = serial
+        self._attr_unique_id = f"{serial}_{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, serial)},
+            name=f"GivEnergy Managed Inverter {serial}",
+            manufacturer="GivEnergy",
+            model="Managed Inverter (EMS)",
+            serial_number=serial,
+            via_device=(DOMAIN, coordinator.data.inverter_serial_number),
+        )
+
+    def _summary(self) -> InverterSummary | None:
+        """Resolve this entity's managed inverter by serial in the latest data."""
+        data = self.coordinator.data
+        if data is None or data.ems is None:
+            return None
+        return next(
+            (s for s in data.ems.managed_inverters if s.serial_number == self._serial),
+            None,
+        )
+
+    @property
+    def available(self) -> bool:
+        # Unavailable when this managed inverter has dropped out of the EMS
+        # rollup (its serial is no longer reported).
+        return super().available and self._summary() is not None
+
+    @property
+    def native_value(self) -> Any:
+        summary = self._summary()
+        if summary is None:
+            return None
+        return self.entity_description.value_fn(summary)
 
 
 class GivEnergyCoordinatorSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
