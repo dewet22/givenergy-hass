@@ -102,12 +102,15 @@ def test_aio_inapplicable_inverter_sensors_skip_if_none():
     for key in (
         "num_mppt",
         "e_inverter_export_total",
-        "inverter_fault_messages",
         "inverter_errors",
         "e_discharge_year",
         "e_solar_diverter",  # already had it — guard against regression
     ):
         assert _inverter_desc(key).skip_if_none is True, key
+    # Fault Messages is deliberately NOT skipped: its value_fn returns None for the
+    # healthy empty-fault list too, so skipping would drop it on healthy single-phase
+    # installs and a later fault couldn't surface until reload (#194).
+    assert _inverter_desc("inverter_fault_messages").skip_if_none is False
 
 
 def test_extra_inverter_capability_sensors():

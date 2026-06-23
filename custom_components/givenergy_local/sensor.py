@@ -220,8 +220,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: (
             ", ".join(inv.inverter_fault_messages) if inv.inverter_fault_messages else None
         ),
-        # None on AIO (no fault block) — drop rather than show "Unknown" (#194).
-        skip_if_none=True,
+        # Deliberately NOT skip_if_none: value_fn returns None for the healthy
+        # *empty fault list* too, not just the unsupported-on-AIO case. Skipping
+        # would drop this on a healthy single-phase install at setup, leaving a
+        # later fault nowhere to surface until a reload (Codex review, #194).
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     # ChargeStatus mapping shipped in modbus 2.3.1 (#222) — render the
@@ -1410,8 +1412,15 @@ async def async_setup_entry(
         # Skip a module whose serial we've already created entities for: a
         # duplicate serial (placeholder/garbled, or a repeated BMS read) would
         # otherwise collide on unique_id and HA would drop the second module's
-        # entities with an error per cell (#194).
+        # entities with an error per cell (#194). Log it loudly — real modules
+        # have unique serials, so a duplicate means a module is missing from HA.
         if module.serial_number in seen_module_serials:
+            _LOGGER.warning(
+                "Skipping AIO battery module at index %d: duplicate serial %s "
+                "(real modules have unique serials — check for a placeholder/garbled read)",
+                module_index,
+                module.serial_number,
+            )
             continue
         seen_module_serials.add(module.serial_number)
         entities.extend(
