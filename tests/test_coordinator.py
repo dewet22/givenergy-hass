@@ -423,7 +423,9 @@ async def test_partial_success_increments_partial_failures_cumulatively(hass, mo
     assert coordinator.total_failures == 0
 
 
-def _comms_plant(crc=None, reject=None, held=None, retry=None, system_time=None) -> SimpleNamespace:
+def _comms_plant(
+    crc=None, reject=None, held=None, retry=None, cold=None, system_time=None
+) -> SimpleNamespace:
     """A minimal plant stub carrying the library's comms-quality counters."""
     return SimpleNamespace(
         inverter=SimpleNamespace(system_time=system_time),
@@ -431,6 +433,7 @@ def _comms_plant(crc=None, reject=None, held=None, retry=None, system_time=None)
         splice_reject_count=reject if reject is not None else {},
         splice_held_count=held if held is not None else {},
         retry_count=retry if retry is not None else {},
+        cold_start_held_count=cold if cold is not None else {},
     )
 
 
@@ -439,21 +442,35 @@ async def test_comms_counters_accumulate_per_device(hass):
     coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
 
     coordinator._accumulate_comms_counters(
-        _comms_plant(crc={0x32: 2, 0x33: 1}, reject={0x33: 4}, held={0x70: 5}, retry={0x33: 6})
+        _comms_plant(
+            crc={0x32: 2, 0x33: 1},
+            reject={0x33: 4},
+            held={0x70: 5},
+            retry={0x33: 6},
+            cold={0x32: 2},
+        )
     )
     assert coordinator.crc_failures_by_device == {0x32: 2, 0x33: 1}
     assert coordinator.splice_rejections_by_device == {0x33: 4}
     assert coordinator.splice_holds_by_device == {0x70: 5}
     assert coordinator.read_retries_by_device == {0x33: 6}
+    assert coordinator.cold_start_held_by_device == {0x32: 2}
 
     # A later poll with higher cumulative values accrues only the delta.
     coordinator._accumulate_comms_counters(
-        _comms_plant(crc={0x32: 5, 0x33: 1}, reject={0x33: 4}, held={0x70: 9}, retry={0x33: 10})
+        _comms_plant(
+            crc={0x32: 5, 0x33: 1},
+            reject={0x33: 4},
+            held={0x70: 9},
+            retry={0x33: 10},
+            cold={0x32: 5},
+        )
     )
     assert coordinator.crc_failures_by_device == {0x32: 5, 0x33: 1}
     assert coordinator.splice_rejections_by_device == {0x33: 4}
     assert coordinator.splice_holds_by_device == {0x70: 9}
     assert coordinator.read_retries_by_device == {0x33: 10}
+    assert coordinator.cold_start_held_by_device == {0x32: 5}
 
 
 async def test_comms_counters_monotonic_across_plant_reset(hass):
@@ -478,6 +495,7 @@ async def test_comms_counters_absent_leaves_zero(hass):
     assert coordinator.splice_rejections_by_device == {}
     assert coordinator.splice_holds_by_device == {}
     assert coordinator.read_retries_by_device == {}
+    assert coordinator.cold_start_held_by_device == {}
 
 
 async def test_mark_success_accumulates_comms_counters(hass):
