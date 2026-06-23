@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from givenergy_modbus.model import TimeSlot
+from givenergy_modbus.model.devices import InverterSummary
 from givenergy_modbus.model.inverter import Model
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -40,6 +41,7 @@ def mock_ems() -> MagicMock:
     ems.export_target_3 = 4
     ems.export_power_limit = 3600
     ems.plant_enabled = True
+    ems.managed_inverters = []
     return ems
 
 
@@ -56,6 +58,34 @@ async def ems_setup(hass, mock_client, mock_plant, mock_inverter, mock_ems, mock
 
 def _entity_id(hass, platform: str, unique_id: str) -> str | None:
     return er.async_get(hass).async_get_entity_id(platform, DOMAIN, unique_id)
+
+
+def _managed(serial: str, *, power=1000, soc=55, temp=31.5, status=None) -> InverterSummary:
+    """Build a blinded managed-inverter rollup summary."""
+    return InverterSummary(
+        serial_number=serial,
+        status=status,
+        p_inverter_out=power,
+        battery_soc=soc,
+        t_inverter_heatsink=temp,
+    )
+
+
+@pytest.fixture
+async def managed_ems_setup(
+    hass, mock_client, mock_plant, mock_inverter, mock_ems, mock_config_entry
+):
+    """An EMS plant whose controller fronts two managed inverters."""
+    mock_ems.managed_inverters = [
+        _managed("SA1111A001", power=1500, soc=60, temp=30.5),
+        _managed("SA2222A002", power=-200, soc=45, temp=28.0),
+    ]
+    mock_plant.ems = mock_ems
+    mock_inverter.model = Model.EMS
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    return mock_config_entry
 
 
 # ---------------------------------------------------------------------------
@@ -242,3 +272,77 @@ async def test_realignment_issue_raised_for_stale_inverter_prefixed_entities(
         DOMAIN, f"ems_entity_ids_outdated_{mock_config_entry.entry_id}"
     )
     assert issue is not None
+
+
+# ---------------------------------------------------------------------------
+# Managed-inverter child devices
+# ---------------------------------------------------------------------------
+
+
+async def test_managed_inverter_devices_created_and_parented(hass, managed_ems_setup):
+    """Each managed inverter is its own device, parented to the EMS controller."""
+    registry = er.async_get(hass)
+    dev_registry = dr.async_get(hass)
+    controller = dev_registry.async_get_device(identifiers={(DOMAIN, "SA1234G123")})
+    assert controller is not None
+    for serial in ("SA1111A001", "SA2222A002"):
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{serial}_power")
+        assert entity_id is not None, f"{serial} has no power sensor"
+        device = dev_registry.async_get(registry.async_get(entity_id).device_id)
+        assert (DOMAIN, serial) in device.identifiers
+        assert device.name == f"GivEnergy Managed Inverter {serial}"
+        assert device.model == "Managed Inverter (EMS)"
+        assert device.via_device_id == controller.id
+
+
+async def test_managed_inverter_values(hass, managed_ems_setup):
+    """The blinded summary fields surface on the child sensors."""
+    assert hass.states.get(_entity_id(hass, "sensor", "SA1111A001_power")).state == "1500"
+    assert hass.states.get(_entity_id(hass, "sensor", "SA1111A001_battery_soc")).state == "60"
+    temp = hass.states.get(_entity_id(hass, "sensor", "SA1111A001_temperature"))
+    assert float(temp.state) == 30.5
+    assert temp.attributes["unit_of_measurement"] == "°C"
+    assert hass.states.get(_entity_id(hass, "sensor", "SA2222A002_power")).state == "-200"
+
+
+async def test_managed_inverter_resolves_by_serial(hass, managed_ems_setup):
+    """A managed inverter that drops out of the rollup goes unavailable while the
+    survivor keeps reporting — entities track serial, not slot position."""
+    coordinator = hass.data[DOMAIN][managed_ems_setup.entry_id]
+    coordinator.data.ems.managed_inverters = [_managed("SA2222A002", power=-200, soc=45, temp=28.0)]
+    coordinator.async_set_updated_data(coordinator.data)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(_entity_id(hass, "sensor", "SA2222A002_power")).state == "-200"
+    assert hass.states.get(_entity_id(hass, "sensor", "SA1111A001_power")).state == "unavailable"
+
+
+async def test_no_managed_inverter_devices_for_non_ems_plant(hass, setup_integration):
+    """A non-EMS plant gets no managed-inverter devices."""
+    dev_registry = dr.async_get(hass)
+    managed = [
+        d
+        for d in dr.async_entries_for_config_entry(dev_registry, setup_integration.entry_id)
+        if d.model == "Managed Inverter (EMS)"
+    ]
+    assert managed == []
+
+
+async def test_managed_inverter_dedup_duplicate_serial(
+    hass, mock_client, mock_plant, mock_inverter, mock_ems, mock_config_entry
+):
+    """Two rollup slots reporting the same serial yield a single device."""
+    mock_ems.managed_inverters = [_managed("SA3333A003"), _managed("SA3333A003", power=99)]
+    mock_plant.ems = mock_ems
+    mock_inverter.model = Model.EMS
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    dev_registry = dr.async_get(hass)
+    managed = [
+        d
+        for d in dr.async_entries_for_config_entry(dev_registry, mock_config_entry.entry_id)
+        if d.model == "Managed Inverter (EMS)"
+    ]
+    assert len(managed) == 1

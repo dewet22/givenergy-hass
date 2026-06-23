@@ -223,6 +223,28 @@ async def test_comms_counter_sensors_default_to_zero(hass, setup_integration):
         assert state.state == "0"
 
 
+def test_managed_inverter_sensor_descriptions():
+    """Managed-inverter summary sensors carry the right units/classes, and the
+    status value_fn renders an enum's name while tolerating None."""
+    from types import SimpleNamespace
+
+    from homeassistant.components.sensor import SensorDeviceClass
+
+    from custom_components.givenergy_local.sensor import MANAGED_INVERTER_SENSORS
+
+    by_key = {d.key: d for d in MANAGED_INVERTER_SENSORS}
+    assert set(by_key) == {"status", "power", "battery_soc", "temperature"}
+    assert by_key["power"].device_class == SensorDeviceClass.POWER
+    assert by_key["power"].native_unit_of_measurement == "W"
+    assert by_key["battery_soc"].device_class == SensorDeviceClass.BATTERY
+    assert by_key["temperature"].device_class == SensorDeviceClass.TEMPERATURE
+    assert by_key["temperature"].native_unit_of_measurement == "°C"
+
+    status_fn = by_key["status"].value_fn
+    assert status_fn(SimpleNamespace(status=SimpleNamespace(name="ONLINE"))) == "ONLINE"
+    assert status_fn(SimpleNamespace(status=None)) is None
+
+
 async def test_single_phase_only_sensors_absent_on_three_phase(
     hass, mock_client, mock_config_entry
 ):
