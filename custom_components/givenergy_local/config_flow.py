@@ -37,6 +37,13 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
     }
 )
 
+# Initial setup also offers battery-data-only, so a parallel-mode AIO can be added
+# without its inverter-level sensors ever being created and then going unavailable
+# (#95). Reconfigure uses the base schema — the toggle lives in options thereafter.
+STEP_USER_SETUP_SCHEMA = STEP_USER_DATA_SCHEMA.extend(
+    {vol.Required(CONF_BATTERY_DATA_ONLY, default=DEFAULT_BATTERY_DATA_ONLY): bool}
+)
+
 
 class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 2
@@ -59,14 +66,21 @@ class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 await self.async_set_unique_id(serial)
                 self._abort_if_unique_id_configured()
+                # The toggle is read from entry.options everywhere (it's normally
+                # set via the options flow), so split it out of data into options
+                # rather than leaving it in data where nothing would read it.
+                battery_data_only = user_input.pop(
+                    CONF_BATTERY_DATA_ONLY, DEFAULT_BATTERY_DATA_ONLY
+                )
                 return self.async_create_entry(
                     title=f"GivEnergy {serial}",
                     data=user_input,
+                    options={CONF_BATTERY_DATA_ONLY: battery_data_only},
                 )
 
         return self.async_show_form(
             step_id="user",
-            data_schema=STEP_USER_DATA_SCHEMA,
+            data_schema=STEP_USER_SETUP_SCHEMA,
             errors=errors,
         )
 

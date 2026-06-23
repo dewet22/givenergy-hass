@@ -116,6 +116,20 @@ def test_aio_inapplicable_inverter_sensors_skip_if_none():
     assert _inverter_desc("inverter_fault_messages").skip_if_none is False
 
 
+def test_aio_inapplicable_inverter_sensors_gated_on_aio():
+    """MPPT Count, Solar Diverter and Battery Discharge This Year read a meaningless
+    value (0, 0.0, a static figure) — not None — on an AIO, so skip_if_none never
+    dropped them. They're gated on AIO topology instead (#95)."""
+    inv = MagicMock()  # every attr returns a truthy mock, i.e. "not None"
+    aio_gated = {"num_mppt", "e_solar_diverter", "e_discharge_year"}
+    flagged = {d.key for d in INVERTER_SENSORS if d.skip_if_aio}
+    assert flagged == aio_gated
+    for key in aio_gated:
+        # Dropped on an AIO; kept elsewhere even though the value is non-None.
+        assert _include_inverter_sensor(_inverter_desc(key), inv, False, is_aio=True) is False, key
+        assert _include_inverter_sensor(_inverter_desc(key), inv, False, is_aio=False) is True, key
+
+
 def test_extra_inverter_capability_sensors():
     """The new rated/limit fields are surfaced as power sensors; the DTC-computed
     ones skip when None (unmapped DTC) rather than showing Unknown (#194)."""
@@ -1013,7 +1027,6 @@ def _mock_bcu(version: str = "GA000009", **overrides) -> MagicMock:
     defaults = {
         "battery_voltage": 220.0,
         "battery_current": 12.5,
-        "battery_power": 2.5,
         "battery_soc_max": 99,
         "battery_soc_min": 97,
         "battery_soh": 100,
@@ -1105,7 +1118,6 @@ def test_hv_stack_sensor_descriptions_cover_expected_fields():
     assert keys == {
         "battery_voltage",
         "battery_current",
-        "battery_power",
         "battery_soc_max",
         "battery_soc_min",
         "battery_soh",
@@ -1118,13 +1130,13 @@ def test_hv_stack_sensor_descriptions_cover_expected_fields():
         "number_of_cycles",
         "pack_software_version",
     }
+    # battery_power is deliberately absent: on a real AIO BCU it reads a 0xFFFF
+    # sentinel (~65.53 kW) when discharging and 0 when idle, never a usable figure —
+    # the inverter-level Battery Power is authoritative (#95, AberDino).
+    assert "battery_power" not in keys
     voltage = next(d for d in HV_STACK_SENSORS if d.key == "battery_voltage")
     assert voltage.device_class == SensorDeviceClass.VOLTAGE
     assert voltage.native_unit_of_measurement == "V"
-    # Power is kW (the modbus C.milli converter divides IR79 by 1000), not W — a
-    # unit typo here would render readings 1000x off, so pin it.
-    power = next(d for d in HV_STACK_SENSORS if d.key == "battery_power")
-    assert power.native_unit_of_measurement == "kW"
     energy = next(d for d in HV_STACK_SENSORS if d.key == "charge_energy_total")
     assert energy.native_unit_of_measurement == "kWh"
 

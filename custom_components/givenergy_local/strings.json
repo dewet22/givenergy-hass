@@ -9,6 +9,7 @@
           "port": "Modbus Port",
           "scan_interval": "Scan Interval (seconds)",
           "passive": "Passive mode (listen only — another client drives refreshes)",
+          "battery_data_only": "Battery data only (suppress controls and system sensors)",
           "timeout_tolerance": "Timeout Tolerance (consecutive failures before unavailable)"
         }
       },
