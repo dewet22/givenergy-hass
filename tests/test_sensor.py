@@ -96,6 +96,39 @@ def test_setup_filter_skips_bad_descriptor_instead_of_crashing():
     assert _include_inverter_sensor(plain, inv, False) is True
 
 
+def test_aio_inapplicable_inverter_sensors_skip_if_none():
+    """Inverter sensors that read None on an AIO are dropped (skip_if_none), not
+    shown as a permanently-Unknown orphan (#194)."""
+    for key in (
+        "num_mppt",
+        "e_inverter_export_total",
+        "inverter_errors",
+        "e_discharge_year",
+        "e_solar_diverter",  # already had it — guard against regression
+    ):
+        assert _inverter_desc(key).skip_if_none is True, key
+    # Fault Messages is deliberately NOT skipped: its value_fn returns None for the
+    # healthy empty-fault list too, so skipping would drop it on healthy single-phase
+    # installs and a later fault couldn't surface until reload (#194).
+    assert _inverter_desc("inverter_fault_messages").skip_if_none is False
+
+
+def test_extra_inverter_capability_sensors():
+    """The new rated/limit fields are surfaced as power sensors; the DTC-computed
+    ones skip when None (unmapped DTC) rather than showing Unknown (#194)."""
+    from homeassistant.components.sensor import SensorDeviceClass
+
+    grid = _inverter_desc("grid_port_max_power_output")
+    assert grid.native_unit_of_measurement == "W"
+    assert grid.device_class == SensorDeviceClass.POWER
+    assert grid.skip_if_none is False  # raw HR, wanted on AIO — never skipped
+    for key in ("inverter_max_power", "battery_max_power"):
+        desc = _inverter_desc(key)
+        assert desc.native_unit_of_measurement == "W", key
+        assert desc.device_class == SensorDeviceClass.POWER, key
+        assert desc.skip_if_none is True, key
+
+
 def test_single_phase_only_sensors_gated_on_three_phase():
     """single_phase_only descriptions are dropped on three-phase plants but kept on
     single-phase — the single-phase-only PV/capacity fields would otherwise surface as
@@ -840,6 +873,27 @@ async def test_aio_module_with_invalid_serial_is_skipped(hass, mock_client, mock
     _setup_aio_plant(
         mock_client,
         [_mock_aio_module("HX2414G831", 0x50), _mock_aio_module("", 0x51, valid=False)],
+    )
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    dev_registry = dr.async_get(hass)
+    modules = [
+        d
+        for d in dr.async_entries_for_config_entry(dev_registry, mock_config_entry.entry_id)
+        if d.model == "AIO Battery Module"
+    ]
+    assert len(modules) == 1
+    assert modules[0].serial_number == "HX2414G831"
+
+
+async def test_aio_modules_dedup_duplicate_serial(hass, mock_client, mock_config_entry):
+    """Two modules reporting the same serial create exactly one device — the
+    duplicate is skipped rather than colliding on unique_id (#194)."""
+    _setup_aio_plant(
+        mock_client,
+        [_mock_aio_module("HX2414G831", 0x50), _mock_aio_module("HX2414G831", 0x51)],
     )
     mock_config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(mock_config_entry.entry_id)

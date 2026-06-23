@@ -191,6 +191,8 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         key="inverter_errors",
         name="Inverter Errors",
         value_fn=lambda inv: inv.inverter_errors,
+        # None on AIO (HR223/224 unpopulated) — drop rather than show "Unknown" (#194).
+        skip_if_none=True,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(
@@ -218,6 +220,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: (
             ", ".join(inv.inverter_fault_messages) if inv.inverter_fault_messages else None
         ),
+        # Deliberately NOT skip_if_none: value_fn returns None for the healthy
+        # *empty fault list* too, not just the unsupported-on-AIO case. Skipping
+        # would drop this on a healthy single-phase install at setup, leaving a
+        # later fault nowhere to surface until a reload (Codex review, #194).
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     # ChargeStatus mapping shipped in modbus 2.3.1 (#222) — render the
@@ -684,6 +690,8 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_inverter_export_total,
+        # None on AIO (no single-phase inverter-export register) — drop (#194).
+        skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
         key="e_inverter_in_total",
@@ -700,6 +708,8 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_discharge_year,
+        # None on AIO (IR29 unpopulated) — drop rather than show "Unknown" (#194).
+        skip_if_none=True,
     ),
     # --- Lifetime battery energy totals (routed per-model in givenergy-modbus
     # #76; return None on models with no known total register — e.g. AC-coupled
@@ -816,12 +826,47 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         key="num_mppt",
         name="MPPT Count",
         value_fn=lambda inv: inv.num_mppt,
+        # None on AIO (HR3 high byte unpopulated) — drop rather than "Unknown" (#194).
+        skip_if_none=True,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(
         key="num_phases",
         name="Phase Count",
         value_fn=lambda inv: inv.num_phases,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="grid_port_max_power_output",
+        name="Grid Export Power Limit",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.grid_port_max_power_output,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="inverter_max_power",
+        name="Inverter Max Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.inverter_max_power,
+        # Computed from the device-type code; None when the DTC isn't in the
+        # library's lookup (e.g. some AIO variants) — drop rather than "Unknown" (#194).
+        skip_if_none=True,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="battery_max_power",
+        name="Battery Max Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda inv: inv.battery_max_power,
+        # Computed from DTC + firmware; None until the modbus DTC lookup has the
+        # entry — drop rather than "Unknown" (#194).
+        skip_if_none=True,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(
@@ -1360,9 +1405,24 @@ async def async_setup_entry(
     # Like the battery entities, this set is fixed at setup: a module absent
     # during the initial probe gets no entities until a reload (tracked in #148,
     # to be fixed uniformly for all device types).
+    seen_module_serials: set[str] = set()
     for module_index, module in enumerate(coordinator.data.aio_battery_modules):
         if not module.is_valid():
             continue
+        # Skip a module whose serial we've already created entities for: a
+        # duplicate serial (placeholder/garbled, or a repeated BMS read) would
+        # otherwise collide on unique_id and HA would drop the second module's
+        # entities with an error per cell (#194). Log it loudly — real modules
+        # have unique serials, so a duplicate means a module is missing from HA.
+        if module.serial_number in seen_module_serials:
+            _LOGGER.warning(
+                "Skipping AIO battery module at index %d: duplicate serial %s "
+                "(real modules have unique serials — check for a placeholder/garbled read)",
+                module_index,
+                module.serial_number,
+            )
+            continue
+        seen_module_serials.add(module.serial_number)
         entities.extend(
             GivEnergyAioModuleSensor(coordinator, description, module_index)
             for description in AIO_MODULE_SENSORS
