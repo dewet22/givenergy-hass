@@ -52,10 +52,11 @@ exclude_lines = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
 ]
-# Conservative starting floor so the gate can't be silently regressed. Ratchet
-# this upward toward the real figure (printed by CI's term-missing report) as
-# the under-tested service/coordinator/migration paths gain coverage.
-fail_under = 70
+# Floor tracks near the measured coverage (~94.5% on main) with deliberate
+# headroom: high enough to catch a real regression, low enough that one new
+# lightly-tested module doesn't fail CI on its own. Ratchet further as coverage
+# stabilises higher.
+fail_under = 90
 
 [tool.ruff]
 target-version = "py314"
