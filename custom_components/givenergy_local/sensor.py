@@ -1408,7 +1408,7 @@ COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
     ),
     GivEnergyCoordinatorSensorDescription(
         key="crc_failures",
-        name="CRC Errors",
+        name="Comms CRC Errors",
         # Per-device CRC-failed responses the library skipped (keep-last-good).
         # A few a day is the normal noise floor; a climbing rate on one device
         # flags a degrading link. The attributes name which device(s).
@@ -1419,7 +1419,7 @@ COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
     ),
     GivEnergyCoordinatorSensorDescription(
         key="splice_rejections",
-        name="Splice Guard Rejections",
+        name="Comms Splice Guard Rejections",
         # Battery banks hard-rejected by the sub-bus splice guard (keep-last-
         # good). Expected to be near-zero; a sustained climb on one pack points
         # at sub-bus corruption or a poisoned baseline.
@@ -1430,7 +1430,7 @@ COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
     ),
     GivEnergyCoordinatorSensorDescription(
         key="splice_holds",
-        name="Splice Guard Holds",
+        name="Comms Splice Guard Holds",
         # Banks escrowed for one poll pending confirmation — the softer splice
         # signal (often benign). Counts hold events, not currently-held banks.
         state_class=SensorStateClass.TOTAL_INCREASING,
@@ -1440,7 +1440,7 @@ COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
     ),
     GivEnergyCoordinatorSensorDescription(
         key="read_retries",
-        name="Read Retries",
+        name="Comms Read Retries",
         # Register reads that needed at least one re-request before succeeding
         # (or giving up). The earliest creeping-degradation signal — a read that
         # recovers on retry is otherwise reported as a clean success. A climbing
@@ -1452,7 +1452,7 @@ COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
     ),
     GivEnergyCoordinatorSensorDescription(
         key="cold_start_holds",
-        name="Cold Start Holds",
+        name="Comms Cold Start Holds",
         # Battery banks held one extra poll at cold start awaiting baseline
         # corroboration (modbus #289). A benign "establishing baseline" signal —
         # distinct from Splice Guard Holds (which means corruption is being held).
