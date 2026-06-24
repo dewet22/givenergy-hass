@@ -222,7 +222,9 @@ def _ems_time_descriptions() -> tuple[GivEnergyEmsTimeEntityDescription, ...]:
 EMS_TIME_DESCRIPTIONS: tuple[GivEnergyEmsTimeEntityDescription, ...] = _ems_time_descriptions()
 
 
-def _include_time(description: GivEnergyTimeEntityDescription, inverter: InverterModel) -> bool:
+def _include_time(
+    description: GivEnergyTimeEntityDescription, inverter: InverterModel, clean: bool = True
+) -> bool:
     """Whether to create a time control at setup (#207).
 
     A skip_if_none control is dropped when its readability signal reads None —
@@ -231,6 +233,10 @@ def _include_time(description: GivEnergyTimeEntityDescription, inverter: Inverte
     Guarded so a raising accessor skips just that control, not the whole platform.
     """
     if not description.skip_if_none:
+        return True
+    # On a partial seed poll a None may be a transient bank failure, not structural
+    # absence — keep the control so a later clean poll recovers it (#208 review).
+    if not clean:
         return True
     read = description.readable_fn or description.slot_fn
     try:
@@ -269,10 +275,11 @@ async def async_setup_entry(
         )
     else:
         inverter = coordinator.data.inverter
+        clean = not coordinator.last_partial_failures
         entities.extend(
             GivEnergyTimeEntity(coordinator, description)
             for description in TIME_DESCRIPTIONS
-            if _include_time(description, inverter)
+            if _include_time(description, inverter, clean)
         )
         entities.extend(
             GivEnergyTimeEntity(coordinator, description)

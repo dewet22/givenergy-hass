@@ -506,6 +506,13 @@ def _reconcile_readability_gated_controls(
     from .select import SELECT_DESCRIPTIONS, _include_select
     from .time import TIME_DESCRIPTIONS, _include_time
 
+    # A partial seed poll serves last-good with last_partial_failures set, so a None
+    # read may be a transient bank failure rather than structural absence. Removing
+    # rows now would lose history/customisation and the controls until a reload —
+    # reconcile only on a clean seed (#208 review).
+    if coordinator.last_partial_failures:
+        return
+
     inverter = coordinator.data.inverter
     serial = coordinator.data.inverter_serial_number
     registry = er.async_get(hass)

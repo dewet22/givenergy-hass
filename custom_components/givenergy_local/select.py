@@ -118,7 +118,9 @@ AC_COUPLED_SELECT_DESCRIPTIONS: tuple[GivEnergySelectEntityDescription, ...] = (
 )
 
 
-def _include_select(description: GivEnergySelectEntityDescription, inverter: InverterModel) -> bool:
+def _include_select(
+    description: GivEnergySelectEntityDescription, inverter: InverterModel, clean: bool = True
+) -> bool:
     """Whether to create a select control at setup (#207).
 
     A skip_if_none control is dropped when its register reads None — absent on this
@@ -126,6 +128,10 @@ def _include_select(description: GivEnergySelectEntityDescription, inverter: Inv
     raising accessor skips just that control, not the whole platform.
     """
     if not description.skip_if_none:
+        return True
+    # On a partial seed poll a None may be a transient bank failure, not structural
+    # absence — keep the control so a later clean poll recovers it (#208 review).
+    if not clean:
         return True
     try:
         value = description.current_option_fn(inverter)
@@ -155,10 +161,11 @@ async def async_setup_entry(
         # Inverter-level selects (battery power/pause mode) are redundant on an EMS
         # plant (#201); there are no EMS-specific selects, so the controller gets none.
         inverter = coordinator.data.inverter
+        clean = not coordinator.last_partial_failures
         entities.extend(
             GivEnergySelectEntity(coordinator, description)
             for description in SELECT_DESCRIPTIONS
-            if _include_select(description, inverter)
+            if _include_select(description, inverter, clean)
         )
         caps = coordinator.data.capabilities
         if caps is not None and caps.has_ac_config_block and not caps.is_three_phase:

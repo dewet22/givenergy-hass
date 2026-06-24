@@ -118,6 +118,20 @@ async def test_ac_limits_absent_when_register_unreadable(
     assert _maybe_entity_id(hass, "SA1234G123_battery_discharge_limit_ac") is None
 
 
+def test_ac_limit_kept_on_partial_seed(mock_inverter):
+    """#208: on a partial seed poll (clean=False) a None read may be a transient bank
+    failure, so the control is kept rather than gated."""
+    from custom_components.givenergy_local.number import (
+        AC_COUPLED_NUMBER_DESCRIPTIONS,
+        _include_number,
+    )
+
+    desc = next(d for d in AC_COUPLED_NUMBER_DESCRIPTIONS if d.key == "battery_charge_limit_ac")
+    mock_inverter.battery_charge_limit_ac = None
+    assert _include_number(desc, mock_inverter, clean=True) is False  # clean + None → gated
+    assert _include_number(desc, mock_inverter, clean=False) is True  # partial → kept
+
+
 async def test_set_ac_charge_limit_sends_command(hass, mock_client, ac_coupled_setup):
     entity_id = _entity_id(hass, "SA1234G123_battery_charge_limit_ac")
     await hass.services.async_call(

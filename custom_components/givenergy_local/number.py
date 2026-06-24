@@ -205,7 +205,9 @@ EMS_NUMBER_DESCRIPTIONS: tuple[GivEnergyEmsNumberEntityDescription, ...] = (
 )
 
 
-def _include_number(description: GivEnergyNumberEntityDescription, inverter: InverterModel) -> bool:
+def _include_number(
+    description: GivEnergyNumberEntityDescription, inverter: InverterModel, clean: bool = True
+) -> bool:
     """Whether to create a number control at setup (#207).
 
     A skip_if_none control is dropped when its register reads None — absent on this
@@ -214,6 +216,10 @@ def _include_number(description: GivEnergyNumberEntityDescription, inverter: Inv
     whole platform.
     """
     if not description.skip_if_none:
+        return True
+    # On a partial seed poll a None may be a transient bank failure, not structural
+    # absence — keep the control so a later clean poll recovers it (#208 review).
+    if not clean:
         return True
     try:
         value = description.value_fn(inverter)
@@ -253,10 +259,11 @@ async def async_setup_entry(
         caps = coordinator.data.capabilities
         if caps is not None and caps.has_ac_config_block and not caps.is_three_phase:
             inverter = coordinator.data.inverter
+            clean = not coordinator.last_partial_failures
             entities.extend(
                 GivEnergyNumberEntity(coordinator, description)
                 for description in AC_COUPLED_NUMBER_DESCRIPTIONS
-                if _include_number(description, inverter)
+                if _include_number(description, inverter, clean)
             )
     async_add_entities(entities)
 

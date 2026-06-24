@@ -898,3 +898,25 @@ async def test_upgrade_removes_unreadable_control_rows(
     assert not _present("time", "battery_pause_slot_end")
     # A readable control is untouched.
     assert _present("select", "battery_power_mode")
+
+
+async def test_reconcile_keeps_controls_on_partial_seed(hass, mock_client, setup_integration):
+    """#208: a partial seed poll (last_partial_failures set) must NOT remove control
+    rows — a None read could be a transient bank failure, recoverable on a later poll."""
+    from custom_components.givenergy_local import _reconcile_readability_gated_controls
+
+    coordinator = hass.data[DOMAIN][setup_integration.entry_id]
+    coordinator.last_partial_failures = [object()]  # partial seed
+    coordinator.data.inverter.battery_charge_limit_ac = None  # reads None (transient)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "number", DOMAIN, "SA1234G123_battery_charge_limit_ac", config_entry=setup_integration
+    )
+
+    _reconcile_readability_gated_controls(hass, coordinator)
+
+    # Partial seed → reconciliation is a no-op; the row is retained.
+    assert (
+        registry.async_get_entity_id("number", DOMAIN, "SA1234G123_battery_charge_limit_ac")
+        is not None
+    )
