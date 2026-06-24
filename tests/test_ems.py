@@ -296,10 +296,10 @@ async def test_managed_inverter_devices_created_and_parented(hass, managed_ems_s
     controller = dev_registry.async_get_device(identifiers={(DOMAIN, "SA1234G123")})
     assert controller is not None
     for serial in ("SA1111A001", "SA2222A002"):
-        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{serial}_power")
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{serial}_managed_power")
         assert entity_id is not None, f"{serial} has no power sensor"
         device = dev_registry.async_get(registry.async_get(entity_id).device_id)
-        assert (DOMAIN, serial) in device.identifiers
+        assert (DOMAIN, f"{serial}_managed") in device.identifiers
         assert device.name == f"GivEnergy Managed Inverter {serial}"
         assert device.model == "Managed Inverter (EMS)"
         assert device.via_device_id == controller.id
@@ -307,12 +307,14 @@ async def test_managed_inverter_devices_created_and_parented(hass, managed_ems_s
 
 async def test_managed_inverter_values(hass, managed_ems_setup):
     """The blinded summary fields surface on the child sensors."""
-    assert hass.states.get(_entity_id(hass, "sensor", "SA1111A001_power")).state == "1500"
-    assert hass.states.get(_entity_id(hass, "sensor", "SA1111A001_battery_soc")).state == "60"
-    temp = hass.states.get(_entity_id(hass, "sensor", "SA1111A001_temperature"))
+    assert hass.states.get(_entity_id(hass, "sensor", "SA1111A001_managed_power")).state == "1500"
+    assert (
+        hass.states.get(_entity_id(hass, "sensor", "SA1111A001_managed_battery_soc")).state == "60"
+    )
+    temp = hass.states.get(_entity_id(hass, "sensor", "SA1111A001_managed_temperature"))
     assert float(temp.state) == 30.5
     assert temp.attributes["unit_of_measurement"] == "°C"
-    assert hass.states.get(_entity_id(hass, "sensor", "SA2222A002_power")).state == "-200"
+    assert hass.states.get(_entity_id(hass, "sensor", "SA2222A002_managed_power")).state == "-200"
 
 
 async def test_managed_inverter_resolves_by_serial(hass, managed_ems_setup):
@@ -323,8 +325,11 @@ async def test_managed_inverter_resolves_by_serial(hass, managed_ems_setup):
     coordinator.async_set_updated_data(coordinator.data)
     await hass.async_block_till_done()
 
-    assert hass.states.get(_entity_id(hass, "sensor", "SA2222A002_power")).state == "-200"
-    assert hass.states.get(_entity_id(hass, "sensor", "SA1111A001_power")).state == "unavailable"
+    assert hass.states.get(_entity_id(hass, "sensor", "SA2222A002_managed_power")).state == "-200"
+    assert (
+        hass.states.get(_entity_id(hass, "sensor", "SA1111A001_managed_power")).state
+        == "unavailable"
+    )
 
 
 async def test_no_managed_inverter_devices_for_non_ems_plant(hass, setup_integration):
@@ -356,6 +361,44 @@ async def test_managed_inverter_dedup_duplicate_serial(
         if d.model == "Managed Inverter (EMS)"
     ]
     assert len(managed) == 1
+
+
+async def test_managed_inverter_namespaced_against_same_serial(
+    hass, mock_client, mock_plant, mock_inverter, mock_ems, mock_config_entry
+):
+    """#203: a managed-inverter rollup must not hijack a same-serial device.
+
+    The rollup here reports the controller's own serial — the in-one-entry repro of
+    the collision (a separately-configured direct inverter of a managed serial is
+    the cross-entry form). Pre-fix this merged the rollup's DeviceInfo onto
+    `(DOMAIN, serial)` and dropped the colliding status/SoC sensors; the `_managed`
+    namespace keeps the two identities distinct.
+    """
+    mock_ems.managed_inverters = [_managed("SA1234G123", power=1500, soc=60, temp=30.5)]
+    mock_plant.ems = mock_ems
+    mock_inverter.model = Model.EMS
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    dev_registry = dr.async_get(hass)
+
+    # The controller keeps its bare-serial device identity and its own status sensor.
+    controller = dev_registry.async_get_device(identifiers={(DOMAIN, "SA1234G123")})
+    assert controller is not None
+    assert controller.model != "Managed Inverter (EMS)"
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_status") is not None
+
+    # The rollup gets a distinct `_managed` device + namespaced sensors — no collision.
+    managed = dev_registry.async_get_device(identifiers={(DOMAIN, "SA1234G123_managed")})
+    assert managed is not None
+    assert managed.id != controller.id
+    assert managed.model == "Managed Inverter (EMS)"
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_managed_status") is not None
+    assert (
+        registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_managed_battery_soc") is not None
+    )
 
 
 # ---------------------------------------------------------------------------
