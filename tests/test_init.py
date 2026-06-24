@@ -860,3 +860,63 @@ async def test_expose_recommended_entities_honours_custom_assistants_list(
     # Two assistants × N entities → 2N total exposure calls.
     assistants_called = {call.args[1] for call in expose_mock.call_args_list}
     assert assistants_called == {"conversation", "cloud.alexa"}
+
+
+async def test_upgrade_removes_unreadable_control_rows(
+    hass, mock_client, mock_plant, mock_inverter, mock_config_entry
+):
+    """#207: on upgrade, orphaned rows for readability-gated controls whose register
+    reads None are removed pre-platform — suppressing creation alone leaves them."""
+    mock_inverter.battery_charge_limit_ac = None
+    mock_inverter.battery_discharge_limit_ac = None
+    mock_inverter.battery_pause_mode = None  # pause absent → mode + slots gated
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    # Rows a prior version created: readability-gated controls + one readable control.
+    seeded = (
+        ("number", "SA1234G123_battery_charge_limit_ac"),
+        ("number", "SA1234G123_battery_discharge_limit_ac"),
+        ("select", "SA1234G123_battery_pause_mode"),
+        ("time", "SA1234G123_battery_pause_slot_start"),
+        ("time", "SA1234G123_battery_pause_slot_end"),
+        ("select", "SA1234G123_battery_power_mode"),  # readable → must survive
+    )
+    for domain, unique_id in seeded:
+        registry.async_get_or_create(domain, DOMAIN, unique_id, config_entry=mock_config_entry)
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    def _present(domain: str, key: str) -> bool:
+        return registry.async_get_entity_id(domain, DOMAIN, f"SA1234G123_{key}") is not None
+
+    # Readability-gated controls whose register reads None are removed.
+    assert not _present("number", "battery_charge_limit_ac")
+    assert not _present("number", "battery_discharge_limit_ac")
+    assert not _present("select", "battery_pause_mode")
+    assert not _present("time", "battery_pause_slot_start")
+    assert not _present("time", "battery_pause_slot_end")
+    # A readable control is untouched.
+    assert _present("select", "battery_power_mode")
+
+
+async def test_reconcile_keeps_controls_on_partial_seed(hass, mock_client, setup_integration):
+    """#208: a partial seed poll (last_partial_failures set) must NOT remove control
+    rows — a None read could be a transient bank failure, recoverable on a later poll."""
+    from custom_components.givenergy_local import _reconcile_readability_gated_controls
+
+    coordinator = hass.data[DOMAIN][setup_integration.entry_id]
+    coordinator.last_partial_failures = [object()]  # partial seed
+    coordinator.data.inverter.battery_charge_limit_ac = None  # reads None (transient)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "number", DOMAIN, "SA1234G123_battery_charge_limit_ac", config_entry=setup_integration
+    )
+
+    _reconcile_readability_gated_controls(hass, coordinator)
+
+    # Partial seed → reconciliation is a no-op; the row is retained.
+    assert (
+        registry.async_get_entity_id("number", DOMAIN, "SA1234G123_battery_charge_limit_ac")
+        is not None
+    )

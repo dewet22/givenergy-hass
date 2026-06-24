@@ -96,6 +96,42 @@ async def test_ac_limits_present_on_ac_coupled_plant(hass, ac_coupled_setup):
     assert state.attributes["max"] == 100
 
 
+async def test_ac_limits_absent_when_register_unreadable(
+    hass, mock_client, mock_plant, mock_inverter, mock_config_entry
+):
+    """#207: on an AC-coupled plant whose firmware doesn't carry HR313/314 (they read
+    None), the AC-limit controls aren't created — no broken slider."""
+    mock_plant.capabilities = PlantCapabilities(
+        device_type=Model.AC,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
+    mock_inverter.battery_charge_limit_ac = None
+    mock_inverter.battery_discharge_limit_ac = None
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert _maybe_entity_id(hass, "SA1234G123_battery_charge_limit_ac") is None
+    assert _maybe_entity_id(hass, "SA1234G123_battery_discharge_limit_ac") is None
+
+
+def test_ac_limit_kept_on_partial_seed(mock_inverter):
+    """#208: on a partial seed poll (clean=False) a None read may be a transient bank
+    failure, so the control is kept rather than gated."""
+    from custom_components.givenergy_local.number import (
+        AC_COUPLED_NUMBER_DESCRIPTIONS,
+        _include_number,
+    )
+
+    desc = next(d for d in AC_COUPLED_NUMBER_DESCRIPTIONS if d.key == "battery_charge_limit_ac")
+    mock_inverter.battery_charge_limit_ac = None
+    assert _include_number(desc, mock_inverter, clean=True) is False  # clean + None → gated
+    assert _include_number(desc, mock_inverter, clean=False) is True  # partial → kept
+
+
 async def test_set_ac_charge_limit_sends_command(hass, mock_client, ac_coupled_setup):
     entity_id = _entity_id(hass, "SA1234G123_battery_charge_limit_ac")
     await hass.services.async_call(

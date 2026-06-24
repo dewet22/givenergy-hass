@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -17,11 +18,17 @@ from .const import CONF_BATTERY_DATA_ONLY, DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 from .sensor import _device_kind
 
+_LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyNumberEntityDescription(NumberEntityDescription):
     value_fn: Callable[[InverterModel], float | None] = field(default=lambda _: None)
     set_value_cmd: Callable[[float], list] = field(default=lambda _: [])
+    # If True, the control isn't created when value_fn reads None at setup — the
+    # register isn't present on this device/firmware (e.g. HR313/314 on older
+    # firmware). The control-side of the sensor skip_if_none (#207).
+    skip_if_none: bool = False
 
 
 NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
@@ -119,6 +126,7 @@ AC_COUPLED_NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
         mode=NumberMode.BOX,
         value_fn=lambda inv: inv.battery_charge_limit_ac,
         set_value_cmd=lambda v: commands.set_battery_charge_limit_ac(int(v)),
+        skip_if_none=True,  # HR313 absent on older firmware (#207)
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyNumberEntityDescription(
@@ -131,6 +139,7 @@ AC_COUPLED_NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
         mode=NumberMode.BOX,
         value_fn=lambda inv: inv.battery_discharge_limit_ac,
         set_value_cmd=lambda v: commands.set_battery_discharge_limit_ac(int(v)),
+        skip_if_none=True,  # HR314 absent on older firmware (#207)
         entity_category=EntityCategory.CONFIG,
     ),
 )
@@ -196,6 +205,36 @@ EMS_NUMBER_DESCRIPTIONS: tuple[GivEnergyEmsNumberEntityDescription, ...] = (
 )
 
 
+def _include_number(
+    description: GivEnergyNumberEntityDescription, inverter: InverterModel, clean: bool = True
+) -> bool:
+    """Whether to create a number control at setup (#207).
+
+    A skip_if_none control is dropped when its register reads None — absent on this
+    device/firmware (e.g. HR313/314 on older firmware). Guarded so a value_fn that
+    raises (a field renamed in givenergy-modbus) skips just that control, not the
+    whole platform.
+    """
+    if not description.skip_if_none:
+        return True
+    # On a partial seed poll a None may be a transient bank failure, not structural
+    # absence — keep the control so a later clean poll recovers it (#208 review).
+    if not clean:
+        return True
+    try:
+        value = description.value_fn(inverter)
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("Skipping number %s: value_fn raised at setup", description.key)
+        return False
+    if value is None:
+        # Expected: the register isn't present on this device/firmware. DEBUG, not
+        # WARNING — this is the gate working as designed and recurs every restart,
+        # unlike the duplicate/garbled anomalies that warrant a warning.
+        _LOGGER.debug("Skipping number %s: register reads None at setup", description.key)
+        return False
+    return True
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -219,9 +258,12 @@ async def async_setup_entry(
         )
         caps = coordinator.data.capabilities
         if caps is not None and caps.has_ac_config_block and not caps.is_three_phase:
+            inverter = coordinator.data.inverter
+            clean = not coordinator.last_partial_failures
             entities.extend(
                 GivEnergyNumberEntity(coordinator, description)
                 for description in AC_COUPLED_NUMBER_DESCRIPTIONS
+                if _include_number(description, inverter, clean)
             )
     async_add_entities(entities)
 

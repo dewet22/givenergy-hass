@@ -67,6 +67,17 @@ async def test_battery_pause_mode_options(hass, setup_integration):
     }
 
 
+async def test_battery_pause_mode_absent_when_register_unreadable(
+    hass, mock_client, mock_plant, mock_inverter, mock_config_entry
+):
+    """#207: firmware without battery pause (it reads None) gets no pause-mode control."""
+    mock_inverter.battery_pause_mode = None
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert _maybe_entity_id(hass, "SA1234G123_battery_pause_mode") is None
+
+
 async def test_select_pause_both_sends_command(hass, mock_client, setup_integration):
     entity_id = _entity_id(hass, "SA1234G123_battery_pause_mode")
     await hass.services.async_call(

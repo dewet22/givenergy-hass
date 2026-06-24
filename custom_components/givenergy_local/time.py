@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import time as dt_time
@@ -19,6 +20,8 @@ from .const import CONF_BATTERY_DATA_ONLY, DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 from .sensor import _device_kind
 
+_LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyTimeEntityDescription(TimeEntityDescription):
@@ -28,6 +31,16 @@ class GivEnergyTimeEntityDescription(TimeEntityDescription):
     # current inverter — charge/discharge setters dispatch on inverter.slot_map
     # to handle extended-slot models; the pause setter ignores the inverter.
     setter_fn: Callable[[dt_time, InverterModel], list] = field(default=lambda _, __: [])
+    # If True, the control isn't created when its readability signal reads None at
+    # setup — the register isn't present on this device/firmware (e.g. the battery
+    # pause slot, firmware-gated). The control-side of the sensor skip_if_none (#207).
+    skip_if_none: bool = False
+    # The readability signal for skip_if_none. A decoded TimeSlot is NOT a presence
+    # signal — it's None for a valid-but-unset slot (raw-60 sentinel, shown as
+    # "--:--") as well as for an absent register — so gate on a separate register
+    # (e.g. the pause-mode register as a proxy for the pause feature) rather than
+    # slot_fn (#208 review). Defaults to slot_fn when unset.
+    readable_fn: Callable[[InverterModel], object] | None = None
 
 
 TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
@@ -101,6 +114,10 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         slot_fn=lambda inv: inv.battery_pause_slot_1,
         is_start=True,
         setter_fn=lambda value, _inv: commands.set_pause_slot_start(value),
+        skip_if_none=True,  # firmware-gated (#207)
+        # Gate on the pause-mode register's presence, not the slot: an unset slot
+        # also decodes to None, but the control must stay so it can be set (#208).
+        readable_fn=lambda inv: inv.battery_pause_mode,
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -109,6 +126,10 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         slot_fn=lambda inv: inv.battery_pause_slot_1,
         is_start=False,
         setter_fn=lambda value, _inv: commands.set_pause_slot_end(value),
+        skip_if_none=True,  # firmware-gated (#207)
+        # Gate on the pause-mode register's presence, not the slot: an unset slot
+        # also decodes to None, but the control must stay so it can be set (#208).
+        readable_fn=lambda inv: inv.battery_pause_mode,
         entity_category=EntityCategory.CONFIG,
     ),
 )
@@ -201,6 +222,37 @@ def _ems_time_descriptions() -> tuple[GivEnergyEmsTimeEntityDescription, ...]:
 EMS_TIME_DESCRIPTIONS: tuple[GivEnergyEmsTimeEntityDescription, ...] = _ems_time_descriptions()
 
 
+def _include_time(
+    description: GivEnergyTimeEntityDescription, inverter: InverterModel, clean: bool = True
+) -> bool:
+    """Whether to create a time control at setup (#207).
+
+    A skip_if_none control is dropped when its readability signal reads None —
+    absent on this device/firmware. The decoded slot is NOT that signal (it's None
+    for a valid-but-unset slot too), so use readable_fn when given (#208 review).
+    Guarded so a raising accessor skips just that control, not the whole platform.
+    """
+    if not description.skip_if_none:
+        return True
+    # On a partial seed poll a None may be a transient bank failure, not structural
+    # absence — keep the control so a later clean poll recovers it (#208 review).
+    if not clean:
+        return True
+    read = description.readable_fn or description.slot_fn
+    try:
+        value = read(inverter)
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("Skipping time %s: readability check raised at setup", description.key)
+        return False
+    if value is None:
+        # Expected: the register isn't present on this device/firmware. DEBUG, not
+        # WARNING — the gate working as designed, recurring every restart, unlike the
+        # duplicate/garbled anomalies that warrant a warning.
+        _LOGGER.debug("Skipping time %s: readability signal reads None at setup", description.key)
+        return False
+    return True
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -222,8 +274,12 @@ async def async_setup_entry(
             for description in EMS_TIME_DESCRIPTIONS
         )
     else:
+        inverter = coordinator.data.inverter
+        clean = not coordinator.last_partial_failures
         entities.extend(
-            GivEnergyTimeEntity(coordinator, description) for description in TIME_DESCRIPTIONS
+            GivEnergyTimeEntity(coordinator, description)
+            for description in TIME_DESCRIPTIONS
+            if _include_time(description, inverter, clean)
         )
         entities.extend(
             GivEnergyTimeEntity(coordinator, description)
