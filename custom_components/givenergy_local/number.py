@@ -61,7 +61,7 @@ NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
         name="Battery Charge Limit",
         native_unit_of_measurement=PERCENTAGE,
         native_min_value=0,
-        native_max_value=50,
+        native_max_value=100,
         native_step=1,
         mode=NumberMode.BOX,
         value_fn=lambda inv: inv.battery_charge_limit,
@@ -73,7 +73,7 @@ NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
         name="Battery Discharge Limit",
         native_unit_of_measurement=PERCENTAGE,
         native_min_value=0,
-        native_max_value=50,
+        native_max_value=100,
         native_step=1,
         mode=NumberMode.BOX,
         value_fn=lambda inv: inv.battery_discharge_limit,
@@ -113,14 +113,14 @@ NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
 # limits above (HR111/112) and are only meaningful on models that expose the
 # AC-config register block (HR300+). Gated via PlantCapabilities.has_ac_config_block
 # (and not is_three_phase — three-phase AC remaps the read-back to different registers
-# than the command writes; see modbus#75). The setter rejects values below 1, hence the
-# 1–100 range.
+# than the command writes; see modbus#75). Range is 0–100% to match the GivEnergy
+# app and the DC-side pair.
 AC_COUPLED_NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
     GivEnergyNumberEntityDescription(
         key="battery_charge_limit_ac",
         name="Inverter Charge Power Percentage",
         native_unit_of_measurement=PERCENTAGE,
-        native_min_value=1,
+        native_min_value=0,
         native_max_value=100,
         native_step=1,
         mode=NumberMode.BOX,
@@ -133,7 +133,7 @@ AC_COUPLED_NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
         key="battery_discharge_limit_ac",
         name="Inverter Discharge Power Percentage",
         native_unit_of_measurement=PERCENTAGE,
-        native_min_value=1,
+        native_min_value=0,
         native_max_value=100,
         native_step=1,
         mode=NumberMode.BOX,
