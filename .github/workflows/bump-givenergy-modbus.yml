@@ -1,10 +1,10 @@
 name: Bump givenergy-modbus
 
-# Triggered by a repository_dispatch event from dewet22/givenergy-modbus's
-# release workflow. Also exposed as workflow_dispatch for manual runs.
+# Run manually to bump the givenergy-modbus pin and open a PR. modbus releases
+# are announced via the cross-agent coordination channel (the automated
+# repository_dispatch from givenergy-modbus's release workflow was retired), so
+# this is workflow_dispatch only.
 on:
-  repository_dispatch:
-    types: [givenergy-modbus-release]
   workflow_dispatch:
     inputs:
       version:
@@ -21,21 +21,19 @@ jobs:
       - name: Determine target version and base branch
         id: ver
         env:
-          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
-          MANUAL_VERSION: ${{ inputs.version }}
+          NEW: ${{ inputs.version }}
         run: |
-          NEW="${DISPATCH_VERSION:-$MANUAL_VERSION}"
           if [ -z "$NEW" ]; then
-            echo "::error::no version supplied via client_payload.version or workflow inputs"
+            echo "::error::no version supplied via workflow inputs"
             exit 1
           fi
           # Validate before NEW flows into git refs, commit messages, PR bodies,
           # GITHUB_OUTPUT, and a Python regex backref template downstream. The
-          # trust boundary here is the BUMP_PAT used to fire the dispatch — a
-          # compromised PAT shouldn't be able to inject shell metacharacters,
-          # newlines (GITHUB_OUTPUT injection), `\g<...>` (regex backref
-          # subversion in the bump step), or git ref operators (`..`, `^`, `:`
-          # in the branch name). The pattern accepts every modbus tag in
+          # trust boundary here is the workflow_dispatch input (repo-write
+          # access) — a malicious value shouldn't be able to inject shell
+          # metacharacters, newlines (GITHUB_OUTPUT injection), `\g<...>` (regex
+          # backref subversion in the bump step), or git ref operators (`..`,
+          # `^`, `:` in the branch name). The pattern accepts every modbus tag in
           # history (`X.Y.Z`, `X.Y.ZrcN`, `X.Y.ZaN`) plus forward-looking
           # PEP 440 `.dev`/`.post` suffixes; the inner repetition deliberately
           # requires each dot-separated segment to be non-empty, so values
