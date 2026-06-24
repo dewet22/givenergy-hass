@@ -62,6 +62,11 @@ class GivEnergyInverterSensorDescription(SensorEntityDescription):
     # diverter total, a static yearly discharge figure), so skip_if_none can't
     # catch it (#95).
     skip_if_aio: bool = False
+    # If True, the entity is not created on an EMS plant. The 0x11 controller's
+    # direct registers are meaningful (PV/grid/battery/AC), but a few *derived*
+    # sensors (House Consumption = inverter-battery-grid) are computed for a single
+    # unit and read wrong on a controller, so gate just those (#201).
+    skip_if_ems: bool = False
     # If True, the entity is not created on three-phase inverters, where the
     # underlying field is single-phase-only (e.g. a p_pv1+p_pv2 sum) and so would
     # be meaningless or surface as a permanently-unavailable orphan entity.
@@ -658,6 +663,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
             inv, "e_consumption_today", getattr(inv, "e_load_today", None)
         ),
         skip_if_none=True,
+        # Derived (inverter-battery-grid) — wrong on an EMS controller, where it
+        # computes a per-controller figure (e.g. -9.8) rather than whole-plant load;
+        # the EMS load aggregates cover it there instead (#201).
+        skip_if_ems=True,
         # Resolves per-model: e_load_today isn't in the single-phase LUT (the
         # derived value stays untracked for staleness), but on three-phase it
         # names the native register the value_fn falls back to (#152/#158).
@@ -1338,34 +1347,10 @@ def _ems_attr(name: str) -> Callable[[Ems], Any]:
     return lambda ems: getattr(ems, name)
 
 
-def _ems_status_label(ems: Ems) -> str | None:
-    """Render the EMS runtime status (IR2040) as a lowercase Status name.
-
-    `Ems` is built with use_enum_values, so `ems_status` is the raw int; map it
-    back through Status for a friendly label, returning None for an unread or
-    unrecognised value rather than raising.
-    """
-    raw = ems.ems_status
-    if raw is None:
-        return None
-    try:
-        return Status(raw).name.lower()
-    except ValueError:
-        return None
-
-
-# Plant-level telemetry for an EMS controller (device 0x11), surfaced in place of
-# the inverter sensor set (suppressed on EMS — see async_setup_entry). Names carry
-# an "EMS" prefix so they group together on the controller device.
+# Plant-level aggregates an EMS controller carries that the inverter registers
+# don't (#201) — the inverter sensors (PV/grid/battery/AC) stay on the controller;
+# these complement them. Names carry an "EMS" prefix so they group on the device.
 EMS_SENSORS: tuple[GivEnergyEmsSensorDescription, ...] = (
-    GivEnergyEmsSensorDescription(
-        key="ems_status",
-        name="EMS Status",
-        device_class=SensorDeviceClass.ENUM,
-        options=[s.name.lower() for s in Status],
-        value_fn=_ems_status_label,
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
     GivEnergyEmsSensorDescription(
         key="ems_inverter_count",
         name="EMS Managed Inverter Count",
@@ -1561,6 +1546,7 @@ def _include_inverter_sensor(
     inverter: InverterModel,
     is_three_phase: bool,
     is_aio: bool = False,
+    is_ems: bool = False,
 ) -> bool:
     """Whether to create an inverter sensor at setup.
 
@@ -1578,6 +1564,8 @@ def _include_inverter_sensor(
     if description.single_phase_only and is_three_phase:
         return False
     if description.skip_if_aio and is_aio:
+        return False
+    if description.skip_if_ems and is_ems:
         return False
     if not description.skip_if_none:
         return True
@@ -1612,26 +1600,28 @@ async def async_setup_entry(
 
     entities: list[SensorEntity] = []
 
-    # On an EMS plant the 0x11 device is a controller, not an inverter: its inverter
-    # registers (PV/battery/grid/AC) are absent, so the whole inverter sensor set
-    # would surface as permanently-unavailable orphans (#201). Suppress them and
-    # emit the EMS plant-level aggregates instead.
+    # On an EMS plant the 0x11 device is a controller, but its inverter registers
+    # still carry meaningful plant data (PV/grid/battery/AC), so the inverter
+    # sensors stay — only the derived House Consumption is gated out per-description
+    # via skip_if_ems (#201). The EMS plant-level aggregates are added alongside.
     #
     # Battery-data-only (#95): a parallel-mode AIO is controlled by its Gateway,
     # so its own inverter-level sensors (PV/grid/load/derived consumption) are
     # misleading. Drop them; keep the battery pack / HV stack / module / coordinator
     # data below. Control platforms suppress themselves the same way.
-    if not battery_data_only and ems is None:
+    if not battery_data_only:
         entities.extend(
             GivEnergyInverterSensor(coordinator, description)
             for description in INVERTER_SENSORS
-            if _include_inverter_sensor(description, inverter, is_three_phase, is_aio)
+            if _include_inverter_sensor(
+                description, inverter, is_three_phase, is_aio, ems is not None
+            )
         )
 
     if ems is not None:
-        # EMS controller plant-level telemetry (#201): status, managed-inverter
-        # count, calculated/measured load, grid-meter power, total battery power and
-        # remaining battery energy — the controller's actually-useful data.
+        # EMS controller plant-level aggregates the inverter registers don't carry
+        # (#201): managed-inverter count, calculated/measured load, grid-meter
+        # power, total battery power and remaining battery energy.
         entities.extend(GivEnergyEmsSensor(coordinator, description) for description in EMS_SENSORS)
 
     for battery_index, battery in enumerate(coordinator.data.batteries):

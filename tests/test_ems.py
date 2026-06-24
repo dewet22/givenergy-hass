@@ -363,12 +363,13 @@ async def test_managed_inverter_dedup_duplicate_serial(
 # ---------------------------------------------------------------------------
 
 
-async def test_inverter_sensors_suppressed_on_ems_plant(hass, ems_setup):
-    """The EMS controller is not an inverter, so the inverter sensor set is
-    suppressed — it would otherwise be a wall of permanently-unavailable
-    entities. The EMS aggregates below take their place."""
-    assert _entity_id(hass, "sensor", "SA1234G123_status") is None
-    assert _entity_id(hass, "sensor", "SA1234G123_p_load_demand") is None
+async def test_inverter_sensors_kept_on_ems_except_house_consumption(hass, ems_setup):
+    """The EMS controller's 0x11 block carries real plant data (PV/grid/battery/AC),
+    so the inverter sensors stay (#201). Only the derived House Consumption, which
+    computes a wrong per-controller figure, is gated off via skip_if_ems."""
+    assert _entity_id(hass, "sensor", "SA1234G123_status") is not None
+    assert _entity_id(hass, "sensor", "SA1234G123_battery_soc") is not None
+    assert _entity_id(hass, "sensor", "SA1234G123_e_consumption_today") is None
 
 
 async def test_inverter_controls_suppressed_on_ems_plant(hass, ems_setup):
@@ -380,45 +381,43 @@ async def test_inverter_controls_suppressed_on_ems_plant(hass, ems_setup):
     assert _entity_id(hass, "time", "SA1234G123_charge_slot_1_start") is None
 
 
-async def test_upgrade_removes_retired_inverter_entities_on_ems(
+async def test_upgrade_narrows_retired_entities_on_ems(
     hass, mock_client, mock_plant, mock_inverter, mock_ems, mock_config_entry
 ):
-    """Upgrade path (#201): inverter sensor/control rows a pre-#201 EMS install
-    created are removed from the registry, while coordinator and EMS entities
-    survive. Suppressing creation alone wouldn't clean up an existing entry — HA
-    keeps registry rows a platform stops adding."""
+    """Upgrade path (#201): on an existing EMS entry the reconciliation removes only
+    the inverter-level controls, the EMS-gated House Consumption, and the dropped
+    ems_status aggregate — the meaningful inverter sensors and diagnostics survive."""
     mock_plant.ems = mock_ems
     mock_inverter.model = Model.EMS
     mock_config_entry.add_to_hass(hass)
     registry = er.async_get(hass)
-    # Rows a pre-#201 EMS controller would carry, across every affected platform.
+    # Rows a prior install would carry: retired (controls + broken derived sensor +
+    # dropped aggregate) and retained (a real inverter sensor + a diagnostic).
     for domain, unique_id in (
-        ("sensor", "SA1234G123_status"),
-        ("sensor", "SA1234G123_p_load_demand"),
         ("switch", "SA1234G123_enable_charge"),
         ("number", "SA1234G123_charge_target_soc"),
         ("select", "SA1234G123_battery_power_mode"),
         ("time", "SA1234G123_charge_slot_1_start"),
+        ("sensor", "SA1234G123_e_consumption_today"),
+        ("sensor", "SA1234G123_ems_status"),
+        ("sensor", "SA1234G123_status"),
+        ("sensor", "SA1234G123_total_failures"),
     ):
         registry.async_get_or_create(domain, DOMAIN, unique_id, config_entry=mock_config_entry)
-    # A coordinator diagnostic that must survive the reconciliation.
-    registry.async_get_or_create(
-        "sensor", DOMAIN, "SA1234G123_total_failures", config_entry=mock_config_entry
-    )
 
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # Retired inverter sensors + controls removed.
-    assert _entity_id(hass, "sensor", "SA1234G123_status") is None
-    assert _entity_id(hass, "sensor", "SA1234G123_p_load_demand") is None
+    # Retired: inverter controls, the broken derived sensor, the dropped aggregate.
     assert _entity_id(hass, "switch", "SA1234G123_enable_charge") is None
     assert _entity_id(hass, "number", "SA1234G123_charge_target_soc") is None
     assert _entity_id(hass, "select", "SA1234G123_battery_power_mode") is None
     assert _entity_id(hass, "time", "SA1234G123_charge_slot_1_start") is None
-    # Coordinator diagnostic and EMS telemetry survive.
+    assert _entity_id(hass, "sensor", "SA1234G123_e_consumption_today") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_ems_status") is None
+    # Retained: meaningful inverter sensor + coordinator diagnostic.
+    assert _entity_id(hass, "sensor", "SA1234G123_status") is not None
     assert _entity_id(hass, "sensor", "SA1234G123_total_failures") is not None
-    assert _entity_id(hass, "sensor", "SA1234G123_ems_grid_meter_power") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +427,6 @@ async def test_upgrade_removes_retired_inverter_entities_on_ems(
 
 async def test_ems_sensors_created_and_read(hass, ems_setup):
     """The EMS aggregate telemetry surfaces on the controller device."""
-    assert hass.states.get(_entity_id(hass, "sensor", "SA1234G123_ems_status")).state == "normal"
     assert hass.states.get(_entity_id(hass, "sensor", "SA1234G123_ems_inverter_count")).state == "2"
     grid = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_ems_grid_meter_power"))
     assert grid.state == "-500"
@@ -443,4 +441,19 @@ async def test_ems_sensors_created_and_read(hass, ems_setup):
 async def test_no_ems_sensors_for_non_ems_plant(hass, setup_integration):
     """A non-EMS plant must not get the EMS aggregate sensors."""
     assert _entity_id(hass, "sensor", "SA1234G123_ems_grid_meter_power") is None
-    assert _entity_id(hass, "sensor", "SA1234G123_ems_status") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_ems_inverter_count") is None
+
+
+def test_house_consumption_gated_skip_if_ems():
+    """House Consumption Today is the one derived inverter sensor gated off on EMS;
+    the EMS gate leaves it out only when is_ems is set."""
+    from custom_components.givenergy_local.sensor import (
+        INVERTER_SENSORS,
+        _include_inverter_sensor,
+    )
+
+    desc = next(d for d in INVERTER_SENSORS if d.key == "e_consumption_today")
+    assert desc.skip_if_ems is True
+    inv = MagicMock()
+    assert _include_inverter_sensor(desc, inv, False, False, True) is False
+    assert _include_inverter_sensor(desc, inv, False, False, False) is True
