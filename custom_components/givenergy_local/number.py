@@ -109,6 +109,11 @@ NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
 
 # --- AC-config-block controls (AC-coupled inverters + single-phase All-in-One) ---
 
+# DC battery power-limit controls (HR111/112) suppressed on plants that expose the
+# AC-config block — there the AC pair (HR313/314) is the battery-power control and the
+# DC pair targets a different register (modbus #301/#302).
+_DC_BATTERY_LIMIT_KEYS = frozenset({"battery_charge_limit", "battery_discharge_limit"})
+
 # The AC charge/discharge power limits (HR313/314) are distinct from the DC-side
 # limits above (HR111/112) and are only meaningful on models that expose the
 # AC-config register block (HR300+). Gated via PlantCapabilities.has_ac_config_block
@@ -253,11 +258,22 @@ async def async_setup_entry(
             for description in EMS_NUMBER_DESCRIPTIONS
         )
     else:
-        entities.extend(
-            GivEnergyNumberEntity(coordinator, description) for description in NUMBER_DESCRIPTIONS
-        )
         caps = coordinator.data.capabilities
-        if caps is not None and caps.has_ac_config_block and not caps.is_three_phase:
+        ac_battery_control = (
+            caps is not None and caps.has_ac_config_block and not caps.is_three_phase
+        )
+        descriptions: tuple[GivEnergyNumberEntityDescription, ...] = NUMBER_DESCRIPTIONS
+        if ac_battery_control:
+            # On AC-coupled / AIO plants battery power is controlled via the AC pair
+            # (HR313/314) created below; the DC pair (HR111/112) targets a different
+            # register here and would mislead, so suppress it (modbus #301/#302).
+            descriptions = tuple(
+                d for d in NUMBER_DESCRIPTIONS if d.key not in _DC_BATTERY_LIMIT_KEYS
+            )
+        entities.extend(
+            GivEnergyNumberEntity(coordinator, description) for description in descriptions
+        )
+        if ac_battery_control:
             inverter = coordinator.data.inverter
             clean = not coordinator.last_partial_failures
             entities.extend(

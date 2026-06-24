@@ -189,3 +189,22 @@ async def test_ac_limits_present_on_all_in_one_plant(hass, aio_setup):
     """AIO exposes the AC-config block, so the AC limits must be created."""
     _entity_id(hass, "SA1234G123_battery_charge_limit_ac")
     _entity_id(hass, "SA1234G123_battery_discharge_limit_ac")
+
+
+async def test_dc_limits_suppressed_on_ac_coupled_plant(hass, ac_coupled_setup):
+    """The DC pair (HR111/112) is the wrong battery-power register on AC-coupled
+    plants, so it's suppressed in favour of the AC pair (modbus #301/#302)."""
+    assert _maybe_entity_id(hass, "SA1234G123_battery_charge_limit") is None
+    assert _maybe_entity_id(hass, "SA1234G123_battery_discharge_limit") is None
+
+
+async def test_dc_limits_suppressed_on_all_in_one_plant(hass, aio_setup):
+    """AIO exposes the AC-config block, so the DC battery limits are suppressed too."""
+    assert _maybe_entity_id(hass, "SA1234G123_battery_charge_limit") is None
+    assert _maybe_entity_id(hass, "SA1234G123_battery_discharge_limit") is None
+
+
+async def test_dc_limits_present_on_hybrid_plant(hass, setup_integration):
+    """Regression guard: the DC-coupled hybrid keeps its DC battery-limit controls."""
+    _entity_id(hass, "SA1234G123_battery_charge_limit")
+    _entity_id(hass, "SA1234G123_battery_discharge_limit")
