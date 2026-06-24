@@ -148,6 +148,19 @@ def _summary_attr(name: str) -> Callable[[InverterSummary], Any]:
     return lambda summary: getattr(summary, name)
 
 
+def _managed_status(value: Any) -> str | None:
+    """Render an EMS managed inverter's status defensively.
+
+    Unlike a directly-reachable inverter's Status enum, the EMS rollup reports
+    each managed inverter's status as a raw string, so coerce instead of
+    assuming `.name` — calling `.name` on the string raised on every poll on
+    real EMS hardware (#52).
+    """
+    if value is None:
+        return None
+    return value.name if hasattr(value, "name") else str(value)
+
+
 def _battery_hex(name: str, width: int) -> Callable[[Battery], Any]:
     """Return a value_fn that renders the named attr as a fixed-width hex string.
 
@@ -1317,7 +1330,7 @@ MANAGED_INVERTER_SENSORS: tuple[GivEnergyManagedInverterSensorDescription, ...] 
         key="status",
         name="Status",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda summary: summary.status.name if summary.status is not None else None,
+        value_fn=lambda summary: _managed_status(summary.status),
     ),
     GivEnergyManagedInverterSensorDescription(
         key="power",
@@ -1378,6 +1391,11 @@ EMS_SENSORS: tuple[GivEnergyEmsSensorDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=_ems_attr("measured_load_power"),
+        # Reads a constant zero on current EMS firmware, where the calculated-load
+        # aggregate carries the real figure. Hidden by default on new installs
+        # (still recorded, like grid_power above) to declutter; existing installs
+        # keep it until hidden manually — the flag only applies at registration (#52).
+        entity_registry_visible_default=False,
     ),
     GivEnergyEmsSensorDescription(
         key="ems_grid_meter_power",

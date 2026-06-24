@@ -118,7 +118,7 @@ NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
 AC_COUPLED_NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
     GivEnergyNumberEntityDescription(
         key="battery_charge_limit_ac",
-        name="Battery AC Charge Limit",
+        name="Inverter Charge Power Percentage",
         native_unit_of_measurement=PERCENTAGE,
         native_min_value=1,
         native_max_value=100,
@@ -131,7 +131,7 @@ AC_COUPLED_NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
     ),
     GivEnergyNumberEntityDescription(
         key="battery_discharge_limit_ac",
-        name="Battery AC Discharge Limit",
+        name="Inverter Discharge Power Percentage",
         native_unit_of_measurement=PERCENTAGE,
         native_min_value=1,
         native_max_value=100,
