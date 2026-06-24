@@ -422,12 +422,14 @@ def _migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 def _retired_inverter_unique_ids(serial: str) -> set[str]:
-    """Unique IDs of the inverter-level entities retired on an EMS plant (#201).
+    """Unique IDs of the entities retired on an EMS plant (#201).
 
-    On an EMS controller the inverter sensors and inverter-level controls are no
-    longer created — the 0x11 device is a controller, not an inverter. Built from
-    the exact description tuples the EMS setup path now skips, keyed by the
-    controller serial. Coordinator, EMS-specific, battery, AIO and managed-inverter
+    On an EMS controller the inverter-level *controls* are suppressed (the EMS
+    slots are authoritative) and a few *derived* inverter sensors are gated via
+    `skip_if_ems` (House Consumption), plus the dropped duplicate `ems_status`
+    aggregate. The rest of the inverter sensors stay — the 0x11 block carries real
+    plant data (PV/grid/battery/AC) — so they are deliberately NOT in this set.
+    Keyed by the controller serial; coordinator, battery, AIO and managed-inverter
     entities use different keys or their own serials, so they're excluded.
     """
     # Local imports: these platform modules are imported by the platform setup
@@ -438,8 +440,8 @@ def _retired_inverter_unique_ids(serial: str) -> set[str]:
     from .switch import AC_COUPLED_SWITCH_DESCRIPTIONS, SWITCH_DESCRIPTIONS
     from .time import SMART_LOAD_TIME_DESCRIPTIONS, TIME_DESCRIPTIONS
 
-    retired = (
-        *INVERTER_SENSORS,
+    # All inverter-level controls are suppressed on EMS.
+    controls = (
         *SWITCH_DESCRIPTIONS,
         *AC_COUPLED_SWITCH_DESCRIPTIONS,
         *NUMBER_DESCRIPTIONS,
@@ -449,7 +451,12 @@ def _retired_inverter_unique_ids(serial: str) -> set[str]:
         *TIME_DESCRIPTIONS,
         *SMART_LOAD_TIME_DESCRIPTIONS,
     )
-    return {f"{serial}_{description.key}" for description in retired}
+    keys = {d.key for d in controls}
+    # Derived inverter sensors gated on EMS (House Consumption).
+    keys.update(d.key for d in INVERTER_SENSORS if d.skip_if_ems)
+    # Duplicate EMS aggregate dropped in favour of the retained inverter Status sensor.
+    keys.add("ems_status")
+    return {f"{serial}_{key}" for key in keys}
 
 
 def _reconcile_ems_entities(hass: HomeAssistant, entry: ConfigEntry, serial: str) -> None:
@@ -457,9 +464,10 @@ def _reconcile_ems_entities(hass: HomeAssistant, entry: ConfigEntry, serial: str
 
     Suppressing creation only affects fresh installs: on an upgraded EMS entry HA
     keeps the existing registry rows when a platform stops adding those entities,
-    so the controller would otherwise stay cluttered with orphaned/unavailable
-    inverter sensors and controls. Remove exactly those rows (matched by the
-    controller serial + a retired key), leaving coordinator, battery, AIO,
+    so the controller would otherwise keep orphaned rows for the entities no longer
+    created on EMS (inverter controls, the EMS-gated House Consumption, the dropped
+    ems_status). Remove exactly those (matched by the controller serial + a retired
+    key), leaving the retained inverter sensors and all coordinator, battery, AIO,
     managed-inverter and EMS-specific entities untouched.
     """
     registry = er.async_get(hass)
