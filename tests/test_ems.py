@@ -507,6 +507,15 @@ async def test_no_ems_sensors_for_non_ems_plant(hass, setup_integration):
     assert _entity_id(hass, "sensor", "SA1234G123_ems_inverter_count") is None
 
 
+def test_ems_measured_load_power_hidden_by_default():
+    """#52: EMS Measured Load Power reads a constant zero on current firmware, so
+    it ships hidden (still recorded) in favour of the calculated-load aggregate."""
+    from custom_components.givenergy_local.sensor import EMS_SENSORS
+
+    desc = next(d for d in EMS_SENSORS if d.key == "ems_measured_load_power")
+    assert desc.entity_registry_visible_default is False
+
+
 def test_controller_local_load_gated_skip_if_ems():
     """Exactly the controller-local load figures are gated off on EMS — House
     Consumption and the inverter busbar Load Power. Pins the boundary so a future
