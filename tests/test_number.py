@@ -92,7 +92,7 @@ async def test_ac_limits_present_on_ac_coupled_plant(hass, ac_coupled_setup):
     state = hass.states.get(_entity_id(hass, "SA1234G123_battery_charge_limit_ac"))
     assert state is not None
     assert float(state.state) == 50.0
-    assert state.attributes["min"] == 1
+    assert state.attributes["min"] == 0
     assert state.attributes["max"] == 100
 
 
@@ -140,6 +140,34 @@ async def test_set_ac_charge_limit_sends_command(hass, mock_client, ac_coupled_s
     mock_client.one_shot_command.assert_called_once()
 
 
+@pytest.mark.parametrize("limit", ["battery_charge_limit", "battery_discharge_limit"])
+@pytest.mark.parametrize("value", [0, 100])
+async def test_dc_limit_write_accepts_full_range(
+    hass, mock_client, setup_integration, limit, value
+):
+    """The DC sliders advertise 0-100; both boundary writes must reach the modbus
+    setter without raising. givenergy-modbus <2.5.8 rejected >50, so this guards the
+    cross-repo write contract that the pin (>=2.5.8) now satisfies, for the charge
+    and discharge setters alike (#52)."""
+    entity_id = _entity_id(hass, f"SA1234G123_{limit}")
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": entity_id, "value": value}, blocking=True
+    )
+    mock_client.one_shot_command.assert_called_once()
+
+
+@pytest.mark.parametrize("limit", ["battery_charge_limit_ac", "battery_discharge_limit_ac"])
+@pytest.mark.parametrize("value", [0, 100])
+async def test_ac_limit_write_accepts_full_range(hass, mock_client, ac_coupled_setup, limit, value):
+    """The AC sliders dropped their 1-floor to 0-100; both charge and discharge
+    boundaries must reach the modbus AC setter without raising (#52, modbus #301/#302)."""
+    entity_id = _entity_id(hass, f"SA1234G123_{limit}")
+    await hass.services.async_call(
+        "number", "set_value", {"entity_id": entity_id, "value": value}, blocking=True
+    )
+    mock_client.one_shot_command.assert_called_once()
+
+
 @pytest.fixture
 async def aio_setup(hass, mock_client, mock_plant, mock_inverter, mock_config_entry):
     """Set up the integration with a single-phase All-in-One plant.
@@ -166,3 +194,22 @@ async def test_ac_limits_present_on_all_in_one_plant(hass, aio_setup):
     """AIO exposes the AC-config block, so the AC limits must be created."""
     _entity_id(hass, "SA1234G123_battery_charge_limit_ac")
     _entity_id(hass, "SA1234G123_battery_discharge_limit_ac")
+
+
+async def test_dc_limits_suppressed_on_ac_coupled_plant(hass, ac_coupled_setup):
+    """The DC pair (HR111/112) is the wrong battery-power register on AC-coupled
+    plants, so it's suppressed in favour of the AC pair (modbus #301/#302)."""
+    assert _maybe_entity_id(hass, "SA1234G123_battery_charge_limit") is None
+    assert _maybe_entity_id(hass, "SA1234G123_battery_discharge_limit") is None
+
+
+async def test_dc_limits_suppressed_on_all_in_one_plant(hass, aio_setup):
+    """AIO exposes the AC-config block, so the DC battery limits are suppressed too."""
+    assert _maybe_entity_id(hass, "SA1234G123_battery_charge_limit") is None
+    assert _maybe_entity_id(hass, "SA1234G123_battery_discharge_limit") is None
+
+
+async def test_dc_limits_present_on_hybrid_plant(hass, setup_integration):
+    """Regression guard: the DC-coupled hybrid keeps its DC battery-limit controls."""
+    _entity_id(hass, "SA1234G123_battery_charge_limit")
+    _entity_id(hass, "SA1234G123_battery_discharge_limit")

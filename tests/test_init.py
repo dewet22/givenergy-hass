@@ -920,3 +920,58 @@ async def test_reconcile_keeps_controls_on_partial_seed(hass, mock_client, setup
         registry.async_get_entity_id("number", DOMAIN, "SA1234G123_battery_charge_limit_ac")
         is not None
     )
+
+
+async def test_upgrade_removes_dc_limit_rows_on_ac_coupled(
+    hass, mock_client, mock_plant, mock_inverter, mock_config_entry
+):
+    """#52: on an AC-coupled / AIO plant the DC battery-limit controls are suppressed
+    in favour of the AC pair. On upgrade, the orphaned DC rows a prior version created
+    are removed pre-platform — suppressing creation alone would leave them behind."""
+    mock_plant.capabilities = PlantCapabilities(
+        device_type=Model.AC,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
+    mock_inverter.battery_charge_limit_ac = 50
+    mock_inverter.battery_discharge_limit_ac = 60
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    for unique_id in ("SA1234G123_battery_charge_limit", "SA1234G123_battery_discharge_limit"):
+        registry.async_get_or_create("number", DOMAIN, unique_id, config_entry=mock_config_entry)
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    def _present(key: str) -> bool:
+        return registry.async_get_entity_id("number", DOMAIN, f"SA1234G123_{key}") is not None
+
+    # The DC pair is the wrong register here, so its stale rows are removed...
+    assert not _present("battery_charge_limit")
+    assert not _present("battery_discharge_limit")
+    # ...while the AC pair remains the battery-power control.
+    assert _present("battery_charge_limit_ac")
+    assert _present("battery_discharge_limit_ac")
+
+
+async def test_dc_limit_rows_retained_on_hybrid(
+    hass, mock_client, mock_plant, mock_inverter, mock_config_entry
+):
+    """Regression guard: a DC-coupled hybrid keeps its DC battery-limit rows on
+    upgrade — the AC-coupled suppression must not touch them."""
+    # mock_plant defaults to device_type=Model.HYBRID (no AC-config block).
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    for unique_id in ("SA1234G123_battery_charge_limit", "SA1234G123_battery_discharge_limit"):
+        registry.async_get_or_create("number", DOMAIN, unique_id, config_entry=mock_config_entry)
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    def _present(key: str) -> bool:
+        return registry.async_get_entity_id("number", DOMAIN, f"SA1234G123_{key}") is not None
+
+    assert _present("battery_charge_limit")
+    assert _present("battery_discharge_limit")

@@ -527,6 +527,39 @@ def _reconcile_readability_gated_controls(
             _remove_stale_control(registry, serial, "time", time_desc.key)
 
 
+def _reconcile_ac_coupled_dc_limits(
+    hass: HomeAssistant, coordinator: GivEnergyUpdateCoordinator
+) -> None:
+    """Remove the DC battery-limit rows on AC-coupled / AIO plants (#52).
+
+    Battery power on these plants is controlled via the AC pair (HR313/314); the
+    number platform suppresses the DC pair (HR111/112) there. But on an upgraded
+    entry HA keeps the pre-existing DC rows when the platform stops adding them, so
+    the bundled dashboard would still resolve the now-orphaned DC controls from the
+    registry. Mirror the other reconcilers and remove exactly those rows pre-platform.
+    DC-coupled hybrids don't enter this branch and keep their DC controls.
+    """
+    # Local import: the platform imports from this package, so a module-scope import
+    # risks a load-order cycle. The key set is the same one the platform suppresses on.
+    from .number import _DC_BATTERY_LIMIT_KEYS
+
+    # The gate is structural (plant capability), not a register read, so — like the
+    # EMS reconciliation — it needs no partial-poll guard: a None/incomplete
+    # capabilities simply fails the positive check and removes nothing.
+    caps = coordinator.data.capabilities
+    if caps is None or not caps.has_ac_config_block or caps.is_three_phase:
+        return
+    serial = coordinator.data.inverter_serial_number
+    registry = er.async_get(hass)
+    for key in _DC_BATTERY_LIMIT_KEYS:
+        entity_id = registry.async_get_entity_id("number", DOMAIN, f"{serial}_{key}")
+        if entity_id is not None:
+            _LOGGER.info(
+                "Removing DC control %s: AC-coupled plant uses the AC pair (#52)", entity_id
+            )
+            registry.async_remove(entity_id)
+
+
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload the entry when its options change (registered as an update listener)."""
     await hass.config_entries.async_reload(entry.entry_id)
@@ -671,6 +704,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Remove control rows whose register is absent on this device/firmware (#207):
     # the platforms skip creating them, but an upgraded entry keeps the stale row.
     _reconcile_readability_gated_controls(hass, coordinator)
+
+    # On AC-coupled / AIO plants the DC battery-limit controls are suppressed in
+    # favour of the AC pair; remove the stale DC rows an upgraded entry would keep (#52).
+    _reconcile_ac_coupled_dc_limits(hass, coordinator)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
