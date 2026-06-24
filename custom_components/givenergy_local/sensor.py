@@ -63,9 +63,10 @@ class GivEnergyInverterSensorDescription(SensorEntityDescription):
     # catch it (#95).
     skip_if_aio: bool = False
     # If True, the entity is not created on an EMS plant. The 0x11 controller's
-    # direct registers are meaningful (PV/grid/battery/AC), but a few *derived*
-    # sensors (House Consumption = inverter-battery-grid) are computed for a single
-    # unit and read wrong on a controller, so gate just those (#201).
+    # direct registers are mostly meaningful (PV/grid/battery/AC), but a couple of
+    # load figures are controller-local — House Consumption's per-unit derivation
+    # and the inverter busbar load (p_load_demand) — and are superseded by the EMS
+    # calc/measured-load aggregates, so gate just those (#201).
     skip_if_ems: bool = False
     # If True, the entity is not created on three-phase inverters, where the
     # underlying field is single-phase-only (e.g. a p_pv1+p_pv2 sum) and so would
@@ -639,6 +640,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda inv: inv.p_load_demand,
+        # Controller-local on an EMS (IR42 inverter busbar load): on the capture it
+        # reads 48 W vs the EMS calc_load_power 489 W, so it misrepresents the plant
+        # load. The EMS load aggregates are authoritative there (#201).
+        skip_if_ems=True,
     ),
     GivEnergyInverterSensorDescription(
         # House consumption, sourced per model (#154). Single-phase inverters

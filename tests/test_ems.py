@@ -363,13 +363,15 @@ async def test_managed_inverter_dedup_duplicate_serial(
 # ---------------------------------------------------------------------------
 
 
-async def test_inverter_sensors_kept_on_ems_except_house_consumption(hass, ems_setup):
+async def test_inverter_sensors_kept_on_ems_except_local_load(hass, ems_setup):
     """The EMS controller's 0x11 block carries real plant data (PV/grid/battery/AC),
-    so the inverter sensors stay (#201). Only the derived House Consumption, which
-    computes a wrong per-controller figure, is gated off via skip_if_ems."""
+    so the inverter sensors stay (#201). Only the controller-local load figures —
+    House Consumption and the inverter busbar Load Power — are gated off via
+    skip_if_ems; the EMS load aggregates supersede them."""
     assert _entity_id(hass, "sensor", "SA1234G123_status") is not None
     assert _entity_id(hass, "sensor", "SA1234G123_battery_soc") is not None
     assert _entity_id(hass, "sensor", "SA1234G123_e_consumption_today") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_p_load_demand") is None
 
 
 async def test_inverter_controls_suppressed_on_ems_plant(hass, ems_setup):
@@ -444,16 +446,18 @@ async def test_no_ems_sensors_for_non_ems_plant(hass, setup_integration):
     assert _entity_id(hass, "sensor", "SA1234G123_ems_inverter_count") is None
 
 
-def test_house_consumption_gated_skip_if_ems():
-    """House Consumption Today is the one derived inverter sensor gated off on EMS;
-    the EMS gate leaves it out only when is_ems is set."""
+def test_controller_local_load_gated_skip_if_ems():
+    """Exactly the controller-local load figures are gated off on EMS — House
+    Consumption and the inverter busbar Load Power. Pins the boundary so a future
+    change can't silently widen or narrow it; the gate drops them only on EMS."""
     from custom_components.givenergy_local.sensor import (
         INVERTER_SENSORS,
         _include_inverter_sensor,
     )
 
-    desc = next(d for d in INVERTER_SENSORS if d.key == "e_consumption_today")
-    assert desc.skip_if_ems is True
+    gated = {d.key for d in INVERTER_SENSORS if d.skip_if_ems}
+    assert gated == {"e_consumption_today", "p_load_demand"}
+    desc = next(d for d in INVERTER_SENSORS if d.key == "p_load_demand")
     inv = MagicMock()
     assert _include_inverter_sensor(desc, inv, False, False, True) is False
     assert _include_inverter_sensor(desc, inv, False, False, False) is True
