@@ -478,6 +478,48 @@ def _reconcile_ems_entities(hass: HomeAssistant, entry: ConfigEntry, serial: str
             registry.async_remove(ent.entity_id)
 
 
+def _remove_stale_control(registry: er.EntityRegistry, serial: str, domain: str, key: str) -> None:
+    """Remove a readability-gated control's stale registry row, if present (#207)."""
+    entity_id = registry.async_get_entity_id(domain, DOMAIN, f"{serial}_{key}")
+    if entity_id is not None:
+        _LOGGER.info(
+            "Removing control %s: register absent on this device/firmware (#207)", entity_id
+        )
+        registry.async_remove(entity_id)
+
+
+def _reconcile_readability_gated_controls(
+    hass: HomeAssistant, coordinator: GivEnergyUpdateCoordinator
+) -> None:
+    """Remove control rows whose register is absent on this device/firmware (#207).
+
+    The control platforms skip creating a skip_if_none control when its register
+    reads None, but on an upgraded entry HA keeps the pre-existing row — an
+    orphaned, unavailable control the readability gate is meant to remove. Mirror
+    the EMS reconciliation: remove exactly those rows pre-platform, reusing each
+    platform's own gate so the readability logic isn't duplicated here.
+    """
+    # Local imports: the platforms import from this package, so importing them at
+    # module scope risks a load-order cycle. The gate helpers are the single source
+    # of truth for "is this control's register present".
+    from .number import AC_COUPLED_NUMBER_DESCRIPTIONS, _include_number
+    from .select import SELECT_DESCRIPTIONS, _include_select
+    from .time import TIME_DESCRIPTIONS, _include_time
+
+    inverter = coordinator.data.inverter
+    serial = coordinator.data.inverter_serial_number
+    registry = er.async_get(hass)
+    for number_desc in AC_COUPLED_NUMBER_DESCRIPTIONS:
+        if not _include_number(number_desc, inverter):
+            _remove_stale_control(registry, serial, "number", number_desc.key)
+    for select_desc in SELECT_DESCRIPTIONS:
+        if not _include_select(select_desc, inverter):
+            _remove_stale_control(registry, serial, "select", select_desc.key)
+    for time_desc in TIME_DESCRIPTIONS:
+        if not _include_time(time_desc, inverter):
+            _remove_stale_control(registry, serial, "time", time_desc.key)
+
+
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload the entry when its options change (registered as an update listener)."""
     await hass.config_entries.async_reload(entry.entry_id)
@@ -618,6 +660,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # keeping them as orphaned/unavailable rows. Fresh installs match nothing.
     if coordinator.data.ems is not None:
         _reconcile_ems_entities(hass, entry, coordinator.data.inverter_serial_number)
+
+    # Remove control rows whose register is absent on this device/firmware (#207):
+    # the platforms skip creating them, but an upgraded entry keeps the stale row.
+    _reconcile_readability_gated_controls(hass, coordinator)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
