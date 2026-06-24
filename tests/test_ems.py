@@ -317,6 +317,24 @@ async def test_managed_inverter_values(hass, managed_ems_setup):
     assert hass.states.get(_entity_id(hass, "sensor", "SA2222A002_managed_power")).state == "-200"
 
 
+async def test_managed_inverter_status_string_does_not_crash(
+    hass, mock_client, mock_plant, mock_inverter, mock_ems, mock_config_entry
+):
+    """#52: the EMS rollup reports each managed inverter's status as a raw string,
+    not a Status enum. The status sensor must render it rather than blow up on
+    `.name` (which raised AttributeError on every poll on real EMS hardware)."""
+    mock_ems.managed_inverters = [_managed("SA1111A001", status="2")]
+    mock_plant.ems = mock_ems
+    mock_inverter.model = Model.EMS
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1111A001_managed_status"))
+    assert state is not None
+    assert state.state == "2"
+
+
 async def test_managed_inverter_resolves_by_serial(hass, managed_ems_setup):
     """A managed inverter that drops out of the rollup goes unavailable while the
     survivor keeps reporting — entities track serial, not slot position."""
