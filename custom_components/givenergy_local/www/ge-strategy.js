@@ -173,7 +173,13 @@
         }) || null;
       if (!target) unmatchedSerial = opts.serial;
     } else {
-      target = inverters[0] || null;
+      // On an EMS plant prefer the controller (it carries the plant-level
+      // aggregates and the real PV/grid/battery telemetry); a plain multi-inverter
+      // plant still takes the first inverter by serial.
+      var emsTarget = inverters.find(function (p) {
+        return p.isEms;
+      });
+      target = emsTarget || inverters[0] || null;
     }
 
     // batteries belonging to the target inverter (by via_device). Only fall
@@ -243,6 +249,11 @@
       inv: function (key) {
         return invKeys.get(key) || null;
       },
+      // Plant load: prefer the EMS aggregate (the controller's own p_load_demand is
+      // gated off on EMS), falling back to the inverter key on a plain plant.
+      load: function () {
+        return invKeys.get("ems_calc_load_power") || invKeys.get("p_load_demand") || null;
+      },
       bat: function (rec, key) {
         return rec.keys.get(key) || null;
       },
@@ -257,6 +268,12 @@
     var a = makeAccessors(plant);
     var views = [];
     if (plant.target && plant.target.isEms) {
+      // The EMS controller carries real plant telemetry (#206), so it gets the
+      // Overview + Energy views. Batteries hang off the managed inverters and the
+      // inverter-level controls are suppressed on EMS, so those views are replaced
+      // by the EMS controls (slots) + diagnostics.
+      views.push(overviewView(plant, a, opts));
+      views.push(energyView(plant, a));
       views.push(emsControlsView(plant, a));
       views.push(emsDiagnosticsView(plant, a));
       return views;
@@ -501,10 +518,27 @@
         if (a.inv("battery_soc")) ents.battery.state_of_charge = a.inv("battery_soc");
       }
       if (a.inv("grid_power")) ents.grid = { entity: a.inv("grid_power") };
-      if (a.inv("p_load_demand")) ents.home = { entity: a.inv("p_load_demand") };
+      if (a.load()) ents.home = { entity: a.load() };
       cards.push({ type: "custom:power-flow-card-plus", entities: ents });
     } else {
       cards.push(placeholder("power-flow-card-plus"));
+    }
+
+    if (plant.target && plant.target.isEms) {
+      // The controller's distinguishing plant-level aggregates (the inverter-keyed
+      // cards above show the real PV/grid/battery; these complement them). Measured
+      // load is omitted - it reads zero on current firmware.
+      cards.push({
+        type: "entities",
+        title: "EMS Plant",
+        entities: cleanRows([
+          row(a.inv("ems_calc_load_power"), "Calculated Load"),
+          row(a.inv("ems_grid_meter_power"), "Grid Meter Power"),
+          row(a.inv("ems_total_battery_power"), "Total Battery Power"),
+          row(a.inv("ems_remaining_battery_energy"), "Remaining Battery Energy"),
+          row(a.inv("ems_inverter_count"), "Managed Inverters"),
+        ]),
+      });
     }
 
     cards.push({
@@ -538,7 +572,7 @@
       { entity: a.inv("p_pv"), name: "PV", color: "#FFB300" },
       { entity: a.inv("p_battery"), name: "Battery", color: "#42A5F5" },
       { entity: a.inv("grid_power"), name: "Grid", color: "#66BB6A" },
-      { entity: a.inv("p_load_demand"), name: "Load", color: "#EF5350" },
+      { entity: a.load(), name: "Load", color: "#EF5350" },
     ].filter(function (s) {
       return s.entity;
     });

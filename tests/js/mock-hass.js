@@ -75,6 +75,35 @@ const AC_COUPLED_KEYS = [
   "export_priority", "enable_eps", "battery_charge_limit_ac", "battery_discharge_limit_ac",
 ];
 
+// On an EMS plant the 0x11 controller keeps its inverter SENSORS (PV/grid/battery/
+// AC/temps), but the inverter-level CONTROLS are suppressed and two controller-local
+// sensors are gated off (#201/#206): House Consumption (e_consumption_today) and Load
+// Power (p_load_demand) — the EMS load aggregates supersede them.
+const EMS_SUPPRESSED_KEYS = [
+  "p_load_demand", "e_consumption_today", "battery_pause_mode",
+  "battery_power_mode", "enable_rtc", "active_power_rate", "battery_calibration_stage",
+  "enable_charge", "charge_target_soc", "battery_soc_reserve", "battery_charge_limit",
+  "charge_slot_1_start", "charge_slot_1_end", "charge_slot_2_start", "charge_slot_2_end",
+  "enable_discharge", "battery_discharge_limit", "battery_discharge_min_power_reserve",
+  "discharge_slot_1_start", "discharge_slot_1_end", "discharge_slot_2_start",
+  "discharge_slot_2_end", "battery_maintenance_mode",
+];
+
+// Plant-level aggregates the EMS controller carries (sensor.py EMS_SENSORS).
+const EMS_AGGREGATE_KEYS = [
+  "ems_inverter_count", "ems_calc_load_power", "ems_measured_load_power",
+  "ems_grid_meter_power", "ems_total_battery_power", "ems_remaining_battery_energy",
+];
+
+// The full key set on an EMS controller device post-#206: the surviving inverter
+// sensors + the EMS slot controls/health (emsKeys) + the plant aggregates.
+function emsControllerKeys() {
+  const telemetry = INVERTER_KEYS.filter(function (k) {
+    return EMS_SUPPRESSED_KEYS.indexOf(k) === -1;
+  });
+  return telemetry.concat(emsKeys()).concat(EMS_AGGREGATE_KEYS);
+}
+
 // entity_id marker: includes the (optional) area prefix so tests can assert the
 // returned config used the registry's *current* id, not a reconstructed one.
 function entityId(prefix, serial, key) {
@@ -117,7 +146,10 @@ function makeHass(opts) {
       name: "GivEnergy EMS " + invSerial,
       via_device_id: null,
     });
-    entities.push.apply(entities, entitiesFor("dev_ems", invSerial, emsKeys(), prefix, opts.omitKeys));
+    entities.push.apply(
+      entities,
+      entitiesFor("dev_ems", invSerial, emsControllerKeys(), prefix, opts.omitKeys)
+    );
   } else {
     devices.push({
       id: "dev_inv",

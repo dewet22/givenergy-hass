@@ -189,14 +189,50 @@ describe("feature detection", () => {
 });
 
 describe("EMS plant", () => {
-  it("emits the EMS view set and resolves the plant switch", async () => {
+  it("emits telemetry views plus the EMS controls/diagnostics set", async () => {
     const hass = makeHass({ ems: true });
     const dash = await GE.generateDashboard({}, hass);
-    expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
+    expect(titles(dash)).toEqual(["Overview", "Energy", "EMS Controls", "Diagnostics"]);
 
     const plant = card(view(dash, "EMS Controls"), byTitle("Plant"));
     const refs = collectRefs(plant);
     expect(refs.some((r) => r.endsWith("ems_plant_enable"))).toBe(true);
+  });
+
+  it("surfaces the controller's PV/grid/battery and the EMS load on the Overview", async () => {
+    await withCards(["power-flow-card-plus"], async () => {
+      const hass = makeHass({ ems: true });
+      const dash = await GE.generateDashboard({}, hass);
+      const overview = view(dash, "Overview");
+
+      const flow = card(overview, (c) => c.type === "custom:power-flow-card-plus");
+      const refs = collectRefs(flow);
+      expect(refs.some((r) => r.endsWith("_p_pv"))).toBe(true);
+      expect(refs.some((r) => r.endsWith("_grid_power"))).toBe(true);
+      expect(refs.some((r) => r.endsWith("_p_battery"))).toBe(true);
+      // Load uses the EMS aggregate (p_load_demand is gated off on the controller).
+      expect(refs.some((r) => r.endsWith("_ems_calc_load_power"))).toBe(true);
+
+      const emsPlant = card(overview, byTitle("EMS Plant"));
+      expect(emsPlant).toBeTruthy();
+      expect(collectRefs(emsPlant).some((r) => r.endsWith("_ems_grid_meter_power"))).toBe(true);
+    });
+  });
+});
+
+describe("EMS target selection", () => {
+  it("prefers the EMS controller over a lower-sorting plain inverter", async () => {
+    const hass = makeHass({ ems: true, inverterSerial: "ZZZ999", extraInverterSerial: "AAA111" });
+    const plant = await GE.buildPlant(hass, {});
+    expect(plant.target.isEms).toBe(true);
+    expect(plant.target.serial).toBe("ZZZ999");
+  });
+
+  it("still honours an explicit serial pin to a plain inverter on an EMS plant", async () => {
+    const hass = makeHass({ ems: true, inverterSerial: "ZZZ999", extraInverterSerial: "AAA111" });
+    const plant = await GE.buildPlant(hass, { serial: "AAA111" });
+    expect(plant.target.serial).toBe("AAA111");
+    expect(plant.target.isEms).toBe(false);
   });
 });
 
@@ -332,10 +368,11 @@ describe("flow mode", () => {
     expect(view(dash, "Flow")).toBeUndefined();
   });
 
-  it("does not emit a Flow panel for an EMS plant", async () => {
+  it("falls back to the classic EMS view set (no Flow panel) for an EMS plant", async () => {
     const hass = makeHass({ ems: true });
     const dash = await GE.generateDashboard({ mode: "flow" }, hass);
-    expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
+    expect(titles(dash)).toEqual(["Overview", "Energy", "EMS Controls", "Diagnostics"]);
+    expect(view(dash, "Flow")).toBeUndefined();
   });
 });
 
@@ -388,10 +425,11 @@ describe("glance mode", () => {
     expect(hasNullEntity(c)).toBe(false);
   });
 
-  it("does not emit a Glance panel for an EMS plant", async () => {
+  it("falls back to the classic EMS view set (no Glance panel) for an EMS plant", async () => {
     const hass = makeHass({ ems: true });
     const dash = await GE.generateDashboard({ mode: "glance" }, hass);
-    expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
+    expect(titles(dash)).toEqual(["Overview", "Energy", "EMS Controls", "Diagnostics"]);
+    expect(view(dash, "Glance")).toBeUndefined();
   });
 });
 
@@ -415,10 +453,10 @@ describe("all mode", () => {
     expect(view(dash, "Analyst").cards[0].type).toBe("custom:givenergy-analyst");
   });
 
-  it("falls back to classic for an EMS plant", async () => {
+  it("falls back to the classic EMS view set for an EMS plant", async () => {
     const hass = makeHass({ ems: true });
     const dash = await GE.generateDashboard({ mode: "all" }, hass);
-    expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
+    expect(titles(dash)).toEqual(["Overview", "Energy", "EMS Controls", "Diagnostics"]);
   });
 });
 
@@ -486,9 +524,10 @@ describe("analyst mode", () => {
     expect(hasNullEntity(c)).toBe(false);
   });
 
-  it("does not emit an Analyst view for an EMS plant", async () => {
+  it("falls back to the classic EMS view set (no Analyst view) for an EMS plant", async () => {
     const hass = makeHass({ ems: true });
     const dash = await GE.generateDashboard({ mode: "analyst" }, hass);
-    expect(titles(dash)).toEqual(["EMS Controls", "Diagnostics"]);
+    expect(titles(dash)).toEqual(["Overview", "Energy", "EMS Controls", "Diagnostics"]);
+    expect(view(dash, "Analyst")).toBeUndefined();
   });
 });
