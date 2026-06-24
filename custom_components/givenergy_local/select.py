@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -18,11 +19,17 @@ from .const import CONF_BATTERY_DATA_ONLY, DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 from .sensor import _device_kind
 
+_LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, kw_only=True)
 class GivEnergySelectEntityDescription(SelectEntityDescription):
     current_option_fn: Callable[[InverterModel], str | None] = field(default=lambda _: None)
     select_option_cmd: Callable[[str], list] = field(default=lambda _: [])
+    # If True, the control isn't created when current_option_fn reads None at setup —
+    # the register isn't present on this device/firmware (e.g. battery pause mode,
+    # firmware-gated). The control-side of the sensor skip_if_none (#207).
+    skip_if_none: bool = False
 
 
 def _battery_power_mode_cmd(option: str) -> list:
@@ -71,6 +78,7 @@ SELECT_DESCRIPTIONS: tuple[GivEnergySelectEntityDescription, ...] = (
         options=list(_PAUSE_MODE_BY_LABEL.keys()),
         current_option_fn=_battery_pause_current_option,
         select_option_cmd=_battery_pause_mode_cmd,
+        skip_if_none=True,  # battery pause is firmware-gated (#207)
         entity_category=EntityCategory.CONFIG,
     ),
 )
@@ -110,6 +118,22 @@ AC_COUPLED_SELECT_DESCRIPTIONS: tuple[GivEnergySelectEntityDescription, ...] = (
 )
 
 
+def _include_select(description: GivEnergySelectEntityDescription, inverter: InverterModel) -> bool:
+    """Whether to create a select control at setup (#207).
+
+    A skip_if_none control is dropped when its register reads None — absent on this
+    device/firmware (e.g. battery pause mode on firmware without it). Guarded so a
+    raising accessor skips just that control, not the whole platform.
+    """
+    if not description.skip_if_none:
+        return True
+    try:
+        return description.current_option_fn(inverter) is not None
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("Skipping select %s: current_option_fn raised at setup", description.key)
+        return False
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -123,8 +147,11 @@ async def async_setup_entry(
     if coordinator.data.ems is None:
         # Inverter-level selects (battery power/pause mode) are redundant on an EMS
         # plant (#201); there are no EMS-specific selects, so the controller gets none.
+        inverter = coordinator.data.inverter
         entities.extend(
-            GivEnergySelectEntity(coordinator, description) for description in SELECT_DESCRIPTIONS
+            GivEnergySelectEntity(coordinator, description)
+            for description in SELECT_DESCRIPTIONS
+            if _include_select(description, inverter)
         )
         caps = coordinator.data.capabilities
         if caps is not None and caps.has_ac_config_block and not caps.is_three_phase:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import time as dt_time
@@ -19,6 +20,8 @@ from .const import CONF_BATTERY_DATA_ONLY, DOMAIN
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 from .sensor import _device_kind
 
+_LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, kw_only=True)
 class GivEnergyTimeEntityDescription(TimeEntityDescription):
@@ -28,6 +31,10 @@ class GivEnergyTimeEntityDescription(TimeEntityDescription):
     # current inverter — charge/discharge setters dispatch on inverter.slot_map
     # to handle extended-slot models; the pause setter ignores the inverter.
     setter_fn: Callable[[dt_time, InverterModel], list] = field(default=lambda _, __: [])
+    # If True, the control isn't created when slot_fn reads None at setup — the
+    # register isn't present on this device/firmware (e.g. the battery pause slot,
+    # firmware-gated). The control-side of the sensor skip_if_none (#207).
+    skip_if_none: bool = False
 
 
 TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
@@ -101,6 +108,7 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         slot_fn=lambda inv: inv.battery_pause_slot_1,
         is_start=True,
         setter_fn=lambda value, _inv: commands.set_pause_slot_start(value),
+        skip_if_none=True,  # battery pause slot is firmware-gated (#207)
         entity_category=EntityCategory.CONFIG,
     ),
     GivEnergyTimeEntityDescription(
@@ -109,6 +117,7 @@ TIME_DESCRIPTIONS: tuple[GivEnergyTimeEntityDescription, ...] = (
         slot_fn=lambda inv: inv.battery_pause_slot_1,
         is_start=False,
         setter_fn=lambda value, _inv: commands.set_pause_slot_end(value),
+        skip_if_none=True,  # battery pause slot is firmware-gated (#207)
         entity_category=EntityCategory.CONFIG,
     ),
 )
@@ -201,6 +210,22 @@ def _ems_time_descriptions() -> tuple[GivEnergyEmsTimeEntityDescription, ...]:
 EMS_TIME_DESCRIPTIONS: tuple[GivEnergyEmsTimeEntityDescription, ...] = _ems_time_descriptions()
 
 
+def _include_time(description: GivEnergyTimeEntityDescription, inverter: InverterModel) -> bool:
+    """Whether to create a time control at setup (#207).
+
+    A skip_if_none control is dropped when its slot reads None — absent on this
+    device/firmware (e.g. the battery pause slot on firmware without it). Guarded so
+    a raising accessor skips just that control, not the whole platform.
+    """
+    if not description.skip_if_none:
+        return True
+    try:
+        return description.slot_fn(inverter) is not None
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("Skipping time %s: slot_fn raised at setup", description.key)
+        return False
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -222,8 +247,11 @@ async def async_setup_entry(
             for description in EMS_TIME_DESCRIPTIONS
         )
     else:
+        inverter = coordinator.data.inverter
         entities.extend(
-            GivEnergyTimeEntity(coordinator, description) for description in TIME_DESCRIPTIONS
+            GivEnergyTimeEntity(coordinator, description)
+            for description in TIME_DESCRIPTIONS
+            if _include_time(description, inverter)
         )
         entities.extend(
             GivEnergyTimeEntity(coordinator, description)

@@ -12,6 +12,10 @@ def _entity_id(hass, unique_id: str) -> str:
     return entity_id
 
 
+def _maybe_entity_id(hass, unique_id: str) -> str | None:
+    return er.async_get(hass).async_get_entity_id("time", DOMAIN, unique_id)
+
+
 async def test_charge_slot_1_start_initial_value(hass, setup_integration):
     state = hass.states.get(_entity_id(hass, "SA1234G123_charge_slot_1_start"))
     assert state.state == "00:30:00"
@@ -74,6 +78,19 @@ async def test_all_time_slot_entities_created(hass, setup_integration):
         entity_id = _entity_id(hass, f"SA1234G123_{key}")
         state = hass.states.get(entity_id)
         assert state is not None, f"Entity SA1234G123_{key} has no state"
+
+
+async def test_battery_pause_slot_absent_when_register_unreadable(
+    hass, mock_client, mock_plant, mock_inverter, mock_config_entry
+):
+    """#207: firmware without the battery pause slot (it reads None) gets no
+    pause-slot controls."""
+    mock_inverter.battery_pause_slot_1 = None
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert _maybe_entity_id(hass, "SA1234G123_battery_pause_slot_start") is None
+    assert _maybe_entity_id(hass, "SA1234G123_battery_pause_slot_end") is None
 
 
 async def test_set_battery_pause_slot_start_sends_command(hass, mock_client, setup_integration):
