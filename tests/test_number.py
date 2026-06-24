@@ -140,23 +140,28 @@ async def test_set_ac_charge_limit_sends_command(hass, mock_client, ac_coupled_s
     mock_client.one_shot_command.assert_called_once()
 
 
+@pytest.mark.parametrize("limit", ["battery_charge_limit", "battery_discharge_limit"])
 @pytest.mark.parametrize("value", [0, 100])
-async def test_dc_limit_write_accepts_full_range(hass, mock_client, setup_integration, value):
-    """The slider advertises 0-100; the boundary writes must reach the modbus setter
-    without raising. givenergy-modbus <2.5.8 rejected >50, so this guards the
-    cross-repo write contract that the pin (>=2.5.8) now satisfies (#52)."""
-    entity_id = _entity_id(hass, "SA1234G123_battery_charge_limit")
+async def test_dc_limit_write_accepts_full_range(
+    hass, mock_client, setup_integration, limit, value
+):
+    """The DC sliders advertise 0-100; both boundary writes must reach the modbus
+    setter without raising. givenergy-modbus <2.5.8 rejected >50, so this guards the
+    cross-repo write contract that the pin (>=2.5.8) now satisfies, for the charge
+    and discharge setters alike (#52)."""
+    entity_id = _entity_id(hass, f"SA1234G123_{limit}")
     await hass.services.async_call(
         "number", "set_value", {"entity_id": entity_id, "value": value}, blocking=True
     )
     mock_client.one_shot_command.assert_called_once()
 
 
+@pytest.mark.parametrize("limit", ["battery_charge_limit_ac", "battery_discharge_limit_ac"])
 @pytest.mark.parametrize("value", [0, 100])
-async def test_ac_limit_write_accepts_full_range(hass, mock_client, ac_coupled_setup, value):
-    """The AC slider dropped its 1-floor to 0-100; both boundaries must reach the
-    modbus AC setter without raising (#52, modbus #301/#302)."""
-    entity_id = _entity_id(hass, "SA1234G123_battery_charge_limit_ac")
+async def test_ac_limit_write_accepts_full_range(hass, mock_client, ac_coupled_setup, limit, value):
+    """The AC sliders dropped their 1-floor to 0-100; both charge and discharge
+    boundaries must reach the modbus AC setter without raising (#52, modbus #301/#302)."""
+    entity_id = _entity_id(hass, f"SA1234G123_{limit}")
     await hass.services.async_call(
         "number", "set_value", {"entity_id": entity_id, "value": value}, blocking=True
     )
