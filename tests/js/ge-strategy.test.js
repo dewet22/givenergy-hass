@@ -175,6 +175,18 @@ describe("feature detection", () => {
     });
   });
 
+  it("inverts the grid sign for power-flow-card-plus (grid_power is +ve=export) (#212)", async () => {
+    await withCards(["power-flow-card-plus"], async () => {
+      const hass = makeHass({ batterySerials: ["BAT1"] });
+      const dash = await GE.generateDashboard({}, hass);
+      const overview = view(dash, "Overview");
+      const flow = card(overview, (c) => c.type === "custom:power-flow-card-plus");
+      // The card defaults to +ve=import; grid_power is +ve=export, so without the
+      // invert the grid bubble shows import as export and throws off the home flow.
+      expect(flow.entities.grid.invert_state).toBe(true);
+    });
+  });
+
   it("shows AC-coupled and Smart Load cards only when those entities exist", async () => {
     const plain = await GE.generateDashboard({}, makeHass({ smartLoad: false }));
     const controls = view(plain, "Controls");
