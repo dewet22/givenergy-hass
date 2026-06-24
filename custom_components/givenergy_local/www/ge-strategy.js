@@ -517,7 +517,9 @@
         ents.battery = { entity: a.inv("p_battery") };
         if (a.inv("battery_soc")) ents.battery.state_of_charge = a.inv("battery_soc");
       }
-      if (a.inv("grid_power")) ents.grid = { entity: a.inv("grid_power") };
+      // grid_power is signed +ve=export (GE convention); power-flow-card-plus
+      // expects +ve=import, so invert or the grid bubble shows import as export (#212).
+      if (a.inv("grid_power")) ents.grid = { entity: a.inv("grid_power"), invert_state: true };
       if (a.load()) ents.home = { entity: a.load() };
       cards.push({ type: "custom:power-flow-card-plus", entities: ents });
     } else {
