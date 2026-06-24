@@ -2221,7 +2221,9 @@ class GivEnergyManagedInverterSensor(CoordinatorEntity[GivEnergyUpdateCoordinato
     manages appear only as blinded rollup summaries (status / power / SoC /
     heatsink temp — no per-string detail). Each managed inverter becomes its own
     HA device, parented to the controller via `via_device` and identified by its
-    own serial. The rollup lives in the EMS block on 0x11 (there's no per-inverter
+    own serial namespaced with a `_managed` marker — so the rollup can't collide
+    with a directly-connected inverter entry of the same serial (#203). The rollup
+    lives in the EMS block on 0x11 (there's no per-inverter
     register bank), so there's no stale gate: availability is simply whether the
     serial is still present in the latest poll.
     """
@@ -2241,9 +2243,15 @@ class GivEnergyManagedInverterSensor(CoordinatorEntity[GivEnergyUpdateCoordinato
         # is rebuilt each refresh and a dropped slot shifts the rest, so resolving
         # by serial keeps each entity tied to its own inverter.
         self._serial = serial
-        self._attr_unique_id = f"{serial}_{description.key}"
+        # Namespace the device + entity identity with a `_managed` marker so a rollup
+        # can't collide with a directly-connected inverter entry of the same serial
+        # (#203): both paths otherwise key off `(DOMAIN, serial)` / `{serial}_{key}`.
+        # Serials never contain "_managed", so this is collision-proof; the real
+        # serial still shows via the device name and serial_number.
+        managed_id = f"{serial}_managed"
+        self._attr_unique_id = f"{managed_id}_{description.key}"
         self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, serial)},
+            identifiers={(DOMAIN, managed_id)},
             name=f"GivEnergy Managed Inverter {serial}",
             manufacturer="GivEnergy",
             model="Managed Inverter (EMS)",
