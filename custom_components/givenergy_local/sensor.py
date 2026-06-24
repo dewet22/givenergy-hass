@@ -1391,9 +1391,10 @@ EMS_SENSORS: tuple[GivEnergyEmsSensorDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=_ems_attr("measured_load_power"),
-        # Reads a constant zero on current EMS firmware; the calculated load
-        # aggregate supersedes it. Hidden by default but still recorded, so it
-        # surfaces automatically if a future firmware starts populating it (#52).
+        # Reads a constant zero on current EMS firmware, where the calculated-load
+        # aggregate carries the real figure. Hidden by default on new installs
+        # (still recorded, like grid_power above) to declutter; existing installs
+        # keep it until hidden manually — the flag only applies at registration (#52).
         entity_registry_visible_default=False,
     ),
     GivEnergyEmsSensorDescription(
