@@ -220,10 +220,17 @@ def _include_time(description: GivEnergyTimeEntityDescription, inverter: Inverte
     if not description.skip_if_none:
         return True
     try:
-        return description.slot_fn(inverter) is not None
+        value = description.slot_fn(inverter)
     except Exception:  # noqa: BLE001
         _LOGGER.warning("Skipping time %s: slot_fn raised at setup", description.key)
         return False
+    if value is None:
+        # Expected: the slot register isn't present on this device/firmware. DEBUG,
+        # not WARNING — this is the gate working as designed and recurs every restart,
+        # unlike the duplicate/garbled anomalies that warrant a warning.
+        _LOGGER.debug("Skipping time %s: slot_fn reads None at setup", description.key)
+        return False
+    return True
 
 
 async def async_setup_entry(

@@ -216,10 +216,17 @@ def _include_number(description: GivEnergyNumberEntityDescription, inverter: Inv
     if not description.skip_if_none:
         return True
     try:
-        return description.value_fn(inverter) is not None
+        value = description.value_fn(inverter)
     except Exception:  # noqa: BLE001
         _LOGGER.warning("Skipping number %s: value_fn raised at setup", description.key)
         return False
+    if value is None:
+        # Expected: the register isn't present on this device/firmware. DEBUG, not
+        # WARNING — this is the gate working as designed and recurs every restart,
+        # unlike the duplicate/garbled anomalies that warrant a warning.
+        _LOGGER.debug("Skipping number %s: register reads None at setup", description.key)
+        return False
+    return True
 
 
 async def async_setup_entry(

@@ -128,10 +128,17 @@ def _include_select(description: GivEnergySelectEntityDescription, inverter: Inv
     if not description.skip_if_none:
         return True
     try:
-        return description.current_option_fn(inverter) is not None
+        value = description.current_option_fn(inverter)
     except Exception:  # noqa: BLE001
         _LOGGER.warning("Skipping select %s: current_option_fn raised at setup", description.key)
         return False
+    if value is None:
+        # Expected: the register isn't present on this device/firmware. DEBUG, not
+        # WARNING — this is the gate working as designed and recurs every restart,
+        # unlike the duplicate/garbled anomalies that warrant a warning.
+        _LOGGER.debug("Skipping select %s: register reads None at setup", description.key)
+        return False
+    return True
 
 
 async def async_setup_entry(
