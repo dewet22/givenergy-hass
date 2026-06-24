@@ -80,17 +80,32 @@ async def test_all_time_slot_entities_created(hass, setup_integration):
         assert state is not None, f"Entity SA1234G123_{key} has no state"
 
 
-async def test_battery_pause_slot_absent_when_register_unreadable(
+async def test_battery_pause_slot_absent_when_pause_unsupported(
     hass, mock_client, mock_plant, mock_inverter, mock_config_entry
 ):
-    """#207: firmware without the battery pause slot (it reads None) gets no
-    pause-slot controls."""
-    mock_inverter.battery_pause_slot_1 = None
+    """#207/#208: firmware without battery pause (the pause-mode register reads None)
+    gets no pause-slot controls. They're gated on the mode register's presence, not
+    the decoded slot."""
+    mock_inverter.battery_pause_mode = None
     mock_config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
     assert _maybe_entity_id(hass, "SA1234G123_battery_pause_slot_start") is None
     assert _maybe_entity_id(hass, "SA1234G123_battery_pause_slot_end") is None
+
+
+async def test_battery_pause_slot_kept_when_slot_unset(
+    hass, mock_client, mock_plant, mock_inverter, mock_config_entry
+):
+    """#208 review: a valid-but-unset slot decodes to None (raw-60 sentinel) but the
+    pause feature is present — the controls must stay so the user can set them."""
+    mock_inverter.battery_pause_slot_1 = None  # unset slot decodes to None
+    # battery_pause_mode keeps its default (present) — the feature exists.
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert _maybe_entity_id(hass, "SA1234G123_battery_pause_slot_start") is not None
+    assert _maybe_entity_id(hass, "SA1234G123_battery_pause_slot_end") is not None
 
 
 async def test_set_battery_pause_slot_start_sends_command(hass, mock_client, setup_integration):
