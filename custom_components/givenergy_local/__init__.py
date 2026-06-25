@@ -426,10 +426,12 @@ def _retired_inverter_unique_ids(serial: str) -> set[str]:
     """Unique IDs of the entities retired on an EMS plant (#201).
 
     On an EMS controller the inverter-level *controls* are suppressed (the EMS
-    slots are authoritative) and a few *derived* inverter sensors are gated via
-    `skip_if_ems` (House Consumption), plus the dropped duplicate `ems_status`
-    aggregate. The rest of the inverter sensors stay — the 0x11 block carries real
-    plant data (PV/grid/battery/AC) — so they are deliberately NOT in this set.
+    slots are authoritative) and a few inverter sensors are gated via
+    `skip_if_ems` (the controller-local load figures plus Battery Charge/Discharge
+    Today, which the 0x11 controller doesn't populate), plus the dropped duplicate
+    `ems_status` aggregate. The rest of the inverter sensors stay — the 0x11 block
+    carries real plant data (PV/grid/battery/AC) — so they are deliberately NOT in
+    this set.
     Keyed by the controller serial; coordinator, battery, AIO and managed-inverter
     entities use different keys or their own serials, so they're excluded.
     """
@@ -453,7 +455,7 @@ def _retired_inverter_unique_ids(serial: str) -> set[str]:
         *SMART_LOAD_TIME_DESCRIPTIONS,
     )
     keys = {d.key for d in controls}
-    # Derived inverter sensors gated on EMS (House Consumption).
+    # Inverter sensors gated on EMS (controller-local load + Battery Charge/Discharge Today).
     keys.update(d.key for d in INVERTER_SENSORS if d.skip_if_ems)
     # Duplicate EMS aggregate dropped in favour of the retained inverter Status sensor.
     keys.add("ems_status")
@@ -466,7 +468,7 @@ def _reconcile_ems_entities(hass: HomeAssistant, entry: ConfigEntry, serial: str
     Suppressing creation only affects fresh installs: on an upgraded EMS entry HA
     keeps the existing registry rows when a platform stops adding those entities,
     so the controller would otherwise keep orphaned rows for the entities no longer
-    created on EMS (inverter controls, the EMS-gated House Consumption, the dropped
+    created on EMS (inverter controls, the EMS-gated inverter sensors, the dropped
     ems_status). Remove exactly those (matched by the controller serial + a retired
     key), leaving the retained inverter sensors and all coordinator, battery, AIO,
     managed-inverter and EMS-specific entities untouched.
