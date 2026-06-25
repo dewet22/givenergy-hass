@@ -1489,3 +1489,41 @@ async def test_loss_retry_surfacing_add_falls_through(hass, mock_plant):
     on_missing.assert_not_awaited()
     on_healed.assert_not_awaited()
     assert coordinator._prior_capabilities is add_actual
+
+
+async def test_default_passes_only_host_port_to_client(hass):
+    """Backward-compat: with no experimental flags, Client is built with host/port only."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = False
+        client.connect.side_effect = OSError("connection refused")  # stop after construction
+        client.close = AsyncMock()
+        mock_cls.return_value = client
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    assert mock_cls.call_args.kwargs == {"host": "192.168.1.1", "port": 8899}
+
+
+async def test_experimental_kwargs_forwarded_to_client(hass):
+    """Resolved experimental kwargs are splatted into the Client(...) construction."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, experimental_client_kwargs={"demo_kwarg": 5.0}
+    )
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = False
+        client.connect.side_effect = OSError("connection refused")
+        client.close = AsyncMock()
+        mock_cls.return_value = client
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    assert mock_cls.call_args.kwargs == {
+        "host": "192.168.1.1",
+        "port": 8899,
+        "demo_kwarg": 5.0,
+    }

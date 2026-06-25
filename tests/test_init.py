@@ -983,3 +983,81 @@ async def test_dc_limit_rows_retained_on_hybrid(
 
     assert _present("battery_charge_limit")
     assert _present("battery_discharge_limit")
+
+
+# --- Experimental-features registry + resolver (client feature-flagging) ------
+
+
+def test_all_experimental_features_default_off():
+    """Off-by-default invariant: an all-off entry must pass no client kwargs."""
+    from custom_components.givenergy_local.const import EXPERIMENTAL_FEATURES
+
+    assert all(f.default is False for f in EXPERIMENTAL_FEATURES)
+
+
+def test_experimental_feature_conf_keys_unique():
+    from custom_components.givenergy_local.const import EXPERIMENTAL_FEATURES
+
+    keys = [f.conf_key for f in EXPERIMENTAL_FEATURES]
+    assert len(keys) == len(set(keys))
+
+
+def test_resolve_empty_options_returns_no_kwargs():
+    from custom_components.givenergy_local.const import (
+        CONF_EXPERIMENTAL,
+        resolve_experimental_client_kwargs,
+    )
+
+    assert resolve_experimental_client_kwargs({}) == {}
+    assert resolve_experimental_client_kwargs({CONF_EXPERIMENTAL: {}}) == {}
+
+
+def test_resolve_ignores_unknown_section_keys():
+    """A stale key from a removed feature must not leak through as a kwarg."""
+    from custom_components.givenergy_local.const import (
+        CONF_EXPERIMENTAL,
+        resolve_experimental_client_kwargs,
+    )
+
+    assert resolve_experimental_client_kwargs({CONF_EXPERIMENTAL: {"no_such_feature": True}}) == {}
+
+
+def test_resolve_maps_enabled_feature_to_client_kwarg():
+    from custom_components.givenergy_local.const import (
+        CONF_EXPERIMENTAL,
+        ExperimentalFeature,
+        resolve_experimental_client_kwargs,
+    )
+
+    feat = ExperimentalFeature(conf_key="demo", client_kwarg="demo_kwarg", client_value=5.0)
+    result = resolve_experimental_client_kwargs(
+        {CONF_EXPERIMENTAL: {"demo": True}}, features=(feat,)
+    )
+    assert result == {"demo_kwarg": 5.0}
+
+
+def test_resolve_off_feature_passes_nothing():
+    from custom_components.givenergy_local.const import (
+        CONF_EXPERIMENTAL,
+        ExperimentalFeature,
+        resolve_experimental_client_kwargs,
+    )
+
+    feat = ExperimentalFeature(conf_key="demo", client_kwarg="demo_kwarg")
+    assert (
+        resolve_experimental_client_kwargs({CONF_EXPERIMENTAL: {"demo": False}}, features=(feat,))
+        == {}
+    )
+
+
+def test_resolve_bool_feature_defaults_client_value_true():
+    from custom_components.givenergy_local.const import (
+        CONF_EXPERIMENTAL,
+        ExperimentalFeature,
+        resolve_experimental_client_kwargs,
+    )
+
+    feat = ExperimentalFeature(conf_key="demo", client_kwarg="demo_kwarg")
+    assert resolve_experimental_client_kwargs(
+        {CONF_EXPERIMENTAL: {"demo": True}}, features=(feat,)
+    ) == {"demo_kwarg": True}

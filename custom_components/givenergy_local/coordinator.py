@@ -4,6 +4,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
+from typing import Any
 
 from givenergy_modbus.client.client import Client
 from givenergy_modbus.exceptions import (
@@ -133,6 +134,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         port: int,
         scan_interval: int,
         passive: bool = False,
+        experimental_client_kwargs: dict[str, Any] | None = None,
         timeout_tolerance: int = 3,
         retries: int = 1,
         prior_capabilities: PlantCapabilities | None = None,
@@ -149,6 +151,9 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self.host = host
         self.port = port
         self.passive = passive
+        # Resolved opt-in givenergy-modbus client kwargs (empty by default, so
+        # Client(host, port) is unchanged). Splatted at every (re)connect.
+        self._experimental_client_kwargs = experimental_client_kwargs or {}
         self.timeout_tolerance = timeout_tolerance
         self.retries = retries
         # Keep the prior across reconnects (transient TCP drops re-enter
@@ -500,7 +505,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         refresh_plant() calls dispatch via model-aware load_config()/refresh()
         — required for three-phase, AIO-HV, EMS and other non-default topologies.
         """
-        self._client = Client(host=self.host, port=self.port)
+        self._client = Client(host=self.host, port=self.port, **self._experimental_client_kwargs)
         # A fresh Client means a fresh Plant with its comms counters zeroed, so
         # drop the per-device last-seen baselines: the next poll then captures
         # the full post-reconnect value as the delta. Without this, a counter
