@@ -92,7 +92,7 @@ async def test_ac_limits_present_on_ac_coupled_plant(hass, ac_coupled_setup):
     state = hass.states.get(_entity_id(hass, "SA1234G123_battery_charge_limit_ac"))
     assert state is not None
     assert float(state.state) == 50.0
-    assert state.attributes["min"] == 0
+    assert state.attributes["min"] == 1
     assert state.attributes["max"] == 100
 
 
@@ -157,10 +157,10 @@ async def test_dc_limit_write_accepts_full_range(
 
 
 @pytest.mark.parametrize("limit", ["battery_charge_limit_ac", "battery_discharge_limit_ac"])
-@pytest.mark.parametrize("value", [0, 100])
+@pytest.mark.parametrize("value", [1, 100])
 async def test_ac_limit_write_accepts_full_range(hass, mock_client, ac_coupled_setup, limit, value):
-    """The AC sliders dropped their 1-floor to 0-100; both charge and discharge
-    boundaries must reach the modbus AC setter without raising (#52, modbus #301/#302)."""
+    """The AC sliders span 1-100 (the inverter ERRORs on a 0 write to HR313/314, #52);
+    both charge and discharge boundaries must reach the modbus AC setter without raising."""
     entity_id = _entity_id(hass, f"SA1234G123_{limit}")
     await hass.services.async_call(
         "number", "set_value", {"entity_id": entity_id, "value": value}, blocking=True

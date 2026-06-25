@@ -118,14 +118,15 @@ _DC_BATTERY_LIMIT_KEYS = frozenset({"battery_charge_limit", "battery_discharge_l
 # limits above (HR111/112) and are only meaningful on models that expose the
 # AC-config register block (HR300+). Gated via PlantCapabilities.has_ac_config_block
 # (and not is_three_phase — three-phase AC remaps the read-back to different registers
-# than the command writes; see modbus#75). Range is 0–100% to match the GivEnergy
-# app and the DC-side pair.
+# than the command writes; see modbus#75). Range is 1–100%, unlike the DC pair's
+# 0–100: HR313/314 ERROR on a 0 write (hardware-confirmed on #52 — AC-specific, the
+# DC HR111/112 pair does accept 0), so the AC floor is 1 (≈near-zero power).
 AC_COUPLED_NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
     GivEnergyNumberEntityDescription(
         key="battery_charge_limit_ac",
         name="Inverter Charge Power Percentage",
         native_unit_of_measurement=PERCENTAGE,
-        native_min_value=0,
+        native_min_value=1,
         native_max_value=100,
         native_step=1,
         mode=NumberMode.BOX,
@@ -138,7 +139,7 @@ AC_COUPLED_NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
         key="battery_discharge_limit_ac",
         name="Inverter Discharge Power Percentage",
         native_unit_of_measurement=PERCENTAGE,
-        native_min_value=0,
+        native_min_value=1,
         native_max_value=100,
         native_step=1,
         mode=NumberMode.BOX,
