@@ -331,6 +331,36 @@ async def test_options_flow_preserves_experimental_when_section_omitted(
     assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": True}
 
 
+async def test_options_flow_explicit_false_disables_experimental_flag(
+    hass, mock_client, setup_integration
+):
+    """Explicitly submitting {"demo": False} after the flag was enabled must disable it.
+    Pins the complement of test_options_flow_preserves_experimental_when_section_omitted:
+    section omitted => preserve; section submitted with false => disable."""
+    with patch(
+        "custom_components.givenergy_local.config_flow.EXPERIMENTAL_FEATURES",
+        (_DEMO_FEATURE,),
+    ):
+        # First save: enable the flag.
+        result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+        await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {CONF_BATTERY_DATA_ONLY: False, CONF_EXPERIMENTAL: {"demo": True}},
+        )
+        await hass.async_block_till_done()
+
+        # Second save: explicitly submit the section with demo=False.
+        result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {CONF_BATTERY_DATA_ONLY: False, CONF_EXPERIMENTAL: {"demo": False}},
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": False}
+
+
 async def test_options_flow_omits_section_when_no_features(hass, mock_client, setup_integration):
     """An empty registry => no experimental section in the form."""
     with patch(
