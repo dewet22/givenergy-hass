@@ -173,10 +173,18 @@ class GivEnergyLocalOptionsFlow(OptionsFlow):
         # Surface the collapsed "Experimental features" group only once at least one
         # flag exists, so the header never appears empty (the registry ships empty).
         if EXPERIMENTAL_FEATURES:
-            schema_dict[vol.Optional(CONF_EXPERIMENTAL, default={})] = section(
+            # Use currently-saved values as the schema default for each feature so
+            # that a collapsed/omitted section (which HA fills with the default
+            # rather than re-submitting the current values) falls back to what was
+            # already enabled rather than all-off feature defaults.
+            existing_exp: dict[str, Any] = self.config_entry.options.get(CONF_EXPERIMENTAL, {})
+            schema_dict[vol.Optional(CONF_EXPERIMENTAL, default=existing_exp)] = section(
                 vol.Schema(
                     {
-                        vol.Required(feature.conf_key, default=feature.default): bool
+                        vol.Required(
+                            feature.conf_key,
+                            default=existing_exp.get(feature.conf_key, feature.default),
+                        ): bool
                         for feature in EXPERIMENTAL_FEATURES
                     }
                 ),

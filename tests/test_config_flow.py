@@ -300,6 +300,37 @@ async def test_options_flow_persists_experimental_toggle(hass, mock_client, setu
     assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": True}
 
 
+async def test_options_flow_preserves_experimental_when_section_omitted(
+    hass, mock_client, setup_integration
+):
+    """Changing battery_data_only without touching the collapsed experimental section
+    must not silently disable a previously-enabled flag."""
+    with patch(
+        "custom_components.givenergy_local.config_flow.EXPERIMENTAL_FEATURES",
+        (_DEMO_FEATURE,),
+    ):
+        # First save: enable the experimental flag.
+        result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+        await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {CONF_BATTERY_DATA_ONLY: False, CONF_EXPERIMENTAL: {"demo": True}},
+        )
+        await hass.async_block_till_done()
+
+        # Second save: change battery_data_only, omit the collapsed section entirely.
+        result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {CONF_BATTERY_DATA_ONLY: True},
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert setup_integration.options[CONF_BATTERY_DATA_ONLY] is True
+    # The experimental flag must survive the second save unmodified.
+    assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": True}
+
+
 async def test_options_flow_omits_section_when_no_features(hass, mock_client, setup_integration):
     """An empty registry => no experimental section in the form."""
     with patch(
