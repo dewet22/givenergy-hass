@@ -474,6 +474,11 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_battery_charge_today,
+        # The EMS controller (Model.EMS_COMMERCIAL) isn't in givenergy-modbus's
+        # per-model battery-energy source map, so this computed field resolves to
+        # None there and the sensor renders "unknown" — it's an inverter-level
+        # register the 0x11 controller doesn't populate. Gate it off EMS (#221).
+        skip_if_ems=True,
     ),
     GivEnergyInverterSensorDescription(
         key="e_battery_discharge_day",
@@ -482,6 +487,9 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_battery_discharge_today,
+        # Same as Battery Charge Today: None on the EMS controller, so gate it
+        # off to avoid a permanently-"unknown" sensor on that device (#221).
+        skip_if_ems=True,
     ),
     GivEnergyInverterSensorDescription(
         key="e_battery_throughput",

@@ -424,15 +424,18 @@ async def test_managed_inverter_namespaced_against_same_serial(
 # ---------------------------------------------------------------------------
 
 
-async def test_inverter_sensors_kept_on_ems_except_local_load(hass, ems_setup):
+async def test_inverter_sensors_kept_on_ems_except_gated(hass, ems_setup):
     """The EMS controller's 0x11 block carries real plant data (PV/grid/battery/AC),
-    so the inverter sensors stay (#201). Only the controller-local load figures —
-    House Consumption and the inverter busbar Load Power — are gated off via
-    skip_if_ems; the EMS load aggregates supersede them."""
+    so the inverter sensors stay (#201). Gated off via skip_if_ems: the
+    controller-local load figures — House Consumption and the inverter busbar Load
+    Power — which the EMS load aggregates supersede, plus Battery Charge/Discharge
+    Today, which the controller doesn't populate (would read "unknown", #221)."""
     assert _entity_id(hass, "sensor", "SA1234G123_status") is not None
     assert _entity_id(hass, "sensor", "SA1234G123_battery_soc") is not None
     assert _entity_id(hass, "sensor", "SA1234G123_e_consumption_today") is None
     assert _entity_id(hass, "sensor", "SA1234G123_p_load_demand") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_e_battery_charge_day") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_e_battery_discharge_day") is None
 
 
 async def test_inverter_controls_suppressed_on_ems_plant(hass, ems_setup):
@@ -462,6 +465,8 @@ async def test_upgrade_narrows_retired_entities_on_ems(
         ("select", "SA1234G123_battery_power_mode"),
         ("time", "SA1234G123_charge_slot_1_start"),
         ("sensor", "SA1234G123_e_consumption_today"),
+        ("sensor", "SA1234G123_e_battery_charge_day"),
+        ("sensor", "SA1234G123_e_battery_discharge_day"),
         ("sensor", "SA1234G123_ems_status"),
         ("sensor", "SA1234G123_status"),
         ("sensor", "SA1234G123_total_failures"),
@@ -477,6 +482,8 @@ async def test_upgrade_narrows_retired_entities_on_ems(
     assert _entity_id(hass, "select", "SA1234G123_battery_power_mode") is None
     assert _entity_id(hass, "time", "SA1234G123_charge_slot_1_start") is None
     assert _entity_id(hass, "sensor", "SA1234G123_e_consumption_today") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_e_battery_charge_day") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_e_battery_discharge_day") is None
     assert _entity_id(hass, "sensor", "SA1234G123_ems_status") is None
     # Retained: meaningful inverter sensor + coordinator diagnostic.
     assert _entity_id(hass, "sensor", "SA1234G123_status") is not None
@@ -516,17 +523,24 @@ def test_ems_measured_load_power_hidden_by_default():
     assert desc.entity_registry_visible_default is False
 
 
-def test_controller_local_load_gated_skip_if_ems():
-    """Exactly the controller-local load figures are gated off on EMS — House
-    Consumption and the inverter busbar Load Power. Pins the boundary so a future
-    change can't silently widen or narrow it; the gate drops them only on EMS."""
+def test_inverter_sensors_gated_off_ems():
+    """Exactly these inverter sensors are gated off on EMS: the controller-local
+    load figures (House Consumption, inverter busbar Load Power) which the EMS
+    aggregates supersede, plus Battery Charge/Discharge Today which the controller
+    doesn't populate (they'd otherwise read "unknown", #221). Pins the boundary so
+    a future change can't silently widen or narrow it; the gate drops them on EMS."""
     from custom_components.givenergy_local.sensor import (
         INVERTER_SENSORS,
         _include_inverter_sensor,
     )
 
     gated = {d.key for d in INVERTER_SENSORS if d.skip_if_ems}
-    assert gated == {"e_consumption_today", "p_load_demand"}
+    assert gated == {
+        "e_consumption_today",
+        "p_load_demand",
+        "e_battery_charge_day",
+        "e_battery_discharge_day",
+    }
     desc = next(d for d in INVERTER_SENSORS if d.key == "p_load_demand")
     inv = MagicMock()
     assert _include_inverter_sensor(desc, inv, False, False, True) is False
