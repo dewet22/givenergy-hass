@@ -40,7 +40,8 @@
         "title": "GivEnergy Local options",
         "description": "Battery-data-only mode suppresses all control entities and inverter-level system sensors (PV, grid, load, derived consumption), leaving only the battery pack, HV stack, AIO module, and diagnostic data. Use this when this unit is controlled by a Gateway in a parallel group, where its per-unit controls and derived figures are misleading.",
         "data": {
-          "battery_data_only": "Battery data only (suppress controls and system sensors)"
+          "battery_data_only": "Battery data only (suppress controls and system sensors)",
+          "warn_clock_drift": "Warn when the inverter clock drifts from Home Assistant"
         },
         "sections": {
           "experimental": {
@@ -65,6 +66,17 @@
           "init": {
             "title": "A known GivEnergy device stopped responding",
             "description": "These device(s) were part of your system last time but did not respond on the latest connection: {devices}.\n\nThe integration has NOT removed them — it is still serving the rest of your system, and the affected entities show as unavailable. This is usually a transient comms issue (for example a slow battery BMS); the previous layout is kept and retried, so it normally clears on its own.\n\nIf the device has come back, or if you have genuinely removed it, click Fix to clear the cached layout and run a fresh hardware detection. Otherwise you can dismiss this — the integration picks the device back up automatically on its next successful detection."
+          }
+        }
+      }
+    },
+    "system_time_drift": {
+      "title": "GivEnergy inverter clock has drifted (~{drift_minutes} min)",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Inverter clock is out by about {drift_minutes} minutes",
+            "description": "The inverter's clock reads {system_time} but Home Assistant's time is {ha_time} — a drift of about {drift_minutes} minutes. The inverter runs its charge/discharge time-of-use slots from its own clock, so a drift this large can make those slots (and Predbat scheduling) act at the wrong time.\n\nClick **Submit** to set the inverter clock to Home Assistant's current time.\n\nIf you deliberately keep your inverter in a different time zone (for example UTC), turn this warning off instead: open the integration's **Configure** dialog and untick *Warn when the inverter clock drifts from Home Assistant*."
           }
         }
       }

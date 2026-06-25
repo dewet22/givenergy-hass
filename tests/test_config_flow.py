@@ -11,6 +11,7 @@ from custom_components.givenergy_local.const import (
     CONF_EXPERIMENTAL,
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
+    CONF_WARN_CLOCK_DRIFT,
     DOMAIN,
     ExperimentalFeature,
 )
@@ -242,6 +243,25 @@ async def test_options_flow_sets_battery_data_only(hass, mock_client, setup_inte
     assert setup_integration.options[CONF_BATTERY_DATA_ONLY] is True
     # The update listener reloaded the entry, so it's loaded and serving again.
     assert setup_integration.state is config_entries.ConfigEntryState.LOADED
+
+
+async def test_options_flow_warn_clock_drift_renders_and_persists(
+    hass, mock_client, setup_integration
+):
+    """The clock-drift toggle (default on) renders in the options form and persists
+    when switched off (the opt-out for users running the inverter in another zone)."""
+    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    top_keys = {marker.schema for marker in result["data_schema"].schema}
+    assert CONF_WARN_CLOCK_DRIFT in top_keys
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_BATTERY_DATA_ONLY: False, CONF_WARN_CLOCK_DRIFT: False},
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert setup_integration.options[CONF_WARN_CLOCK_DRIFT] is False
 
 
 async def test_options_flow_prefills_existing_value(hass, mock_client, setup_integration):
