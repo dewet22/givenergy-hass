@@ -101,6 +101,11 @@ NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
         native_step=1,
         mode=NumberMode.BOX,
         value_fn=lambda inv: inv.active_power_rate,
+        # On an EMS plant this HR50 write is a silent no-op: the controller governs
+        # each managed inverter's active power and re-asserts it, so a per-inverter
+        # write is accepted but overridden (modbus #304, hardware-confirmed #218).
+        # No EMS-controller active-power command exists to route to, and a per-inverter
+        # config entry can't tell it's EMS-managed — so this is left as-is on EMS.
         set_value_cmd=lambda v: commands.set_active_power_rate(int(v)),
         entity_category=EntityCategory.CONFIG,
     ),

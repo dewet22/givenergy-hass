@@ -123,6 +123,32 @@ async def test_export_priority_present_on_ac_coupled_plant(hass, ac_coupled_setu
     assert set(state.attributes["options"]) == {"Battery First", "Grid First", "Load First"}
 
 
+@pytest.mark.parametrize(
+    ("raw", "label"),
+    [(0, "Load First"), (1, "Battery First"), (2, "Grid First")],
+)
+async def test_export_priority_decodes_raw_register(
+    hass, mock_client, mock_plant, mock_inverter, mock_config_entry, raw, label
+):
+    """The raw HR311 value maps to the right label end-to-end (modbus 2.5.9 #303:
+    0=Load First, 1=Battery First, 2=Grid First — hardware-confirmed on #52/#218).
+    Feeding the raw int via ExportPriority(raw) rather than a symbolic member pins
+    the decode; the old rotated enum (0=Battery First) would fail this."""
+    mock_plant.capabilities = PlantCapabilities(
+        device_type=Model.AC,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
+    mock_inverter.export_priority = ExportPriority(raw)
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    state = hass.states.get(_entity_id(hass, "SA1234G123_export_priority"))
+    assert state.state == label
+
+
 async def test_select_export_priority_sends_command(hass, mock_client, ac_coupled_setup):
     entity_id = _entity_id(hass, "SA1234G123_export_priority")
     await hass.services.async_call(
