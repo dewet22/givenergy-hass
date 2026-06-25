@@ -254,3 +254,57 @@ async def test_options_flow_prefills_existing_value(hass, mock_client, setup_int
     markers = {marker.schema: marker for marker in result["data_schema"].schema}
     suggested = markers[CONF_BATTERY_DATA_ONLY].description.get("suggested_value")
     assert suggested is True
+
+
+# --- Experimental features section (client feature-flagging) ------------------
+
+from unittest.mock import patch  # noqa: E402
+
+from custom_components.givenergy_local.const import (  # noqa: E402
+    CONF_EXPERIMENTAL,
+    ExperimentalFeature,
+)
+
+_DEMO_FEATURE = ExperimentalFeature(conf_key="demo", client_kwarg="demo_kwarg")
+
+
+async def test_options_flow_renders_experimental_section_when_features_exist(
+    hass, mock_client, setup_integration
+):
+    """With a feature registered, the options form carries a collapsed
+    'experimental' section alongside the battery-data-only toggle."""
+    with patch(
+        "custom_components.givenergy_local.config_flow.EXPERIMENTAL_FEATURES",
+        (_DEMO_FEATURE,),
+    ):
+        result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+
+    assert result["type"] == "form"
+    top_keys = {marker.schema for marker in result["data_schema"].schema}
+    assert CONF_EXPERIMENTAL in top_keys
+    assert CONF_BATTERY_DATA_ONLY in top_keys
+
+
+async def test_options_flow_persists_experimental_toggle(hass, mock_client, setup_integration):
+    """Submitting the nested section dict lands under entry.options[experimental]."""
+    with patch(
+        "custom_components.givenergy_local.config_flow.EXPERIMENTAL_FEATURES",
+        (_DEMO_FEATURE,),
+    ):
+        result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {CONF_BATTERY_DATA_ONLY: False, CONF_EXPERIMENTAL: {"demo": True}},
+        )
+        await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": True}
+
+
+async def test_options_flow_omits_section_when_no_features(hass, mock_client, setup_integration):
+    """The shipped empty registry => no experimental section, battery_data_only intact."""
+    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    top_keys = {marker.schema for marker in result["data_schema"].schema}
+    assert CONF_EXPERIMENTAL not in top_keys
+    assert CONF_BATTERY_DATA_ONLY in top_keys

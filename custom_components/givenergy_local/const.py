@@ -1,3 +1,7 @@
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import Any
+
 DOMAIN = "givenergy_local"
 
 DEFAULT_PORT = 8899
@@ -58,3 +62,60 @@ EXPOSE_RECOMMENDED_ENTITY_KEYS = (
     # the translation_key, which is not what's in the unique_id suffix.
     "status",
 )
+
+
+# --- Experimental features (opt-in givenergy-modbus client flags) -------------
+# A grouped, collapsed "Experimental features" section in the options flow. Each
+# entry forwards one optional kwarg into Client(...) when its toggle is on.
+#
+# Adding a feature = ONE entry below + a label in strings.json /
+# translations/en.json under options.step.init.sections.experimental.data, and
+# (when the kwarg ships) bumping the givenergy-modbus floor in pyproject.toml and
+# manifest.json. No version-guard code is needed: the pin bump is committed
+# together with the kwarg-passing entry, so any build that can pass the kwarg
+# already depends on a client that accepts it.
+#
+# Worked example (uncomment + set the real kwarg name when the modbus release
+# lands; client_value matches the kwarg's type — e.g. a float for a tunable):
+#   EXPERIMENTAL_FEATURES = (
+#       ExperimentalFeature(
+#           conf_key="splice_heal",
+#           client_kwarg="splice_heal_seconds",
+#           client_value=5.0,
+#       ),
+#   )
+CONF_EXPERIMENTAL = "experimental"
+
+
+@dataclass(frozen=True)
+class ExperimentalFeature:
+    """One opt-in client flag. The UI toggle is boolean; `client_value` is what
+    gets passed to Client(...) when the toggle is on (True for a bool flag, or a
+    concrete value like a float for a tunable)."""
+
+    conf_key: str
+    client_kwarg: str
+    client_value: Any = True
+    default: bool = False  # MUST stay False — enforced by test.
+
+
+EXPERIMENTAL_FEATURES: tuple[ExperimentalFeature, ...] = ()
+
+
+def resolve_experimental_client_kwargs(
+    options: Mapping[str, Any],
+    features: tuple[ExperimentalFeature, ...] = EXPERIMENTAL_FEATURES,
+) -> dict[str, Any]:
+    """Map enabled experimental toggles in `options` to Client(...) kwargs.
+
+    Reads the nested section dict (options[CONF_EXPERIMENTAL]); returns {} when
+    nothing is enabled, so an all-off entry constructs Client() identically to
+    before this mechanism existed. Unknown section keys (e.g. a removed feature)
+    are ignored.
+    """
+    section = options.get(CONF_EXPERIMENTAL, {}) or {}
+    return {
+        feature.client_kwarg: feature.client_value
+        for feature in features
+        if section.get(feature.conf_key, feature.default)
+    }

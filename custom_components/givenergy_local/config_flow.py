@@ -14,9 +14,11 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import callback
+from homeassistant.data_entry_flow import SectionConfig, section
 
 from .const import (
     CONF_BATTERY_DATA_ONLY,
+    CONF_EXPERIMENTAL,
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
     DEFAULT_BATTERY_DATA_ONLY,
@@ -24,6 +26,7 @@ from .const import (
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    EXPERIMENTAL_FEATURES,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -159,12 +162,27 @@ class GivEnergyLocalOptionsFlow(OptionsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
+            # user_input carries battery_data_only flat, plus — when any experimental
+            # feature is registered — the section's toggles nested under
+            # CONF_EXPERIMENTAL. Persisted as-is; resolve_experimental_client_kwargs
+            # reads that nested shape at coordinator construction.
             return self.async_create_entry(data=user_input)
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_BATTERY_DATA_ONLY, default=DEFAULT_BATTERY_DATA_ONLY): bool,
-            }
-        )
+        schema_dict: dict[Any, Any] = {
+            vol.Required(CONF_BATTERY_DATA_ONLY, default=DEFAULT_BATTERY_DATA_ONLY): bool,
+        }
+        # Surface the collapsed "Experimental features" group only once at least one
+        # flag exists, so the header never appears empty (the registry ships empty).
+        if EXPERIMENTAL_FEATURES:
+            schema_dict[vol.Required(CONF_EXPERIMENTAL)] = section(
+                vol.Schema(
+                    {
+                        vol.Required(feature.conf_key, default=feature.default): bool
+                        for feature in EXPERIMENTAL_FEATURES
+                    }
+                ),
+                SectionConfig(collapsed=True),
+            )
+        schema = vol.Schema(schema_dict)
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(schema, self.config_entry.options),

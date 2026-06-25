@@ -48,6 +48,7 @@ from .const import (
     SERVICE_REBOOT_INVERTER,
     SERVICE_REDETECT_PLANT,
     SERVICE_SET_SYSTEM_DATETIME,
+    resolve_experimental_client_kwargs,
 )
 from .coordinator import GivEnergyUpdateCoordinator, missing_devices
 from .http import (
@@ -644,12 +645,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             hass.config_entries.async_schedule_reload(entry.entry_id)
 
+    # Resolve opt-in experimental client flags from options into Client(...) kwargs.
+    # Empty for the default-off case, so the construction is unchanged.
+    experimental_client_kwargs = resolve_experimental_client_kwargs(entry.options)
+
     coordinator = GivEnergyUpdateCoordinator(
         hass=hass,
         host=entry.data[CONF_HOST],
         port=entry.data[CONF_PORT],
         scan_interval=entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
         passive=entry.data.get(CONF_PASSIVE, DEFAULT_PASSIVE),
+        experimental_client_kwargs=experimental_client_kwargs,
         prior_capabilities=prior_capabilities,
         on_topology_changed=_on_topology_changed,
         on_devices_missing=_on_devices_missing,
