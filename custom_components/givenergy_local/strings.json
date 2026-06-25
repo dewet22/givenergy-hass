@@ -41,6 +41,18 @@
         "description": "Battery-data-only mode suppresses all control entities and inverter-level system sensors (PV, grid, load, derived consumption), leaving only the battery pack, HV stack, AIO module, and diagnostic data. Use this when this unit is controlled by a Gateway in a parallel group, where its per-unit controls and derived figures are misleading.",
         "data": {
           "battery_data_only": "Battery data only (suppress controls and system sensors)"
+        },
+        "sections": {
+          "experimental": {
+            "name": "Experimental features",
+            "description": "Leave these off unless a maintainer has asked you to enable them.",
+            "data": {
+              "splice_reject_heal": "Enable splice-guard heal window"
+            },
+            "data_description": {
+              "splice_reject_heal": "Allows the battery splice-guard to recover from legitimate LiFePO4 charge-knee surges (voltage/capacity class, multi-poll streak gate) rather than keeping the battery permanently offline. Enable only if you see repeated battery disconnects near full charge and a maintainer has confirmed this is the right path."
+            }
+          }
         }
       }
     }

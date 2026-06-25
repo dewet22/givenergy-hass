@@ -173,7 +173,7 @@ class GivEnergyLocalOptionsFlow(OptionsFlow):
         # Surface the collapsed "Experimental features" group only once at least one
         # flag exists, so the header never appears empty (the registry ships empty).
         if EXPERIMENTAL_FEATURES:
-            schema_dict[vol.Required(CONF_EXPERIMENTAL)] = section(
+            schema_dict[vol.Optional(CONF_EXPERIMENTAL, default={})] = section(
                 vol.Schema(
                     {
                         vol.Required(feature.conf_key, default=feature.default): bool

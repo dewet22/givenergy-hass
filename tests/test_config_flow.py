@@ -301,8 +301,12 @@ async def test_options_flow_persists_experimental_toggle(hass, mock_client, setu
 
 
 async def test_options_flow_omits_section_when_no_features(hass, mock_client, setup_integration):
-    """The shipped empty registry => no experimental section, battery_data_only intact."""
-    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    """An empty registry => no experimental section in the form."""
+    with patch(
+        "custom_components.givenergy_local.config_flow.EXPERIMENTAL_FEATURES",
+        (),
+    ):
+        result = await hass.config_entries.options.async_init(setup_integration.entry_id)
     top_keys = {marker.schema for marker in result["data_schema"].schema}
     assert CONF_EXPERIMENTAL not in top_keys
     assert CONF_BATTERY_DATA_ONLY in top_keys

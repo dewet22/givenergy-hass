@@ -99,7 +99,13 @@ class ExperimentalFeature:
     default: bool = False  # MUST stay False — enforced by test.
 
 
-EXPERIMENTAL_FEATURES: tuple[ExperimentalFeature, ...] = ()
+EXPERIMENTAL_FEATURES: tuple[ExperimentalFeature, ...] = (
+    ExperimentalFeature(
+        conf_key="splice_reject_heal",
+        client_kwarg="splice_reject_heal_seconds",
+        client_value=300,
+    ),
+)
 
 
 def resolve_experimental_client_kwargs(
