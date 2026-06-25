@@ -1,14 +1,18 @@
 """Tests for the GivEnergy Local config flow."""
 
+from unittest.mock import patch
+
 from givenergy_modbus.exceptions import RefreshFailed, RefreshPartiallySucceeded
 from homeassistant import config_entries
 from homeassistant.const import CONF_HOST, CONF_PORT
 
 from custom_components.givenergy_local.const import (
     CONF_BATTERY_DATA_ONLY,
+    CONF_EXPERIMENTAL,
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
     DOMAIN,
+    ExperimentalFeature,
 )
 
 VALID_USER_INPUT = {
@@ -258,12 +262,6 @@ async def test_options_flow_prefills_existing_value(hass, mock_client, setup_int
 
 # --- Experimental features section (client feature-flagging) ------------------
 
-from unittest.mock import patch  # noqa: E402
-
-from custom_components.givenergy_local.const import (  # noqa: E402
-    CONF_EXPERIMENTAL,
-    ExperimentalFeature,
-)
 
 _DEMO_FEATURE = ExperimentalFeature(conf_key="demo", client_kwarg="demo_kwarg")
 
