@@ -870,6 +870,7 @@ async def test_upgrade_removes_unreadable_control_rows(
     mock_inverter.battery_charge_limit_ac = None
     mock_inverter.battery_discharge_limit_ac = None
     mock_inverter.battery_pause_mode = None  # pause absent → mode + slots gated
+    mock_inverter.system_time = None  # clock register absent → datetime gated (#219)
     mock_config_entry.add_to_hass(hass)
     registry = er.async_get(hass)
     # Rows a prior version created: readability-gated controls + one readable control.
@@ -879,6 +880,7 @@ async def test_upgrade_removes_unreadable_control_rows(
         ("select", "SA1234G123_battery_pause_mode"),
         ("time", "SA1234G123_battery_pause_slot_start"),
         ("time", "SA1234G123_battery_pause_slot_end"),
+        ("datetime", "SA1234G123_system_time"),
         ("select", "SA1234G123_battery_power_mode"),  # readable → must survive
     )
     for domain, unique_id in seeded:
@@ -896,6 +898,7 @@ async def test_upgrade_removes_unreadable_control_rows(
     assert not _present("select", "battery_pause_mode")
     assert not _present("time", "battery_pause_slot_start")
     assert not _present("time", "battery_pause_slot_end")
+    assert not _present("datetime", "system_time")
     # A readable control is untouched.
     assert _present("select", "battery_power_mode")
 
@@ -908,18 +911,23 @@ async def test_reconcile_keeps_controls_on_partial_seed(hass, mock_client, setup
     coordinator = hass.data[DOMAIN][setup_integration.entry_id]
     coordinator.last_partial_failures = [object()]  # partial seed
     coordinator.data.inverter.battery_charge_limit_ac = None  # reads None (transient)
+    coordinator.data.inverter.system_time = None  # reads None (transient)
     registry = er.async_get(hass)
     registry.async_get_or_create(
         "number", DOMAIN, "SA1234G123_battery_charge_limit_ac", config_entry=setup_integration
     )
+    registry.async_get_or_create(
+        "datetime", DOMAIN, "SA1234G123_system_time", config_entry=setup_integration
+    )
 
     _reconcile_readability_gated_controls(hass, coordinator)
 
-    # Partial seed → reconciliation is a no-op; the row is retained.
+    # Partial seed → reconciliation is a no-op; the rows are retained.
     assert (
         registry.async_get_entity_id("number", DOMAIN, "SA1234G123_battery_charge_limit_ac")
         is not None
     )
+    assert registry.async_get_entity_id("datetime", DOMAIN, "SA1234G123_system_time") is not None
 
 
 async def test_upgrade_removes_dc_limit_rows_on_ac_coupled(

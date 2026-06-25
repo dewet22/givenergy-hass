@@ -502,6 +502,7 @@ def _reconcile_readability_gated_controls(
     # Local imports: the platforms import from this package, so importing them at
     # module scope risks a load-order cycle. The gate helpers are the single source
     # of truth for "is this control's register present".
+    from .datetime import SYSTEM_TIME_DESCRIPTION
     from .number import AC_COUPLED_NUMBER_DESCRIPTIONS, _include_number
     from .select import SELECT_DESCRIPTIONS, _include_select
     from .time import TIME_DESCRIPTIONS, _include_time
@@ -525,6 +526,10 @@ def _reconcile_readability_gated_controls(
     for time_desc in TIME_DESCRIPTIONS:
         if not _include_time(time_desc, inverter):
             _remove_stale_control(registry, serial, "time", time_desc.key)
+    # The System Time datetime (HR35-40) follows the same readability gate — remove
+    # its row when the clock register is absent on this device/firmware (#219).
+    if inverter.system_time is None:
+        _remove_stale_control(registry, serial, "datetime", SYSTEM_TIME_DESCRIPTION.key)
 
 
 def _reconcile_ac_coupled_dc_limits(
