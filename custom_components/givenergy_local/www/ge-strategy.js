@@ -293,9 +293,8 @@
   // the classic views stay available; per-mode pruning is a later decision.
   function flowViews(plant, opts) {
     var a = makeAccessors(plant);
-    // Flow is inverter-centric; an EMS plant has no PV/battery/grid flow, so
-    // fall back to the classic (EMS) view set with no flow panel.
-    if (plant.target && plant.target.isEms) return classicViews(plant, opts);
+    // The EMS controller carries real PV/grid/battery telemetry (#206), so the
+    // flow panel renders there too; its load node uses the EMS load aggregate.
     return [flowView(plant, a, opts)].concat(classicViews(plant, opts));
   }
 
@@ -305,7 +304,8 @@
     var strings = [a.inv("p_pv1"), a.inv("p_pv2")].filter(Boolean);
     if (strings.length) cfg.solar_strings = strings;
     if (a.inv("grid_power")) cfg.grid = a.inv("grid_power");
-    if (a.inv("p_load_demand")) cfg.load = a.inv("p_load_demand");
+    var load = a.load();
+    if (load) cfg.load = load;
     if (a.inv("p_battery")) cfg.battery_power = a.inv("p_battery");
     if (a.inv("battery_soc")) cfg.battery_soc = a.inv("battery_soc");
 
@@ -352,9 +352,8 @@
 
   function glanceViews(plant, opts) {
     var a = makeAccessors(plant);
-    // Glance is inverter-centric; an EMS plant has no PV/battery/grid data, so
-    // fall back to the classic (EMS) view set with no glance panel.
-    if (plant.target && plant.target.isEms) return classicViews(plant, opts);
+    // The EMS controller carries real PV/grid/battery telemetry (#206), so the
+    // glance panel renders there too.
     return [glanceView(plant, a, opts)].concat(classicViews(plant, opts));
   }
 
@@ -364,7 +363,6 @@
     var strings = [a.inv("p_pv1"), a.inv("p_pv2")].filter(Boolean);
     if (strings.length) cfg.solar_strings = strings;
     if (a.inv("grid_power")) cfg.grid = a.inv("grid_power");
-    if (a.inv("p_load_demand")) cfg.load = a.inv("p_load_demand");
     if (a.inv("p_battery")) cfg.battery_power = a.inv("p_battery");
     if (a.inv("battery_soc")) cfg.battery_soc = a.inv("battery_soc");
 
@@ -407,7 +405,11 @@
   // separate dashboards.
   function allViews(plant, opts) {
     var a = makeAccessors(plant);
-    if (plant.target && plant.target.isEms) return classicViews(plant, opts);
+    // Glance + Flow render on EMS (controller telemetry, #206); Analyst is held
+    // back there - its energy ledger needs daily battery/house figures the
+    // controller doesn't surface (#52).
+    if (plant.target && plant.target.isEms)
+      return [glanceView(plant, a, opts), flowView(plant, a, opts)].concat(classicViews(plant, opts));
     return [glanceView(plant, a, opts), flowView(plant, a, opts), analystView(plant, a, opts)].concat(classicViews(plant, opts));
   }
 
