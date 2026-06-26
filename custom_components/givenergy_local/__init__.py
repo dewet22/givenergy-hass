@@ -616,14 +616,21 @@ def _check_system_time_drift(
         "system_time": system_time.strftime("%Y-%m-%d %H:%M"),
         "ha_time": now.strftime("%Y-%m-%d %H:%M"),
     }
+    # On an EMS plant the controller's clock can't be set locally: the modbus library
+    # models the controller as a non-inverter peer and refuses HR(35) writes, so the
+    # one-click fix would error. Surface the drift as a non-fixable notice that points
+    # to the GivEnergy app instead (the controller normally re-syncs from the cloud).
+    # Reading the clock still works, so detection — what Predbat consumes via the
+    # System Time entity — is unaffected.
+    is_ems = coordinator.data.ems is not None
     ir.async_create_issue(
         hass,
         DOMAIN,
         issue_id,
-        is_fixable=True,
+        is_fixable=not is_ems,
         is_persistent=False,
         severity=ir.IssueSeverity.WARNING,
-        translation_key="system_time_drift",
+        translation_key="system_time_drift_ems" if is_ems else "system_time_drift",
         translation_placeholders=placeholders,
         data={"entry_id": entry.entry_id, **placeholders},
     )
