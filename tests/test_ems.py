@@ -438,6 +438,7 @@ async def test_inverter_sensors_kept_on_ems_except_gated(hass, ems_setup):
     assert _entity_id(hass, "sensor", "SA1234G123_e_battery_discharge_day") is None
     assert _entity_id(hass, "sensor", "SA1234G123_e_self_consumption_today") is None
     assert _entity_id(hass, "sensor", "SA1234G123_e_self_consumption_total") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_e_pv_direct_today") is None
 
 
 async def test_inverter_controls_suppressed_on_ems_plant(hass, ems_setup):
@@ -545,6 +546,8 @@ def test_inverter_sensors_gated_off_ems():
         # Derived PV-minus-export figures, gated until validated on EMS (#223).
         "e_self_consumption_today",
         "e_self_consumption_total",
+        # DC-coupled GEN1 only; not validated on EMS controllers.
+        "e_pv_direct_today",
     }
     desc = next(d for d in INVERTER_SENSORS if d.key == "p_load_demand")
     inv = MagicMock()

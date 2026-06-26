@@ -761,6 +761,24 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         skip_if_ems=True,
     ),
     GivEnergyInverterSensorDescription(
+        # PV that reached load directly (bypassing battery and grid), modbus 2.5.13.
+        # DC-coupled hybrids only — returns None on AC-coupled/AIO (IR44/45-46
+        # mislabelled on those units, #293) and on non-GEN1 DC hybrids until the
+        # battery-charge routing map widens (modbus #184). skip_if_none=True means
+        # the sensor simply won't appear where None is the only value ever returned.
+        # Not monotonic intraday (an export burst can dip it), so carries a daily
+        # monotonic clamp — same contract as e_self_consumption_today.
+        key="e_pv_direct_today",
+        name="PV Direct Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        monotonic=True,
+        value_fn=lambda inv: getattr(inv, "e_pv_direct_today", None),
+        skip_if_none=True,
+        skip_if_ems=True,
+    ),
+    GivEnergyInverterSensorDescription(
         # Renamed from "Load Energy Today" / e_load_day (givenergy-modbus #174):
         # IR35 was a GivTCP-era mislabel — it has always been AC charge, not house
         # load. A unique_id migration in __init__.py carries the existing history
