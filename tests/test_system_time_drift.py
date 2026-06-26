@@ -34,9 +34,10 @@ def _entry(entry_id: str = "entry-1", **options):
     return entry
 
 
-def _coordinator(system_time):
+def _coordinator(system_time, ems=False):
     coord = MagicMock()
     coord.data.inverter.system_time = system_time
+    coord.data.ems = MagicMock() if ems else None
     return coord
 
 
@@ -89,6 +90,17 @@ async def test_battery_data_only_entry_skipped(hass):
     entry = _entry(**{CONF_BATTERY_DATA_ONLY: True})
     _check_system_time_drift(hass, entry, _coordinator(_drifted(15)))
     assert _issue(hass, entry.entry_id) is None
+
+
+async def test_ems_controller_raises_non_fixable_notice(hass):
+    """EMS controllers can't have their clock set locally (the modbus library refuses
+    HR(35) writes), so the drift surfaces as a non-fixable notice, not a Fix button."""
+    entry = _entry()
+    _check_system_time_drift(hass, entry, _coordinator(_drifted(15), ems=True))
+    issue = _issue(hass, entry.entry_id)
+    assert issue is not None
+    assert issue.is_fixable is False
+    assert issue.translation_key == "system_time_drift_ems"
 
 
 async def test_toggle_off_does_not_raise(hass):

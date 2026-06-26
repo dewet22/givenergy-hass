@@ -1,11 +1,18 @@
 """Tests for the GivEnergy Local datetime platform (the inverter system clock, #219)."""
 
 from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
+import pytest
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from custom_components.givenergy_local.const import DOMAIN
+from custom_components.givenergy_local.datetime import (
+    SYSTEM_TIME_DESCRIPTION,
+    GivEnergyDateTimeEntity,
+)
 
 
 def _entity_id(hass, unique_id: str) -> str:
@@ -59,3 +66,15 @@ async def test_system_time_absent_when_register_none(
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()
     assert _maybe_entity_id(hass, "SA1234G123_system_time") is None
+
+
+async def test_set_system_time_rejected_on_ems():
+    """On an EMS plant the controller clock isn't locally writable (the modbus library
+    refuses HR(35) writes); setting the entity raises a clean error rather than letting
+    the library's InvalidPduState surface, and never reaches the client."""
+    coordinator = MagicMock()
+    coordinator.data.ems = MagicMock()  # EMS plant
+    entity = GivEnergyDateTimeEntity(coordinator, SYSTEM_TIME_DESCRIPTION)
+    with pytest.raises(HomeAssistantError):
+        await entity.async_set_value(datetime(2026, 6, 1, 8, 30, tzinfo=UTC))
+    coordinator._client.one_shot_command.assert_not_called()

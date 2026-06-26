@@ -79,6 +79,10 @@
         }
       }
     },
+    "system_time_drift_ems": {
+      "title": "GivEnergy EMS controller clock has drifted (~{drift_minutes} min)",
+      "description": "The EMS controller's clock reads {system_time} but Home Assistant's time is {ha_time} — a drift of about {drift_minutes} minutes. The controller runs its charge and export slots from its own clock, so a drift this large can make those slots (and Predbat scheduling) act at the wrong time.\n\nUnlike a directly-connected inverter, an EMS controller's clock cannot be set locally — correct it from the GivEnergy app or portal. The controller normally re-syncs its clock from the cloud, so this often clears on its own.\n\nIf you deliberately run your system in a different time zone (for example UTC), turn this warning off instead: open the integration's **Configure** dialog and untick *Warn when the inverter clock drifts from Home Assistant*."
+    },
     "plant_topology_changed": {
       "title": "GivEnergy plant topology has changed",
       "description": "The hardware layout of your GivEnergy system has changed since the last start — typically a battery was added or removed, or the inverter device type changed.\n\nThe integration has already accepted the new topology and reloaded itself; this notice is purely advisory and can be dismissed."

@@ -8,6 +8,7 @@ from homeassistant.components.datetime import DateTimeEntity, DateTimeEntityDesc
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -75,6 +76,16 @@ class GivEnergyDateTimeEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], Dat
         return system_time.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
 
     async def async_set_value(self, value: datetime) -> None:
+        # On an EMS plant the clock register is read-only to us: the modbus library
+        # models the controller as a non-inverter peer and refuses HR(35) writes
+        # (the controller re-syncs its clock from the GivEnergy cloud). The entity
+        # stays for visibility, but raise a clean error rather than letting the
+        # library's InvalidPduState surface as a traceback.
+        if self.coordinator.data.ems is not None:
+            raise HomeAssistantError(
+                "The EMS controller clock cannot be set locally — correct it from "
+                "the GivEnergy app or portal."
+            )
         client = self.coordinator._client
         if client is None or not client.connected:
             return
