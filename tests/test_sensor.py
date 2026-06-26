@@ -719,6 +719,28 @@ async def test_self_consumption_sensors_absent_when_field_missing(
     )
 
 
+async def test_pv_direct_today_sensor_created(hass, setup_integration):
+    """PV direct to load (bypassing battery and grid) surfaces as a kWh energy sensor
+    on DC-coupled GEN1 hybrids (givenergy-modbus 2.5.13)."""
+    entity = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_e_pv_direct_today"))
+    assert entity.state == "5.3"
+    assert entity.attributes["unit_of_measurement"] == "kWh"
+    assert entity.attributes["device_class"] == "energy"
+
+
+async def test_pv_direct_today_absent_when_field_missing(hass, mock_client, mock_config_entry):
+    """AC-coupled / non-GEN1 DC units return None for e_pv_direct_today;
+    skip_if_none must drop the sensor rather than orphan it as unavailable."""
+    mock_client.plant.inverter.e_pv_direct_today = None
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_pv_direct_today") is None
+
+
 async def test_ac_charge_today_sensor_replaces_load_energy(hass, setup_integration):
     """e_load_day was a mislabel (it's AC charge); the renamed sensor reads it, and
     nothing remains registered under the old unique_id."""

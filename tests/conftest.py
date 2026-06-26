@@ -79,6 +79,8 @@ def mock_inverter() -> MagicMock:
     # above (11.2 - 2.1, 5100.2 - 892.4) so the mock mirrors the real derivation.
     inv.e_self_consumption_today = 9.1
     inv.e_self_consumption_total = 4207.8
+    # PV direct to load (givenergy-modbus 2.5.13, DC-coupled GEN1 only).
+    inv.e_pv_direct_today = 5.3
     # Native load registers (IR 1396-1399) exist only on three-phase models —
     # mirror the real model so the mock can't fabricate fields the sensors
     # then break on. Three-phase tests set these (and delete the derived
