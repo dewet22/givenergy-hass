@@ -1716,6 +1716,42 @@ def test_monotonic_never_exposes_negative_baseline(mock_plant, freezer):
     assert _read(entity, mock_plant, -1.0) == 0.0
 
 
+def _lifetime_entity(mock_plant):
+    from datetime import timedelta
+
+    from custom_components.givenergy_local.sensor import GivEnergyInverterSensor
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    return GivEnergyInverterSensor(coordinator, _inverter_desc("e_self_consumption_total"))
+
+
+def _read_lifetime(entity, mock_plant, value):
+    mock_plant.inverter.e_self_consumption_total = value
+    return entity.native_value
+
+
+def test_lifetime_monotonic_holds_dip_and_never_resets_at_midnight(mock_plant, freezer):
+    """The lifetime self-consumption clamp is a pure high-water mark: it holds
+    through a battery-to-grid dip AND, unlike the daily clamp, never re-baselines at
+    the day boundary — a midnight dip must not surface as a fake meter reset in HA
+    statistics (#223, Codex review on #227)."""
+    freezer.move_to("2026-06-12 23:55:00+00:00")
+    entity = _lifetime_entity(mock_plant)
+
+    assert _read_lifetime(entity, mock_plant, 4207.8) == 4207.8
+    # Battery exports to grid: the lifetime difference dips — held, not exposed.
+    assert _read_lifetime(entity, mock_plant, 4205.3) == 4207.8
+    # Cross midnight with the dip still present: the daily clamp would re-baseline
+    # to 4205.3 here; the lifetime clamp holds the high-water mark instead.
+    freezer.tick(10 * 60)  # 2026-06-13 00:05
+    assert _read_lifetime(entity, mock_plant, 4205.3) == 4207.8
+    # Genuine growth resumes and is exposed as a plain increase.
+    assert _read_lifetime(entity, mock_plant, 4210.0) == 4210.0
+
+
 def test_monotonic_zero_baseline_small_dip(mock_plant, freezer):
     """Falsy-zero regression: with a 0.0 baseline, a sub-threshold dip used to
     slip through `self._monotonic_max or value` and expose a negative."""

@@ -76,6 +76,12 @@ class GivEnergyInverterSensorDescription(SensorEntityDescription):
     # session. Use for computed TOTAL_INCREASING sensors whose source value can
     # transiently dip due to multi-register polling skew.
     monotonic: bool = False
+    # Only meaningful with monotonic=True. True (default) runs the daily-counter
+    # clamp, which admits the genuine midnight reset back to ~0. False runs a pure
+    # high-water clamp for lifetime counters that never reset: it never re-baselines
+    # at the day boundary, so a midnight dip can't surface as a fake meter reset in
+    # HA statistics (#223).
+    monotonic_resets_daily: bool = True
     # Model field the value_fn actually reads, when it differs from `key` (the
     # key is pinned by unique_id stability). Without this, renamed direct-register
     # sensors resolve no IR source and silently miss the stale-bank availability
@@ -739,14 +745,17 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     GivEnergyInverterSensorDescription(
         # Lifetime self-consumption (max(0, pv_total - export_total), modbus 2.5.12).
         # Also a difference of cumulative counters that can transiently dip / decrease
-        # on battery-to-grid export, so it carries the monotonic clamp too — unlike
-        # the single-register e_load_total above, which needs none.
+        # on battery-to-grid export, so it carries a monotonic clamp too — but the
+        # non-daily (pure high-water) variant: a lifetime counter never resets, so the
+        # daily clamp's midnight re-baseline would expose an overnight dip as a fake
+        # meter reset in HA statistics (#223).
         key="e_self_consumption_total",
         name="Self Consumption Total",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         monotonic=True,
+        monotonic_resets_daily=False,
         value_fn=lambda inv: getattr(inv, "e_self_consumption_total", None),
         skip_if_none=True,
         skip_if_ems=True,
@@ -1960,6 +1969,11 @@ class GivEnergyInverterSensor(
             restored = float(last_state.state)
         except ValueError, TypeError:
             return
+        if not self.entity_description.monotonic_resets_daily:
+            # Lifetime high-water clamp: always seed from the last persisted value,
+            # regardless of date, so a post-restart dip can't re-baseline below it.
+            self._monotonic_max = max(restored, 0.0)
+            return
         last_date = dt_util.as_local(last_state.last_updated).date()
         if last_date == dt_util.now().date():
             # Seed the intra-day max from the last persisted value so a
@@ -1992,6 +2006,15 @@ class GivEnergyInverterSensor(
     def native_value(self) -> Any:
         value = self.entity_description.value_fn(self.coordinator.data.inverter)
         if self.entity_description.monotonic and isinstance(value, (int, float)):
+            if not self.entity_description.monotonic_resets_daily:
+                # Lifetime counter: pure high-water clamp. Hold the maximum and
+                # never re-baseline (no daily reset to admit), so a transient skew
+                # dip or a real battery-to-grid decrease can't be exposed as a
+                # statistics-corrupting drop (#223). Floored at zero defensively.
+                candidate = max(value, 0.0)
+                if self._monotonic_max is None or candidate > self._monotonic_max:
+                    self._monotonic_max = candidate
+                return self._monotonic_max
             now = dt_util.now()
             today = now.date()
             last_read = self._monotonic_last_read
