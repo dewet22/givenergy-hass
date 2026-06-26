@@ -741,6 +741,43 @@ async def test_pv_direct_today_absent_when_field_missing(hass, mock_client, mock
     assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_pv_direct_today") is None
 
 
+async def test_battery_nominal_sensors_created(hass, setup_integration):
+    """Battery topology nameplate (HR308-310, givenergy-modbus 2.6.0) surfaces as
+    diagnostic sensors with power (W), current (A), and percentage units."""
+    power = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_battery_nominal_power"))
+    assert power.state == "3600"
+    assert power.attributes["unit_of_measurement"] == "W"
+    assert power.attributes["device_class"] == "power"
+
+    current = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_battery_nominal_current"))
+    assert current.state == "70"
+    assert current.attributes["unit_of_measurement"] == "A"
+    assert current.attributes["device_class"] == "current"
+
+    pct = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_battery_max_charge_pct"))
+    assert pct.state == "100"
+    assert pct.attributes["unit_of_measurement"] == "%"
+
+
+async def test_battery_nominal_sensors_absent_when_field_missing(
+    hass, mock_client, mock_config_entry
+):
+    """Inverters that don't decode the HR300 block return None; skip_if_none must drop
+    the sensors rather than orphan them as unavailable."""
+    inv = mock_client.plant.inverter
+    inv.battery_nominal_power = None
+    inv.battery_nominal_current = None
+    inv.battery_max_charge_pct = None
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    for key in ("battery_nominal_power", "battery_nominal_current", "battery_max_charge_pct"):
+        assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is None
+
+
 async def test_ac_charge_today_sensor_replaces_load_energy(hass, setup_integration):
     """e_load_day was a mislabel (it's AC charge); the renamed sensor reads it, and
     nothing remains registered under the old unique_id."""

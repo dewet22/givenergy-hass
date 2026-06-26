@@ -298,6 +298,38 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: inv.system_mode,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
+    # Battery topology nameplate (HR308-310, givenergy-modbus 2.6.0). Static ratings,
+    # not live telemetry, so DIAGNOSTIC + no state_class. skip_if_none drops them where
+    # the register doesn't decode (None in the modbus fixtures; populated on inverters
+    # that poll the HR300 block). NB power/current scale is the library's most-likely
+    # raw-uint16 reading, flagged "unconfirmed on live hardware" upstream — confirm
+    # against real values before relying on the units. max_charge_pct is self-validating.
+    GivEnergyInverterSensorDescription(
+        key="battery_nominal_power",
+        name="Battery Nominal Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        value_fn=lambda inv: getattr(inv, "battery_nominal_power", None),
+        skip_if_none=True,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="battery_nominal_current",
+        name="Battery Nominal Current",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        value_fn=lambda inv: getattr(inv, "battery_nominal_current", None),
+        skip_if_none=True,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="battery_max_charge_pct",
+        name="Battery Max Charge Percentage",
+        native_unit_of_measurement=PERCENTAGE,
+        value_fn=lambda inv: getattr(inv, "battery_max_charge_pct", None),
+        skip_if_none=True,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
     GivEnergyInverterSensorDescription(
         key="battery_maintenance_mode",
         name="Battery Maintenance Mode",

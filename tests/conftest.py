@@ -81,6 +81,10 @@ def mock_inverter() -> MagicMock:
     inv.e_self_consumption_total = 4207.8
     # PV direct to load (givenergy-modbus 2.5.13, DC-coupled GEN1 only).
     inv.e_pv_direct_today = 5.3
+    # Battery topology nameplate (HR308-310, givenergy-modbus 2.6.0).
+    inv.battery_nominal_power = 3600
+    inv.battery_nominal_current = 70
+    inv.battery_max_charge_pct = 100
     # Native load registers (IR 1396-1399) exist only on three-phase models —
     # mirror the real model so the mock can't fabricate fields the sensors
     # then break on. Three-phase tests set these (and delete the derived
