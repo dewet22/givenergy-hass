@@ -682,6 +682,43 @@ async def test_house_consumption_total_absent_on_single_phase(hass, setup_integr
     assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_load_total") is None
 
 
+async def test_self_consumption_sensors_created(hass, setup_integration):
+    """Self-consumption today + lifetime total (PV used on-site) surface as kWh
+    energy sensors on a single-phase inverter (#223, givenergy-modbus 2.5.12)."""
+    today = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_e_self_consumption_today"))
+    assert today.state == "9.1"
+    assert today.attributes["unit_of_measurement"] == "kWh"
+    assert today.attributes["device_class"] == "energy"
+
+    total = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_e_self_consumption_total"))
+    assert total.state == "4207.8"
+    assert total.attributes["unit_of_measurement"] == "kWh"
+
+
+async def test_self_consumption_sensors_absent_when_field_missing(
+    hass, mock_client, mock_config_entry
+):
+    """Three-phase models lack the single-phase-only self-consumption fields, so
+    skip_if_none must drop both sensors rather than orphan them as unavailable."""
+    inv = mock_client.plant.inverter
+    del inv.e_self_consumption_today
+    del inv.e_self_consumption_total
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    assert (
+        registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_self_consumption_today")
+        is None
+    )
+    assert (
+        registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_self_consumption_total")
+        is None
+    )
+
+
 async def test_ac_charge_today_sensor_replaces_load_energy(hass, setup_integration):
     """e_load_day was a mislabel (it's AC charge); the renamed sensor reads it, and
     nothing remains registered under the old unique_id."""
@@ -1677,6 +1714,42 @@ def test_monotonic_never_exposes_negative_baseline(mock_plant, freezer):
     # Negative skew spanning the day boundary: the new-day baseline is floored.
     freezer.tick(24 * 3600)
     assert _read(entity, mock_plant, -1.0) == 0.0
+
+
+def _lifetime_entity(mock_plant):
+    from datetime import timedelta
+
+    from custom_components.givenergy_local.sensor import GivEnergyInverterSensor
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    return GivEnergyInverterSensor(coordinator, _inverter_desc("e_self_consumption_total"))
+
+
+def _read_lifetime(entity, mock_plant, value):
+    mock_plant.inverter.e_self_consumption_total = value
+    return entity.native_value
+
+
+def test_lifetime_monotonic_holds_dip_and_never_resets_at_midnight(mock_plant, freezer):
+    """The lifetime self-consumption clamp is a pure high-water mark: it holds
+    through a battery-to-grid dip AND, unlike the daily clamp, never re-baselines at
+    the day boundary — a midnight dip must not surface as a fake meter reset in HA
+    statistics (#223, Codex review on #227)."""
+    freezer.move_to("2026-06-12 23:55:00+00:00")
+    entity = _lifetime_entity(mock_plant)
+
+    assert _read_lifetime(entity, mock_plant, 4207.8) == 4207.8
+    # Battery exports to grid: the lifetime difference dips — held, not exposed.
+    assert _read_lifetime(entity, mock_plant, 4205.3) == 4207.8
+    # Cross midnight with the dip still present: the daily clamp would re-baseline
+    # to 4205.3 here; the lifetime clamp holds the high-water mark instead.
+    freezer.tick(10 * 60)  # 2026-06-13 00:05
+    assert _read_lifetime(entity, mock_plant, 4205.3) == 4207.8
+    # Genuine growth resumes and is exposed as a plain increase.
+    assert _read_lifetime(entity, mock_plant, 4210.0) == 4210.0
 
 
 def test_monotonic_zero_baseline_small_dip(mock_plant, freezer):
