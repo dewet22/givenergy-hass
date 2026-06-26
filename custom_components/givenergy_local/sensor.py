@@ -806,7 +806,9 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         monotonic=True,
-        value_fn=lambda inv: inv.e_pv_direct_today,
+        # getattr, not direct access: SinglePhaseInverter-only computed field, absent on
+        # the polymorphic ThreePhaseInverter — returns None there, dropped by skip_if_none.
+        value_fn=lambda inv: getattr(inv, "e_pv_direct_today", None),
         skip_if_none=True,
         skip_if_ems=True,
     ),

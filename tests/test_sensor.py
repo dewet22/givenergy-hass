@@ -74,6 +74,30 @@ def test_inverter_value_fns_resolve_against_real_model():
         d.value_fn(inv)
 
 
+def test_inverter_value_fns_resolve_against_three_phase_model():
+    """Companion to test_inverter_value_fns_resolve_against_real_model for the
+    polymorphic three-phase model. Plant.inverter is polymorphic, so every
+    non-single_phase_only value_fn must resolve against a real ThreePhaseInverter
+    too — which lacks the SinglePhaseInverter-only computed fields (e_pv_direct_today,
+    e_self_consumption_*, battery_nominal_*). Regression for e_pv_direct_today using
+    direct attribute access, which raised AttributeError on three-phase startup and
+    tripped the setup filter's field-drift warning on every poll. single_phase_only
+    descriptors are gated out before value_fn on three-phase (see
+    _include_inverter_sensor), so mirror that gate here.
+    """
+    from givenergy_modbus.model.inverter_threephase import ThreePhaseInverter
+
+    inv = ThreePhaseInverter()  # all fields None, like a pre-first-poll model
+    candidates = [d for d in INVERTER_SENSORS if not d.single_phase_only]
+
+    # Mirror the eager setup filter (skip_if_none value_fns evaluated here).
+    [d for d in candidates if not d.skip_if_none or d.value_fn(inv) is not None]
+
+    # And the native_value path for every non-gated sensor must resolve too.
+    for d in candidates:
+        d.value_fn(inv)
+
+
 def test_setup_filter_skips_bad_descriptor_instead_of_crashing():
     """A skip_if_none descriptor whose value_fn raises must be skipped (logged),
     not propagate — so one bad descriptor can't take down the whole platform the
