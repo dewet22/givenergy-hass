@@ -731,7 +731,7 @@ async def test_pv_direct_today_sensor_created(hass, setup_integration):
 async def test_pv_direct_today_absent_when_field_missing(hass, mock_client, mock_config_entry):
     """AC-coupled / non-GEN1 DC units return None for e_pv_direct_today;
     skip_if_none must drop the sensor rather than orphan it as unavailable."""
-    del mock_client.plant.inverter.e_pv_direct_today
+    mock_client.plant.inverter.e_pv_direct_today = None
 
     mock_config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
