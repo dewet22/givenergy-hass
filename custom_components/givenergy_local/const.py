@@ -1,6 +1,9 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
+
+from homeassistant.util import dt as dt_util
 
 DOMAIN = "givenergy_local"
 
@@ -15,6 +18,14 @@ CONF_PASSIVE = "passive"
 # per-unit controls and derived consumption figures are misleading (#95).
 CONF_BATTERY_DATA_ONLY = "battery_data_only"
 DEFAULT_BATTERY_DATA_ONLY = False
+# Raise an HA repair when the inverter's onboard clock drifts more than
+# SYSTEM_TIME_DRIFT_THRESHOLD from HA's time — a drifted clock silently breaks the
+# inverter's own time-of-use slots and Predbat scheduling. Gated by this toggle so
+# users who deliberately run their inverter in another zone (e.g. UTC) can switch it
+# off. See _check_system_time_drift (__init__) and SystemTimeDriftRepairFlow (repairs).
+CONF_WARN_CLOCK_DRIFT = "warn_clock_drift"
+DEFAULT_WARN_CLOCK_DRIFT = True
+SYSTEM_TIME_DRIFT_THRESHOLD = timedelta(minutes=10)
 # Retained only for migrating older config entries — see async_migrate_entry.
 # The current defaults live as constructor defaults on GivEnergyUpdateCoordinator.
 CONF_TIMEOUT_TOLERANCE = "timeout_tolerance"
@@ -125,3 +136,16 @@ def resolve_experimental_client_kwargs(
         for feature in features
         if section.get(feature.conf_key, feature.default)
     }
+
+
+def system_time_drift(system_time: datetime | None, now: datetime) -> timedelta | None:
+    """Absolute drift between the inverter's naive local wall-clock and `now`.
+
+    The inverter reports a timezone-naive local time; interpret it in HA's
+    configured zone (matching the System Time entity's native_value) and compare to
+    `now` (pass dt_util.now()). Returns None when the clock register reads None.
+    """
+    if system_time is None:
+        return None
+    localised = system_time.replace(tzinfo=dt_util.DEFAULT_TIME_ZONE)
+    return abs(localised - now)

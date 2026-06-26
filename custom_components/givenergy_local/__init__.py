@@ -21,7 +21,7 @@ from homeassistant.components.persistent_notification import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.const import __version__ as HA_VERSION
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -33,12 +33,16 @@ from homeassistant.loader import async_get_integration
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    CONF_BATTERY_DATA_ONLY,
     CONF_PASSIVE,
     CONF_RETRIES,
     CONF_SCAN_INTERVAL,
     CONF_TIMEOUT_TOLERANCE,
+    CONF_WARN_CLOCK_DRIFT,
+    DEFAULT_BATTERY_DATA_ONLY,
     DEFAULT_PASSIVE,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_WARN_CLOCK_DRIFT,
     DOMAIN,
     EXPOSE_RECOMMENDED_ENTITY_KEYS,
     PLATFORMS,
@@ -48,7 +52,9 @@ from .const import (
     SERVICE_REBOOT_INVERTER,
     SERVICE_REDETECT_PLANT,
     SERVICE_SET_SYSTEM_DATETIME,
+    SYSTEM_TIME_DRIFT_THRESHOLD,
     resolve_experimental_client_kwargs,
+    system_time_drift,
 )
 from .coordinator import GivEnergyUpdateCoordinator, missing_devices
 from .http import (
@@ -573,6 +579,56 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await hass.config_entries.async_reload(entry.entry_id)
 
 
+@callback
+def _check_system_time_drift(
+    hass: HomeAssistant, entry: ConfigEntry, coordinator: GivEnergyUpdateCoordinator
+) -> None:
+    """Raise/clear a repair when the inverter clock drifts from HA's time (#219).
+
+    Runs each coordinator update (and once at setup). Idempotent: re-raising an
+    existing issue updates it; deleting an absent one is a no-op. Each guard clears
+    any standing issue before returning so a now-resolved condition self-heals.
+    """
+    issue_id = f"system_time_drift_{entry.entry_id}"
+
+    def clear() -> None:
+        ir.async_delete_issue(hass, DOMAIN, issue_id)
+
+    # Opt-out for users who deliberately run the inverter in another zone (e.g. UTC),
+    # and skip battery-data-only entries (no clock surfaced — mirrors datetime setup).
+    if not entry.options.get(CONF_WARN_CLOCK_DRIFT, DEFAULT_WARN_CLOCK_DRIFT):
+        clear()
+        return
+    if entry.options.get(CONF_BATTERY_DATA_ONLY, DEFAULT_BATTERY_DATA_ONLY):
+        clear()
+        return
+
+    system_time = coordinator.data.inverter.system_time
+    now = dt_util.now()
+    drift = system_time_drift(system_time, now)
+    # drift is None when the clock register reads None (transient) — don't fire.
+    if drift is None or drift < SYSTEM_TIME_DRIFT_THRESHOLD:
+        clear()
+        return
+
+    placeholders = {
+        "drift_minutes": str(int(drift.total_seconds() // 60)),
+        "system_time": system_time.strftime("%Y-%m-%d %H:%M"),
+        "ha_time": now.strftime("%Y-%m-%d %H:%M"),
+    }
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=True,
+        is_persistent=False,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="system_time_drift",
+        translation_placeholders=placeholders,
+        data={"entry_id": entry.entry_id, **placeholders},
+    )
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Clear any legacy dashboard_outdated issues left by the now-removed
     # generate_dashboard service so the Repairs UI doesn't show a broken Fix button.
@@ -702,6 +758,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # #95), so the platforms re-enumerate with the new filter. No listener exists
     # otherwise, so an options change would have no effect until a manual reload.
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+
+    # Watch the inverter clock each poll and raise a repair when it drifts (#219).
+    @callback
+    def _system_time_drift_listener() -> None:
+        _check_system_time_drift(hass, entry, coordinator)
+
+    entry.async_on_unload(coordinator.async_add_listener(_system_time_drift_listener))
+    _system_time_drift_listener()  # evaluate immediately rather than after one poll
 
     # Re-point any entities under renamed unique_ids before the platforms create
     # them, so the existing entity (and its history) is reused rather than orphaned.

@@ -21,10 +21,12 @@ from .const import (
     CONF_EXPERIMENTAL,
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
+    CONF_WARN_CLOCK_DRIFT,
     DEFAULT_BATTERY_DATA_ONLY,
     DEFAULT_PASSIVE,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_WARN_CLOCK_DRIFT,
     DOMAIN,
     EXPERIMENTAL_FEATURES,
 )
@@ -169,6 +171,7 @@ class GivEnergyLocalOptionsFlow(OptionsFlow):
             return self.async_create_entry(data=user_input)
         schema_dict: dict[Any, Any] = {
             vol.Required(CONF_BATTERY_DATA_ONLY, default=DEFAULT_BATTERY_DATA_ONLY): bool,
+            vol.Required(CONF_WARN_CLOCK_DRIFT, default=DEFAULT_WARN_CLOCK_DRIFT): bool,
         }
         # Surface the collapsed "Experimental features" group only once at least one
         # flag exists, so the header never appears empty (the registry ships empty).
