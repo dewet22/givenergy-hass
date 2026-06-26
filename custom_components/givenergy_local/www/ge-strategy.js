@@ -363,8 +363,6 @@
     var strings = [a.inv("p_pv1"), a.inv("p_pv2")].filter(Boolean);
     if (strings.length) cfg.solar_strings = strings;
     if (a.inv("grid_power")) cfg.grid = a.inv("grid_power");
-    var load = a.load();
-    if (load) cfg.load = load;
     if (a.inv("p_battery")) cfg.battery_power = a.inv("p_battery");
     if (a.inv("battery_soc")) cfg.battery_soc = a.inv("battery_soc");
 

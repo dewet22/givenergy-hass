@@ -426,7 +426,7 @@ describe("glance mode", () => {
     const c = glanceCard(dash);
     const registry = await regSet(hass);
 
-    const slots = [c.solar, c.grid, c.load, c.battery_power, c.battery_soc]
+    const slots = [c.solar, c.grid, c.battery_power, c.battery_soc]
       .concat(c.solar_strings || [])
       .concat(Object.values(c.totals || {}))
       .concat((c.packs || []).map((p) => p.soc));
@@ -448,13 +448,12 @@ describe("glance mode", () => {
     expect(hasNullEntity(c)).toBe(false);
   });
 
-  it("renders the Glance panel on an EMS plant, with the load tile on the EMS aggregate", async () => {
+  it("renders the Glance panel on an EMS plant", async () => {
     const hass = makeHass({ ems: true });
     const dash = await GE.generateDashboard({ mode: "glance" }, hass);
     expect(titles(dash)).toEqual(["Glance", "Overview", "Energy", "EMS Controls", "Diagnostics"]);
     const gl = view(dash, "Glance").cards[0];
     expect(gl.type).toBe("custom:givenergy-glance");
-    expect(gl.load).toMatch(/_ems_calc_load_power$/);
   });
 });
 
