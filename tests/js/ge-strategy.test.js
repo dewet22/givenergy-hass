@@ -380,11 +380,22 @@ describe("flow mode", () => {
     expect(view(dash, "Flow")).toBeUndefined();
   });
 
-  it("falls back to the classic EMS view set (no Flow panel) for an EMS plant", async () => {
+  it("renders the Flow panel on an EMS plant, with the load node on the EMS aggregate", async () => {
+    // The controller carries real PV/grid/battery telemetry (#206); the load
+    // node uses ems_calc_load_power since p_load_demand is gated off there.
     const hass = makeHass({ ems: true });
     const dash = await GE.generateDashboard({ mode: "flow" }, hass);
-    expect(titles(dash)).toEqual(["Overview", "Energy", "EMS Controls", "Diagnostics"]);
-    expect(view(dash, "Flow")).toBeUndefined();
+    expect(titles(dash)).toEqual(["Flow", "Overview", "Energy", "EMS Controls", "Diagnostics"]);
+    const flow = view(dash, "Flow").cards[0];
+    expect(flow.type).toBe("custom:givenergy-flow");
+    expect(flow.load).toMatch(/_ems_calc_load_power$/);
+    expect(flow.load).not.toMatch(/_p_load_demand$/);
+  });
+
+  it("wires the Flow load node to p_load_demand on a plain (non-EMS) plant", async () => {
+    const hass = makeHass({ batterySerials: ["BAT1"] });
+    const flow = view(await GE.generateDashboard({ mode: "flow" }, hass), "Flow").cards[0];
+    expect(flow.load).toMatch(/_p_load_demand$/);
   });
 });
 
@@ -437,11 +448,13 @@ describe("glance mode", () => {
     expect(hasNullEntity(c)).toBe(false);
   });
 
-  it("falls back to the classic EMS view set (no Glance panel) for an EMS plant", async () => {
+  it("renders the Glance panel on an EMS plant, with the load tile on the EMS aggregate", async () => {
     const hass = makeHass({ ems: true });
     const dash = await GE.generateDashboard({ mode: "glance" }, hass);
-    expect(titles(dash)).toEqual(["Overview", "Energy", "EMS Controls", "Diagnostics"]);
-    expect(view(dash, "Glance")).toBeUndefined();
+    expect(titles(dash)).toEqual(["Glance", "Overview", "Energy", "EMS Controls", "Diagnostics"]);
+    const gl = view(dash, "Glance").cards[0];
+    expect(gl.type).toBe("custom:givenergy-glance");
+    expect(gl.load).toMatch(/_ems_calc_load_power$/);
   });
 });
 
@@ -465,10 +478,20 @@ describe("all mode", () => {
     expect(view(dash, "Analyst").cards[0].type).toBe("custom:givenergy-analyst");
   });
 
-  it("falls back to the classic EMS view set for an EMS plant", async () => {
+  it("restores Glance + Flow on an EMS plant but holds Analyst back", async () => {
+    // Analyst's energy ledger needs daily battery/house figures the controller
+    // doesn't surface (#52), so it stays on its classic fallback on EMS.
     const hass = makeHass({ ems: true });
     const dash = await GE.generateDashboard({ mode: "all" }, hass);
-    expect(titles(dash)).toEqual(["Overview", "Energy", "EMS Controls", "Diagnostics"]);
+    expect(titles(dash)).toEqual([
+      "Glance",
+      "Flow",
+      "Overview",
+      "Energy",
+      "EMS Controls",
+      "Diagnostics",
+    ]);
+    expect(view(dash, "Analyst")).toBeUndefined();
   });
 });
 
