@@ -682,6 +682,43 @@ async def test_house_consumption_total_absent_on_single_phase(hass, setup_integr
     assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_load_total") is None
 
 
+async def test_self_consumption_sensors_created(hass, setup_integration):
+    """Self-consumption today + lifetime total (PV used on-site) surface as kWh
+    energy sensors on a single-phase inverter (#223, givenergy-modbus 2.5.12)."""
+    today = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_e_self_consumption_today"))
+    assert today.state == "9.1"
+    assert today.attributes["unit_of_measurement"] == "kWh"
+    assert today.attributes["device_class"] == "energy"
+
+    total = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_e_self_consumption_total"))
+    assert total.state == "4207.8"
+    assert total.attributes["unit_of_measurement"] == "kWh"
+
+
+async def test_self_consumption_sensors_absent_when_field_missing(
+    hass, mock_client, mock_config_entry
+):
+    """Three-phase models lack the single-phase-only self-consumption fields, so
+    skip_if_none must drop both sensors rather than orphan them as unavailable."""
+    inv = mock_client.plant.inverter
+    del inv.e_self_consumption_today
+    del inv.e_self_consumption_total
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    assert (
+        registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_self_consumption_today")
+        is None
+    )
+    assert (
+        registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_self_consumption_total")
+        is None
+    )
+
+
 async def test_ac_charge_today_sensor_replaces_load_energy(hass, setup_integration):
     """e_load_day was a mislabel (it's AC charge); the renamed sensor reads it, and
     nothing remains registered under the old unique_id."""

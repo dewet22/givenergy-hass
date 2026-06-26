@@ -712,6 +712,46 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
+        # Self-consumption — PV generation used on-site, derived in givenergy-modbus
+        # 2.5.12 as max(0, pv_generation - grid_export) on SinglePhaseInverter only;
+        # skip_if_none drops it on three-phase, which lacks the field (#223).
+        # monotonic=True because it's a difference of two cumulative day counters
+        # (PV today, export today) read with poll skew, and genuinely dips when the
+        # battery exports to grid — either way a TOTAL_INCREASING daily counter must
+        # be clamped against the transient/real decrease (same rationale as House
+        # Consumption Today). The clamp holds the high-water mark, which slightly
+        # overstates self-consumption across a battery-to-grid window; that is the
+        # price of a monotonic Energy-dashboard total and is the library's documented
+        # contract for this field.
+        key="e_self_consumption_today",
+        name="Self Consumption Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        monotonic=True,
+        value_fn=lambda inv: getattr(inv, "e_self_consumption_today", None),
+        skip_if_none=True,
+        # Derived PV-minus-export figure; gate off EMS controllers where the
+        # per-controller derivation isn't validated, mirroring House Consumption
+        # Today (#201/#223). Revisit once confirmed on EMS hardware.
+        skip_if_ems=True,
+    ),
+    GivEnergyInverterSensorDescription(
+        # Lifetime self-consumption (max(0, pv_total - export_total), modbus 2.5.12).
+        # Also a difference of cumulative counters that can transiently dip / decrease
+        # on battery-to-grid export, so it carries the monotonic clamp too — unlike
+        # the single-register e_load_total above, which needs none.
+        key="e_self_consumption_total",
+        name="Self Consumption Total",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        monotonic=True,
+        value_fn=lambda inv: getattr(inv, "e_self_consumption_total", None),
+        skip_if_none=True,
+        skip_if_ems=True,
+    ),
+    GivEnergyInverterSensorDescription(
         # Renamed from "Load Energy Today" / e_load_day (givenergy-modbus #174):
         # IR35 was a GivTCP-era mislabel — it has always been AC charge, not house
         # load. A unique_id migration in __init__.py carries the existing history
