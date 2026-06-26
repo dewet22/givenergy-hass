@@ -353,7 +353,7 @@
   function glanceViews(plant, opts) {
     var a = makeAccessors(plant);
     // The EMS controller carries real PV/grid/battery telemetry (#206), so the
-    // glance panel renders there too; its load tile uses the EMS load aggregate.
+    // glance panel renders there too.
     return [glanceView(plant, a, opts)].concat(classicViews(plant, opts));
   }
 
