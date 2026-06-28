@@ -78,11 +78,12 @@ def _summarize_failures(failures: Iterable[ReadFailure]) -> str:
 # (givenergy-modbus >=2.6) probes each slot 0x33-0x37 individually and
 # CONTINUES past a non-responder (it no longer breaks at the first gap), so
 # this budget is paid once per EMPTY slot on a cold sweep — up to ~5 empty
-# probes on a single-battery system. Retries kept modest (2) to bound that
-# cold-detect cost; the trade-off is slightly less resilience to a transient
-# miss on a real pack (recoverable by re-running detect — see issue #233).
+# probes on a single-battery system. That cost is a rare one-off (the full
+# sweep runs only on first setup, a redetect, or a device-loss confirmation —
+# never on a routine reconnect), so we keep 3 retries: resilience against
+# dropping a real pack matters most exactly at redetect time (see issue #233).
 PROBE_TIMEOUT_SECONDS = 1.0
-PROBE_RETRIES = 2
+PROBE_RETRIES = 3
 
 # When detect() reports a DEVICE LOSS (a previously-known battery/meter/stack
 # stopped answering), re-probe a few times before believing it — a slow BMS
