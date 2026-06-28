@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -56,6 +56,21 @@ _FULL_REFRESH_INTERVAL = 300  # seconds (~5 minutes)
 # warns; the in-between ones drop to DEBUG so a flaky/contended plant doesn't
 # flood the log. The cumulative partial_failures counter/sensor is unaffected.
 _PARTIAL_LOG_EVERY = 20
+
+
+def _summarize_failures(failures: Iterable[ReadFailure]) -> str:
+    """Render dropped reads as e.g. ``IR(60) on device 0x03, HR(2040) on device 0x11``.
+
+    The raw ``ReadFailure`` repr is noisy; this names the register bank and the
+    device address so the failing *leg* (e.g. an EMS controller at 0x11 vs a
+    battery at 0x33) is obvious at a glance in the log.
+    """
+    return ", ".join(
+        f"{'HR' if 'Holding' in f.request_type else 'IR'}({f.base_register})"
+        f" on device 0x{f.device_address:02x}"
+        for f in failures
+    )
+
 
 # Per-slot probe budget for detect()'s peripheral sweep (batteries, meters).
 # More generous than the library defaults (0.5s / 1 retry): the battery sweep
@@ -265,13 +280,8 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                 # tolerance window — unchanged) or a cold start too sparse to set up
                 # at all (no inverter identity → raise → ConfigEntryNotReady, retry).
                 self._record_failure()
-                failure_summary = ", ".join(
-                    f"{'HR' if 'Holding' in f.request_type else 'IR'}({f.base_register})"
-                    f" on device 0x{f.device_address:02x}"
-                    for f in exc.failures
-                )
                 return await self._serve_last_known_or_fail(
-                    f"Partial data on (re)connect seed: {failure_summary}",
+                    f"Partial data on (re)connect seed: {_summarize_failures(exc.failures)}",
                     exc,
                 )
             # Steady state: serve the partial. The dropped device's last-known
@@ -381,20 +391,20 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                 "values for those banks (further partials this run at debug). "
                 "Failures: %s",
                 len(exc.failures),
-                exc.failures,
+                _summarize_failures(exc.failures),
             )
         elif self._consecutive_partials % _PARTIAL_LOG_EVERY == 0:
             _LOGGER.warning(
                 "Partial refresh still occurring (%d consecutive polls); serving "
                 "last-known values. Failures: %s",
                 self._consecutive_partials,
-                exc.failures,
+                _summarize_failures(exc.failures),
             )
         else:
             _LOGGER.debug(
                 "Partial refresh: %d register read(s) failed; serving last-known. Failures: %s",
                 len(exc.failures),
-                exc.failures,
+                _summarize_failures(exc.failures),
             )
 
     def _is_timeout_failure(self, err: RefreshFailed) -> bool:
