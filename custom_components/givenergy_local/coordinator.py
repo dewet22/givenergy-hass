@@ -73,12 +73,16 @@ def _summarize_failures(failures: Iterable[ReadFailure]) -> str:
 
 
 # Per-slot probe budget for detect()'s peripheral sweep (batteries, meters).
-# More generous than the library defaults (0.5s / 1 retry): the battery sweep
-# breaks at the first non-responding slot, so a transiently slow BMS can
-# truncate the whole chain. The break means at most one empty slot is probed,
-# so the extra latency is bounded to ~one slow probe per detect.
+# More generous than the library defaults (0.5s / 1 retry) to resist a
+# transiently-quiet BMS being skipped on a noisy bus. NB the library sweep
+# (givenergy-modbus >=2.6) probes each slot 0x33-0x37 individually and
+# CONTINUES past a non-responder (it no longer breaks at the first gap), so
+# this budget is paid once per EMPTY slot on a cold sweep — up to ~5 empty
+# probes on a single-battery system. Retries kept modest (2) to bound that
+# cold-detect cost; the trade-off is slightly less resilience to a transient
+# miss on a real pack (recoverable by re-running detect — see issue #233).
 PROBE_TIMEOUT_SECONDS = 1.0
-PROBE_RETRIES = 3
+PROBE_RETRIES = 2
 
 # When detect() reports a DEVICE LOSS (a previously-known battery/meter/stack
 # stopped answering), re-probe a few times before believing it — a slow BMS
@@ -526,15 +530,14 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             await self._client.connect()
             topology_confirmed = True
             try:
-                # The library's battery sweep probes additional packs (0x33+) with a
-                # stingy default budget (probe_timeout=0.5s, probe_retries=1) and
-                # BREAKS at the first non-responding slot — so a single transiently
-                # slow BMS during a reconnect truncates the whole battery chain, and
-                # that reduced topology then gets persisted (a 2nd battery silently
-                # vanished after a reconnect this way). Because of the break, a detect
-                # probes at most one empty slot, so a generous probe budget costs only
-                # ~one extra slow probe on a cold sweep — cheap insurance against
-                # dropping a real pack.
+                # The library's battery sweep probes each pack slot (0x33-0x37)
+                # individually, continuing past a non-responder (givenergy-modbus
+                # >=2.6; it no longer breaks at the first gap). A transiently-quiet
+                # BMS during a reconnect can still be skipped for that one sweep,
+                # and the reduced topology then gets persisted (a 2nd battery
+                # silently vanished after a reconnect this way) — so we pass a more
+                # generous per-slot budget (see PROBE_* above) as insurance against
+                # dropping a real pack on a noisy bus.
                 await self._client.detect(
                     prior=self._prior_capabilities,
                     probe_timeout=PROBE_TIMEOUT_SECONDS,
