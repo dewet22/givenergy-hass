@@ -17,6 +17,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.givenergy_local import (
     _STRATEGY_URL,
     _STRATEGY_VERSION,
+    async_remove_entry,
     async_setup,
 )
 from custom_components.givenergy_local.const import (
@@ -206,6 +207,18 @@ async def test_redetect_plant_service_clears_cache_and_reloads(
     store_factory.assert_called_with(hass, setup_integration.entry_id)
     fake_store.async_remove.assert_awaited_once()
     reload_mock.assert_called_with(setup_integration.entry_id)
+
+
+async def test_async_remove_entry_clears_capabilities_cache(hass, mock_config_entry):
+    """Deleting a config entry discards its cached capabilities Store file — HA does
+    not clean integration Store data on entry removal, so the integration must."""
+    fake_store = AsyncMock()
+    with patch(
+        "custom_components.givenergy_local._capabilities_store", return_value=fake_store
+    ) as store_factory:
+        await async_remove_entry(hass, mock_config_entry)
+    store_factory.assert_called_once_with(hass, mock_config_entry.entry_id)
+    fake_store.async_remove.assert_awaited_once()
 
 
 async def test_set_system_datetime_service_sends_command(hass, mock_client, setup_integration):
