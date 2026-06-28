@@ -14,6 +14,7 @@ from givenergy_modbus.model.inverter import (
     MeterType,
     Model,
     SinglePhaseInverter,
+    Status,
 )
 from givenergy_modbus.model.plant import PlantCapabilities
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -258,6 +259,55 @@ def mock_config_entry() -> MockConfigEntry:
 
 @pytest.fixture
 async def setup_integration(hass, mock_client, mock_config_entry):
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    return mock_config_entry
+
+
+@pytest.fixture
+def mock_ems() -> MagicMock:
+    """An EMS plant controller, with the slot/target/aggregate surface the EMS
+    platforms read. The shared fixtures default `plant.ems` to None; override with
+    this and set `mock_inverter.model = Model.EMS` to present as an EMS plant."""
+    ems = MagicMock()
+    ems.charge_slot_1 = TimeSlot.from_components(2, 0, 5, 0)
+    ems.charge_slot_2 = None
+    ems.charge_slot_3 = None
+    ems.discharge_slot_1 = TimeSlot.from_components(17, 0, 19, 0)
+    ems.discharge_slot_2 = None
+    ems.discharge_slot_3 = None
+    ems.export_slot_1 = TimeSlot.from_components(10, 0, 16, 0)
+    ems.export_slot_2 = None
+    ems.export_slot_3 = None
+    ems.charge_target_1 = 80
+    ems.charge_target_2 = 100
+    ems.charge_target_3 = 100
+    ems.discharge_target_1 = 20
+    ems.discharge_target_2 = 4
+    ems.discharge_target_3 = 4
+    ems.export_target_1 = 100
+    ems.export_target_2 = 4
+    ems.export_target_3 = 4
+    ems.export_power_limit = 3600
+    ems.plant_enabled = True
+    ems.managed_inverters = []
+    # Plant-level aggregate telemetry (#201) surfaced as EMS_SENSORS.
+    ems.ems_status = Status.NORMAL
+    ems.inverter_count = 2
+    ems.calc_load_power = 1234
+    ems.measured_load_power = 1300
+    ems.grid_meter_power = -500
+    ems.total_battery_power = 800
+    ems.remaining_battery_wh = 5000
+    return ems
+
+
+@pytest.fixture
+async def ems_setup(hass, mock_client, mock_plant, mock_inverter, mock_ems, mock_config_entry):
+    """Set up the integration with the plant presenting as an EMS."""
+    mock_plant.ems = mock_ems
+    mock_inverter.model = Model.EMS  # an EMS plant's controller decodes as Model.EMS
     mock_config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(mock_config_entry.entry_id)
     await hass.async_block_till_done()

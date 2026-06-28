@@ -121,6 +121,17 @@ async def _save_capabilities(
     await _capabilities_store(hass, entry_id).async_save(capabilities.to_dict())
 
 
+async def _redetect_plant_entry(hass: HomeAssistant, entry_id: str) -> None:
+    """Discard an entry's cached topology and reload it — a cold re-detect.
+
+    Shared by the `redetect_plant` service and the Re-detect Plant button: with no
+    prior on disk the next setup_entry runs a full `detect()` sweep, which is the
+    "I changed the hardware (added/recovered a battery), please rediscover" path.
+    """
+    await _capabilities_store(hass, entry_id).async_remove()
+    hass.config_entries.async_schedule_reload(entry_id)
+
+
 # Callers may identify the target inverter by HA-assigned device_id (convenient
 # in the Settings → Services UI) OR by inverter serial (convenient in dashboards
 # and automations that only know the serial). Exactly one must be supplied.
@@ -951,8 +962,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             target_entry_id, err = _resolve_target(hass, call.data)
             if err or target_entry_id is None:
                 raise HomeAssistantError(err or "Could not resolve target entry")
-            await _capabilities_store(hass, target_entry_id).async_remove()
-            hass.config_entries.async_schedule_reload(target_entry_id)
+            await _redetect_plant_entry(hass, target_entry_id)
 
         async def handle_expose_recommended_entities(call: ServiceCall) -> None:
             # Mirrors the dashboard generator's UX: a one-shot service that
@@ -1057,3 +1067,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, SERVICE_EXPOSE_RECOMMENDED_ENTITIES)
 
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Discard the entry's cached plant-capabilities store when it is deleted.
+
+    HA does not auto-remove an integration's `Store` data on config-entry
+    deletion, so without this a delete-then-re-add (or a leftover after an
+    uninstall) would orphan the `.storage` capabilities file. The cache is keyed
+    by entry_id, so a re-added entry gets a fresh id and a cold detect() either
+    way — this is housekeeping, not a behaviour change.
+    """
+    await _capabilities_store(hass, entry.entry_id).async_remove()
