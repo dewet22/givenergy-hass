@@ -9,6 +9,7 @@ from homeassistant.const import CONF_HOST, CONF_PORT
 from custom_components.givenergy_local.const import (
     CONF_BATTERY_DATA_ONLY,
     CONF_EXPERIMENTAL,
+    CONF_EXPOSE_PER_CELL,
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
     CONF_WARN_CLOCK_DRIFT,
@@ -58,7 +59,9 @@ async def test_setup_with_battery_data_only_sets_option(hass, mock_client):
     await hass.async_block_till_done()
 
     assert result["type"] == "create_entry"
-    assert result["options"] == {CONF_BATTERY_DATA_ONLY: True}
+    # New installs also default per-cell exposure OFF (roll-ups only), written
+    # explicitly so reads don't fall through to the legacy default-on (#179).
+    assert result["options"] == {CONF_BATTERY_DATA_ONLY: True, CONF_EXPOSE_PER_CELL: False}
     assert CONF_BATTERY_DATA_ONLY not in result["data"]
     assert result["data"] == VALID_USER_INPUT
 
@@ -243,6 +246,33 @@ async def test_options_flow_sets_battery_data_only(hass, mock_client, setup_inte
     assert setup_integration.options[CONF_BATTERY_DATA_ONLY] is True
     # The update listener reloaded the entry, so it's loaded and serving again.
     assert setup_integration.state is config_entries.ConfigEntryState.LOADED
+
+
+async def test_options_flow_expose_per_cell_defaults_on_for_legacy_entry(
+    hass, mock_client, setup_integration
+):
+    """A legacy entry has no expose_per_cell key, so the options form renders the
+    toggle defaulted ON — saving without touching it preserves the existing
+    per-cell entities rather than silently dropping them (#179)."""
+    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    assert CONF_EXPOSE_PER_CELL in {marker.schema for marker in result["data_schema"].schema}
+
+    # Omitting the field lets the vol.Required(default=True) fill in True.
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_BATTERY_DATA_ONLY: False}
+    )
+    await hass.async_block_till_done()
+    assert setup_integration.options[CONF_EXPOSE_PER_CELL] is True
+
+
+async def test_options_flow_expose_per_cell_persists_off(hass, mock_client, setup_integration):
+    """Turning per-cell exposure off persists False (and reloads the entry)."""
+    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_BATTERY_DATA_ONLY: False, CONF_EXPOSE_PER_CELL: False}
+    )
+    await hass.async_block_till_done()
+    assert setup_integration.options[CONF_EXPOSE_PER_CELL] is False
 
 
 async def test_options_flow_warn_clock_drift_renders_and_persists(

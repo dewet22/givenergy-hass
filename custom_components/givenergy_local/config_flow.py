@@ -19,6 +19,7 @@ from homeassistant.data_entry_flow import SectionConfig, section
 from .const import (
     CONF_BATTERY_DATA_ONLY,
     CONF_EXPERIMENTAL,
+    CONF_EXPOSE_PER_CELL,
     CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
     CONF_WARN_CLOCK_DRIFT,
@@ -80,7 +81,13 @@ class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(
                     title=f"GivEnergy {serial}",
                     data=user_input,
-                    options={CONF_BATTERY_DATA_ONLY: battery_data_only},
+                    # New installs default per-cell exposure OFF (roll-ups only).
+                    # Existing installs have no key, so reads fall back to True and
+                    # keep their per-cell entities — see CONF_EXPOSE_PER_CELL.
+                    options={
+                        CONF_BATTERY_DATA_ONLY: battery_data_only,
+                        CONF_EXPOSE_PER_CELL: False,
+                    },
                 )
 
         return self.async_show_form(
@@ -172,6 +179,10 @@ class GivEnergyLocalOptionsFlow(OptionsFlow):
         schema_dict: dict[Any, Any] = {
             vol.Required(CONF_BATTERY_DATA_ONLY, default=DEFAULT_BATTERY_DATA_ONLY): bool,
             vol.Required(CONF_WARN_CLOCK_DRIFT, default=DEFAULT_WARN_CLOCK_DRIFT): bool,
+            # Default True so an existing entry (which has no key) renders as on and
+            # saving preserves its per-cell entities; new entries carry an explicit
+            # False from config-flow creation, surfaced via add_suggested_values.
+            vol.Required(CONF_EXPOSE_PER_CELL, default=True): bool,
         }
         # Surface the collapsed "Experimental features" group only once at least one
         # flag exists, so the header never appears empty (the registry ships empty).

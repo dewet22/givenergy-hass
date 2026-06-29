@@ -26,6 +26,13 @@ DEFAULT_BATTERY_DATA_ONLY = False
 CONF_WARN_CLOCK_DRIFT = "warn_clock_drift"
 DEFAULT_WARN_CLOCK_DRIFT = True
 SYSTEM_TIME_DRIFT_THRESHOLD = timedelta(minutes=10)
+# Create the individual per-cell voltage/temperature entities for every battery
+# module (LV pack, AIO module, HV BMU). A 6-module HV stack is ~288 per-cell
+# entities, so new installs default OFF (roll-ups only). The default is
+# intentionally ASYMMETRIC and has no DEFAULT_ constant: existing installs have
+# no option key, so reads fall back to True (preserve their per-cell entities),
+# while new entries get False written explicitly at config-flow creation.
+CONF_EXPOSE_PER_CELL = "expose_per_cell"
 # Retained only for migrating older config entries — see async_migrate_entry.
 # The current defaults live as constructor defaults on GivEnergyUpdateCoordinator.
 CONF_TIMEOUT_TOLERANCE = "timeout_tolerance"

@@ -17,10 +17,12 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.givenergy_local import (
     _STRATEGY_URL,
     _STRATEGY_VERSION,
+    _reconcile_per_cell_entities,
     async_remove_entry,
     async_setup,
 )
 from custom_components.givenergy_local.const import (
+    CONF_EXPOSE_PER_CELL,
     CONF_RETRIES,
     CONF_TIMEOUT_TOLERANCE,
     DOMAIN,
@@ -1074,3 +1076,47 @@ def test_resolve_bool_feature_defaults_client_value_true():
     assert resolve_experimental_client_kwargs(
         {CONF_EXPERIMENTAL: {"demo": True}}, features=(feat,)
     ) == {"demo_kwarg": True}
+
+
+async def test_reconcile_per_cell_entities_removes_cells_when_disabled(hass):
+    """With per-cell exposure off, the reconcile removes the individual cell rows a
+    prior version / opt-in created, keeping the roll-ups and aggregates (#179)."""
+    entry = MockConfigEntry(
+        domain=DOMAIN, options={CONF_EXPOSE_PER_CELL: False}, unique_id="SA1234G123"
+    )
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    seeded = (
+        "BT1234A001_v_cell_01",  # LV per-cell → removed
+        "BT1234A001_t_cells_01_04",  # LV grouped temp → removed
+        "HV2301A001_t_cell_05",  # HV/AIO per-cell → removed
+        "BT1234A001_cell_voltage_min",  # roll-up → kept
+        "BT1234A001_v_cells_sum",  # aggregate → kept
+        "SA1234G123_battery_soc",  # unrelated → kept
+    )
+    for unique_id in seeded:
+        registry.async_get_or_create("sensor", DOMAIN, unique_id, config_entry=entry)
+
+    _reconcile_per_cell_entities(hass, entry)
+
+    def _present(uid: str) -> bool:
+        return registry.async_get_entity_id("sensor", DOMAIN, uid) is not None
+
+    assert not _present("BT1234A001_v_cell_01")
+    assert not _present("BT1234A001_t_cells_01_04")
+    assert not _present("HV2301A001_t_cell_05")
+    assert _present("BT1234A001_cell_voltage_min")
+    assert _present("BT1234A001_v_cells_sum")
+    assert _present("SA1234G123_battery_soc")
+
+
+async def test_reconcile_per_cell_entities_keeps_cells_when_enabled(hass):
+    """With the option absent (legacy ⇒ on) the reconcile is a no-op."""
+    entry = MockConfigEntry(domain=DOMAIN, options={}, unique_id="SA1234G123")
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    registry.async_get_or_create("sensor", DOMAIN, "BT1234A001_v_cell_01", config_entry=entry)
+
+    _reconcile_per_cell_entities(hass, entry)
+
+    assert registry.async_get_entity_id("sensor", DOMAIN, "BT1234A001_v_cell_01") is not None

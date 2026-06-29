@@ -10,11 +10,18 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 
-from custom_components.givenergy_local.const import CONF_BATTERY_DATA_ONLY, DOMAIN
+from custom_components.givenergy_local.const import (
+    CONF_BATTERY_DATA_ONLY,
+    CONF_EXPOSE_PER_CELL,
+    DOMAIN,
+)
 from custom_components.givenergy_local.sensor import (
-    AIO_MODULE_SENSORS,
+    AIO_MODULE_CELL_SENSORS,
+    BATTERY_CELL_SENSORS,
     BATTERY_SENSORS,
     COORDINATOR_SENSORS,
+    HV_MODULE_CELL_SENSORS,
+    HV_MODULE_SENSORS,
     HV_STACK_SENSORS,
     INVERTER_SENSORS,
     GivEnergyInverterSensorDescription,
@@ -222,9 +229,17 @@ async def test_expected_sensor_count(hass, setup_integration):
     registry = er.async_get(hass)
     entries = er.async_entries_for_config_entry(registry, setup_integration.entry_id)
     sensors = [e for e in entries if e.domain == "sensor"]
-    # 1 battery → inverter sensors + battery sensors + coordinator diagnostics,
-    # minus e_load_total which only exists on three-phase models (#154).
-    expected = len(INVERTER_SENSORS) + len(BATTERY_SENSORS) + len(COORDINATOR_SENSORS) - 1
+    # 1 battery → inverter sensors + battery aggregates + per-cell entities
+    # (created by default — the test entry has no expose_per_cell key, so it
+    # resolves on) + coordinator diagnostics, minus e_load_total which only
+    # exists on three-phase models (#154).
+    expected = (
+        len(INVERTER_SENSORS)
+        + len(BATTERY_SENSORS)
+        + len(BATTERY_CELL_SENSORS)
+        + len(COORDINATOR_SENSORS)
+        - 1
+    )
     assert len(sensors) == expected
 
 
@@ -1128,7 +1143,7 @@ async def test_non_aio_plant_creates_no_module_entities(hass, setup_integration)
 def test_aio_module_sensor_descriptions_cover_expected_cells():
     """Exactly v_cell_01..24 and t_cell_01..12 — exact sets, so a shifted or
     missing index is caught, not just a matching count."""
-    keys = [d.key for d in AIO_MODULE_SENSORS]
+    keys = [d.key for d in AIO_MODULE_CELL_SENSORS]
     assert len(keys) == len(set(keys))
     assert {k for k in keys if k.startswith("v_cell_")} == {f"v_cell_{i:02d}" for i in range(1, 25)}
     assert {k for k in keys if k.startswith("t_cell_")} == {f"t_cell_{i:02d}" for i in range(1, 13)}
@@ -1163,10 +1178,26 @@ def _mock_bcu(version: str = "GA000009", **overrides) -> MagicMock:
     return bcu
 
 
-def _mock_hv_stack(address: int, bcu: MagicMock) -> MagicMock:
+def _mock_bmu(serial: str = "HV2301A001", bmu_index: int = 0) -> MagicMock:
+    """A stand-in HV module (BMU) with a voltage/temperature gradient across its
+    24 cells, so min/max/delta roll-ups have distinct, checkable values."""
+    bmu = MagicMock()
+    bmu.serial_number = serial
+    bmu.is_valid.return_value = bool(serial.strip())
+    bmu.bmu_index = bmu_index
+    for i in range(1, 25):
+        setattr(bmu, f"v_cell_{i:02d}", round(3.300 + i * 0.001, 3))  # 3.301..3.324
+        setattr(bmu, f"t_cell_{i:02d}", round(35.0 + i * 0.1, 1))  # 35.1..37.4
+    return bmu
+
+
+def _mock_hv_stack(address: int, bcu: MagicMock, bmus: list[MagicMock] | None = None) -> MagicMock:
     stack = MagicMock()
     stack.device_address = address
     stack.bcu = bcu
+    # Explicit list (not the auto-mock) so the per-module loop iterates a known
+    # set — defaults to no modules, matching the pre-#179 stack-only tests.
+    stack.bmus = bmus if bmus is not None else []
     return stack
 
 
@@ -1681,7 +1712,7 @@ def test_battery_sensor_available_when_index_out_of_range(mock_plant):
 
 
 def _aio_desc(key: str):
-    return next(d for d in AIO_MODULE_SENSORS if d.key == key)
+    return next(d for d in AIO_MODULE_CELL_SENSORS if d.key == key)
 
 
 def test_aio_module_sensor_unavailable_when_backing_ir_block_stale(mock_plant):
@@ -2137,3 +2168,130 @@ async def test_monotonic_restore_skips_unusable_states(hass, mock_plant):
     )
     await entity.async_added_to_hass()
     assert entity._monotonic_max is None
+
+
+# ---------------------------------------------------------------------------
+# HV per-module (BMU) sensors + per-cell exposure option (#179)
+# ---------------------------------------------------------------------------
+
+
+async def _setup_hv_with_modules(
+    hass,
+    mock_client,
+    *,
+    expose_per_cell: bool | None = None,
+    serials: tuple[str, ...] = ("HV2301A001", "HV2301A002"),
+):
+    """Set up an HV plant with one stack carrying `serials` modules. When
+    `expose_per_cell` is None the entry has no option key (legacy default)."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    bmus = [_mock_bmu(serial=s, bmu_index=i) for i, s in enumerate(serials)]
+    _setup_hv_plant(mock_client, [_mock_hv_stack(0x70, _mock_bcu(), bmus=bmus)])
+    options = {} if expose_per_cell is None else {CONF_EXPOSE_PER_CELL: expose_per_cell}
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "192.168.1.100", "port": 8899, "scan_interval": 30, "passive": False},
+        options=options,
+        unique_id="SA1234G123",
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
+def _sensor_uids(hass, entry, prefix: str = "") -> set[str]:
+    registry = er.async_get(hass)
+    return {
+        e.unique_id
+        for e in er.async_entries_for_config_entry(registry, entry.entry_id)
+        if e.domain == "sensor" and (not prefix or e.unique_id.startswith(prefix))
+    }
+
+
+async def test_hv_modules_create_device_per_module_nested_under_stack(hass, mock_client):
+    """Each BMU is its own device, parented to its HV-stack device, carrying the
+    roll-up sensors."""
+    entry = await _setup_hv_with_modules(hass, mock_client, expose_per_cell=False)
+    dev_registry = dr.async_get(hass)
+    module_dev = dev_registry.async_get_device(identifiers={(DOMAIN, "HV2301A001")})
+    stack_dev = dev_registry.async_get_device(identifiers={(DOMAIN, "SA1234G123_hvstack_0x70")})
+    assert module_dev is not None and stack_dev is not None
+    assert module_dev.via_device_id == stack_dev.id
+    rollups = _sensor_uids(hass, entry, "HV2301A")
+    assert "HV2301A001_cell_voltage_min" in rollups
+    assert "HV2301A001_cell_voltage_delta" in rollups
+    assert len(rollups) == 2 * len(HV_MODULE_SENSORS)
+
+
+async def test_hv_module_rollup_values(hass, mock_client):
+    """min/max/delta voltage + min temp are reduced from the module's own cells."""
+    await _setup_hv_with_modules(hass, mock_client, expose_per_cell=False, serials=("HV2301A001",))
+    vmin = hass.states.get(_entity_id(hass, "sensor", "HV2301A001_cell_voltage_min"))
+    vmax = hass.states.get(_entity_id(hass, "sensor", "HV2301A001_cell_voltage_max"))
+    vdelta = hass.states.get(_entity_id(hass, "sensor", "HV2301A001_cell_voltage_delta"))
+    tmin = hass.states.get(_entity_id(hass, "sensor", "HV2301A001_cell_temperature_min"))
+    assert float(vmin.state) == 3.301
+    assert float(vmax.state) == 3.324
+    assert round(float(vdelta.state), 3) == 0.023
+    assert float(tmin.state) == 35.1
+
+
+async def test_hv_module_per_cell_present_when_enabled(hass, mock_client):
+    entry = await _setup_hv_with_modules(
+        hass, mock_client, expose_per_cell=True, serials=("HV2301A001",)
+    )
+    ids = _sensor_uids(hass, entry, "HV2301A")
+    assert "HV2301A001_v_cell_01" in ids
+    assert "HV2301A001_t_cell_24" in ids
+    assert len(ids) == len(HV_MODULE_SENSORS) + len(HV_MODULE_CELL_SENSORS)
+
+
+async def test_hv_module_per_cell_absent_when_disabled(hass, mock_client):
+    entry = await _setup_hv_with_modules(
+        hass, mock_client, expose_per_cell=False, serials=("HV2301A001",)
+    )
+    ids = _sensor_uids(hass, entry, "HV2301A")
+    assert not any("_v_cell_" in u or "_t_cell_" in u for u in ids)
+    assert "HV2301A001_cell_voltage_min" in ids  # roll-ups stay
+
+
+def test_hv_module_cell_descriptions_cover_expected_cells():
+    keys = [d.key for d in HV_MODULE_CELL_SENSORS]
+    assert len(keys) == len(set(keys))
+    assert {k for k in keys if k.startswith("v_cell_")} == {f"v_cell_{i:02d}" for i in range(1, 25)}
+    assert {k for k in keys if k.startswith("t_cell_")} == {f"t_cell_{i:02d}" for i in range(1, 25)}
+
+
+async def _setup_lv_with_option(hass, expose_per_cell: bool | None):
+    """Set up the default (LV) plant with an explicit / absent per-cell option."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    options = {} if expose_per_cell is None else {CONF_EXPOSE_PER_CELL: expose_per_cell}
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"host": "192.168.1.100", "port": 8899, "scan_interval": 30, "passive": False},
+        options=options,
+        unique_id="SA1234G123",
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
+async def test_lv_per_cell_absent_when_disabled(hass, mock_client):
+    """The global option suppresses the LV pack's individual cells but keeps the
+    aggregates (the per-cell split is not a regression for the rest)."""
+    entry = await _setup_lv_with_option(hass, expose_per_cell=False)
+    uids = _sensor_uids(hass, entry)
+    assert not any("_v_cell_" in u or "_t_cells_" in u for u in uids)
+    assert any(u.endswith("_v_cells_sum") for u in uids)
+
+
+async def test_lv_per_cell_present_when_option_absent(hass, mock_client):
+    """A legacy entry with no option key keeps its per-cell entities (default on)."""
+    entry = await _setup_lv_with_option(hass, expose_per_cell=None)
+    uids = _sensor_uids(hass, entry)
+    assert any("_v_cell_" in u for u in uids)

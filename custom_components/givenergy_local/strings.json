@@ -41,7 +41,11 @@
         "description": "Battery-data-only mode suppresses all control entities and inverter-level system sensors (PV, grid, load, derived consumption), leaving only the battery pack, HV stack, AIO module, and diagnostic data. Use this when this unit is controlled by a Gateway in a parallel group, where its per-unit controls and derived figures are misleading.",
         "data": {
           "battery_data_only": "Battery data only (suppress controls and system sensors)",
-          "warn_clock_drift": "Warn when the inverter clock drifts from Home Assistant"
+          "warn_clock_drift": "Warn when the inverter clock drifts from Home Assistant",
+          "expose_per_cell": "Expose per-cell battery details"
+        },
+        "data_description": {
+          "expose_per_cell": "Create an entity for every individual cell voltage and temperature on each battery pack, AIO module, and HV module. This can be a large number of entities (a six-module HV stack is roughly 288), so it is off by default on new installs — the per-module min/max/delta roll-ups are always available regardless. Existing installations keep their per-cell entities unless you turn this off."
         },
         "sections": {
           "experimental": {
