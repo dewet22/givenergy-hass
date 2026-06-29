@@ -155,16 +155,18 @@ def _hv_module_attr(name: str) -> Callable[[Bmu], Any]:
 
 
 def _present_cells(obj: Any, prefix: str, count: int) -> list[Any]:
-    """Non-zero, non-None cell readings `prefix_01`..`prefix_{count}` off `obj`.
+    """Non-None cell readings `prefix_01`..`prefix_{count}` off `obj`.
 
-    Unused cells in a partially-populated pack read ~0, so they're excluded from
-    the roll-ups below rather than dragging the min to zero. Values come off the
-    model via getattr, so they're typed Any like the other value_fns here.
+    Voltage cells reading 0 V mark unused slots in a partially-populated pack
+    (real cells are ~3.3 V) and are excluded so the roll-ups aren't dragged to 0.
+    Temperature cells reading 0 °C are a legitimate reading in cold conditions and
+    are kept. Values come off the model via getattr, typed Any like other value_fns.
     """
     return [
         v
         for i in range(1, count + 1)
-        if (v := getattr(obj, f"{prefix}_{i:02d}", None)) not in (None, 0)
+        if (v := getattr(obj, f"{prefix}_{i:02d}", None)) is not None
+        and not (v == 0 and prefix.startswith("v_"))
     ]
 
 
@@ -2006,6 +2008,11 @@ async def async_setup_entry(
     # is its own device, parented to the inverter, identified by the inverter
     # serial + the stack's fixed device address (the BCU carries no serial of its
     # own). A stack whose BCU didn't decode is skipped, mirroring the AIO loop.
+    # seen_bmu_serials is scoped outside the stack loop so a garbled serial that
+    # appears in more than one stack's BMU list is still caught — an in-stack set
+    # would pass through the same serial a second time on the next stack and
+    # collide on unique_id (and cross-wire _bmu() resolution).
+    seen_bmu_serials: set[str] = set()
     for stack_index, stack in enumerate(coordinator.data.hv_stacks):
         if not stack.bcu.is_valid():
             continue
@@ -2015,9 +2022,7 @@ async def async_setup_entry(
         )
         # HV per-module (BMU) devices (#179), nested under the stack. Roll-ups are
         # always created; the 24+24 per-cell entities are gated behind
-        # expose_per_cell. Dedup by serial like the AIO loop — a placeholder or
-        # repeated read would otherwise collide on unique_id.
-        seen_bmu_serials: set[str] = set()
+        # expose_per_cell. Dedup by serial (cross-stack — see seen_bmu_serials above).
         for bmu_index, bmu in enumerate(stack.bmus):
             if not bmu.is_valid():
                 continue
