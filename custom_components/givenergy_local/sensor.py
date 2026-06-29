@@ -160,7 +160,9 @@ def _present_cells(obj: Any, prefix: str, count: int) -> list[Any]:
     Unused/unscanned cell slots read exactly 0 — for both voltages (~3.3 V when
     real) and temperatures. An exact-0 temperature is not a plausible real-world
     reading: these packs self-heat and operate above 0 °C even on the coldest
-    winter nights, so 0 is a reliable "not populated" sentinel for both types.
+    winter nights. The co-occurrence of non-zero temperatures on other cells in
+    the same module confirms the zero is a "not populated" sentinel rather than a
+    legitimate cold reading, making it safe to exclude for both types.
     Values come off the model via getattr, typed Any like other value_fns.
     """
     return [
