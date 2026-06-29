@@ -155,18 +155,18 @@ def _hv_module_attr(name: str) -> Callable[[Bmu], Any]:
 
 
 def _present_cells(obj: Any, prefix: str, count: int) -> list[Any]:
-    """Non-None cell readings `prefix_01`..`prefix_{count}` off `obj`.
+    """Non-zero, non-None cell readings `prefix_01`..`prefix_{count}` off `obj`.
 
-    Voltage cells reading 0 V mark unused slots in a partially-populated pack
-    (real cells are ~3.3 V) and are excluded so the roll-ups aren't dragged to 0.
-    Temperature cells reading 0 °C are a legitimate reading in cold conditions and
-    are kept. Values come off the model via getattr, typed Any like other value_fns.
+    Unused/unscanned cell slots read exactly 0 — for both voltages (~3.3 V when
+    real) and temperatures. An exact-0 temperature is not a plausible real-world
+    reading: these packs self-heat and operate above 0 °C even on the coldest
+    winter nights, so 0 is a reliable "not populated" sentinel for both types.
+    Values come off the model via getattr, typed Any like other value_fns.
     """
     return [
         v
         for i in range(1, count + 1)
-        if (v := getattr(obj, f"{prefix}_{i:02d}", None)) is not None
-        and not (v == 0 and prefix.startswith("v_"))
+        if (v := getattr(obj, f"{prefix}_{i:02d}", None)) not in (None, 0)
     ]
 
 
