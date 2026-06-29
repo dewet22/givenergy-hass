@@ -10,7 +10,7 @@ from givenergy_modbus.model.aio_battery import AioBatteryModule
 from givenergy_modbus.model.battery import Battery, BatteryMaintenance
 from givenergy_modbus.model.devices import InverterSummary
 from givenergy_modbus.model.ems import Ems
-from givenergy_modbus.model.hv_bcu import Bcu, HvStack
+from givenergy_modbus.model.hv_bcu import Bcu, Bmu, HvStack
 from givenergy_modbus.model.inverter import (
     BatteryCalibrationStage,
     BatteryType,
@@ -46,7 +46,12 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .const import CONF_BATTERY_DATA_ONLY, DEFAULT_BATTERY_DATA_ONLY, DOMAIN
+from .const import (
+    CONF_BATTERY_DATA_ONLY,
+    CONF_EXPOSE_PER_CELL,
+    DEFAULT_BATTERY_DATA_ONLY,
+    DOMAIN,
+)
 from .coordinator import GivEnergyUpdateCoordinator, InverterModel
 
 _LOGGER = logging.getLogger(__name__)
@@ -133,6 +138,48 @@ def _bcu_attr(name: str) -> Callable[[Bcu], Any]:
     guaranteed present by the pinned givenergy-modbus model.
     """
     return lambda bcu: getattr(bcu, name)
+
+
+@dataclass(frozen=True, kw_only=True)
+class GivEnergyHvModuleSensorDescription(SensorEntityDescription):
+    value_fn: Callable[[Bmu], Any] = field(default=lambda _: None)
+
+
+def _hv_module_attr(name: str) -> Callable[[Bmu], Any]:
+    """Return a value_fn that reads `name` off an HV battery module (BMU).
+
+    Per-module counterpart of `_module_attr` for the bulk-defined per-cell
+    entities so each closure captures its own attribute name.
+    """
+    return lambda bmu: getattr(bmu, name)
+
+
+def _present_cells(obj: Any, prefix: str, count: int) -> list[Any]:
+    """Non-zero, non-None cell readings `prefix_01`..`prefix_{count}` off `obj`.
+
+    Unused cells in a partially-populated pack read ~0, so they're excluded from
+    the roll-ups below rather than dragging the min to zero. Values come off the
+    model via getattr, so they're typed Any like the other value_fns here.
+    """
+    return [
+        v
+        for i in range(1, count + 1)
+        if (v := getattr(obj, f"{prefix}_{i:02d}", None)) not in (None, 0)
+    ]
+
+
+def _cell_rollup(prefix: str, count: int, fn: Callable[[list[Any]], Any]) -> Callable[[Any], Any]:
+    """A value_fn reducing the present `prefix` cells via `fn` (min/max/spread).
+
+    Returns None when no cell has a usable reading, so the entity reports
+    `unknown` rather than a misleading 0.
+    """
+
+    def value(obj: Any) -> float | None:
+        cells = _present_cells(obj, prefix, count)
+        return fn(cells) if cells else None
+
+    return value
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1249,6 +1296,13 @@ BATTERY_SENSORS: tuple[GivEnergyBatterySensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_battery_hex("usb_device_inserted", width=4),
     ),
+)
+
+
+# Individual LV per-cell voltage/temperature entities, split out of
+# BATTERY_SENSORS so they can be gated behind CONF_EXPOSE_PER_CELL. DIAGNOSTIC,
+# and enabled when created (opting in IS the enable).
+BATTERY_CELL_SENSORS: tuple[GivEnergyBatterySensorDescription, ...] = (
     # Per-cell voltages — 16 entities; unused cells in smaller packs read ~0.
     # `attr` default-arg captures the loop variable to avoid the closure trap.
     *(
@@ -1281,12 +1335,67 @@ BATTERY_SENSORS: tuple[GivEnergyBatterySensorDescription, ...] = (
 )
 
 
-# All-in-One per-module battery sensors (#192). Each removable module reports
-# its own 24 cell voltages and per-cell temperatures. Mirrors the LV per-cell
-# entities above: DIAGNOSTIC, enabled by default. Cell temps 13-24 read zero on
-# known AIO hardware, so only 01-12 are exposed (matching what the module BMS
-# actually populates); voltages cover all 24 cells.
+# All-in-One per-module roll-ups (#192), always created. The lean default when
+# per-cell exposure is off: min/max/delta cell voltage + min/max cell temp,
+# computed from the module's own cells — enough to spot an imbalanced or hot
+# module without the 24+12 individual per-cell entities.
 AIO_MODULE_SENSORS: tuple[GivEnergyAioModuleSensorDescription, ...] = (
+    GivEnergyAioModuleSensorDescription(
+        key="cell_voltage_min",
+        name="Cell Voltage Min",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=3,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_cell_rollup("v_cell", 24, min),
+    ),
+    GivEnergyAioModuleSensorDescription(
+        key="cell_voltage_max",
+        name="Cell Voltage Max",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=3,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_cell_rollup("v_cell", 24, max),
+    ),
+    GivEnergyAioModuleSensorDescription(
+        key="cell_voltage_delta",
+        name="Cell Voltage Delta",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=3,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_cell_rollup("v_cell", 24, lambda c: max(c) - min(c)),
+    ),
+    GivEnergyAioModuleSensorDescription(
+        key="cell_temperature_min",
+        name="Cell Temperature Min",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_cell_rollup("t_cell", 12, min),
+    ),
+    GivEnergyAioModuleSensorDescription(
+        key="cell_temperature_max",
+        name="Cell Temperature Max",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_cell_rollup("t_cell", 12, max),
+    ),
+)
+
+
+# All-in-One per-module per-cell entities (#192), gated behind
+# CONF_EXPOSE_PER_CELL. Each removable module reports its own 24 cell voltages
+# and per-cell temperatures. Cell temps 13-24 read zero on known AIO hardware,
+# so only 01-12 are exposed (matching what the module BMS actually populates);
+# voltages cover all 24 cells.
+AIO_MODULE_CELL_SENSORS: tuple[GivEnergyAioModuleSensorDescription, ...] = (
     *(
         GivEnergyAioModuleSensorDescription(
             key=f"v_cell_{i:02d}",
@@ -1426,6 +1535,93 @@ HV_STACK_SENSORS: tuple[GivEnergyHvStackSensorDescription, ...] = (
         name="Pack Software Version",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=_bcu_attr("pack_software_version"),
+    ),
+)
+
+
+# HV per-module (BMU) roll-ups (#179), always created. Each module in an HV stack
+# decodes its own 24 cell voltages + 24 cell temperatures (givenergy-modbus 2.7.0,
+# wire-confirmed). These summaries are the lean default when per-cell exposure is
+# off — min/max/delta voltage + min/max temp per module.
+HV_MODULE_SENSORS: tuple[GivEnergyHvModuleSensorDescription, ...] = (
+    GivEnergyHvModuleSensorDescription(
+        key="cell_voltage_min",
+        name="Cell Voltage Min",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=3,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_cell_rollup("v_cell", 24, min),
+    ),
+    GivEnergyHvModuleSensorDescription(
+        key="cell_voltage_max",
+        name="Cell Voltage Max",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=3,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_cell_rollup("v_cell", 24, max),
+    ),
+    GivEnergyHvModuleSensorDescription(
+        key="cell_voltage_delta",
+        name="Cell Voltage Delta",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=3,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_cell_rollup("v_cell", 24, lambda c: max(c) - min(c)),
+    ),
+    GivEnergyHvModuleSensorDescription(
+        key="cell_temperature_min",
+        name="Cell Temperature Min",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_cell_rollup("t_cell", 24, min),
+    ),
+    GivEnergyHvModuleSensorDescription(
+        key="cell_temperature_max",
+        name="Cell Temperature Max",
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        device_class=SensorDeviceClass.TEMPERATURE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_cell_rollup("t_cell", 24, max),
+    ),
+)
+
+
+# HV per-module per-cell entities (#179), gated behind CONF_EXPOSE_PER_CELL.
+# 24 cell voltages + 24 cell temperatures per module, all wire-confirmed on the
+# GIV-3HY-11 (cells ~3.30 V, temps ~36 °C). DIAGNOSTIC, enabled when created.
+HV_MODULE_CELL_SENSORS: tuple[GivEnergyHvModuleSensorDescription, ...] = (
+    *(
+        GivEnergyHvModuleSensorDescription(
+            key=f"v_cell_{i:02d}",
+            name=f"Cell {i} Voltage",
+            native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+            device_class=SensorDeviceClass.VOLTAGE,
+            state_class=SensorStateClass.MEASUREMENT,
+            suggested_display_precision=3,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn=_hv_module_attr(f"v_cell_{i:02d}"),
+        )
+        for i in range(1, 25)
+    ),
+    *(
+        GivEnergyHvModuleSensorDescription(
+            key=f"t_cell_{i:02d}",
+            name=f"Cell {i} Temperature",
+            native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+            device_class=SensorDeviceClass.TEMPERATURE,
+            state_class=SensorStateClass.MEASUREMENT,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn=_hv_module_attr(f"t_cell_{i:02d}"),
+        )
+        for i in range(1, 25)
     ),
 )
 
@@ -1728,6 +1924,11 @@ async def async_setup_entry(
     # ALL_IN_ONE_HYBRID genuinely has PV so is deliberately excluded.
     is_aio = bool(capabilities) and capabilities.device_type is Model.ALL_IN_ONE
     battery_data_only = entry.options.get(CONF_BATTERY_DATA_ONLY, DEFAULT_BATTERY_DATA_ONLY)
+    # Whether to create the individual per-cell entities (LV pack / AIO module / HV
+    # BMU). Absent ⇒ legacy install ⇒ True (keep existing per-cell entities); new
+    # entries carry an explicit False from config-flow creation. See
+    # CONF_EXPOSE_PER_CELL and _reconcile_per_cell_entities (__init__).
+    expose_per_cell = entry.options.get(CONF_EXPOSE_PER_CELL, True)
     ems = coordinator.data.ems
 
     entities: list[SensorEntity] = []
@@ -1761,6 +1962,11 @@ async def async_setup_entry(
             GivEnergyBatterySensor(coordinator, description, battery_index)
             for description in BATTERY_SENSORS
         )
+        if expose_per_cell:
+            entities.extend(
+                GivEnergyBatterySensor(coordinator, description, battery_index)
+                for description in BATTERY_CELL_SENSORS
+            )
 
     # AIO per-module battery devices (#192) — empty on non-AIO plants. A module
     # with a blank/invalid serial can't anchor a device, so skip it; the index
@@ -1790,6 +1996,11 @@ async def async_setup_entry(
             GivEnergyAioModuleSensor(coordinator, description, module_index)
             for description in AIO_MODULE_SENSORS
         )
+        if expose_per_cell:
+            entities.extend(
+                GivEnergyAioModuleSensor(coordinator, description, module_index)
+                for description in AIO_MODULE_CELL_SENSORS
+            )
 
     # HV battery stack (BCU) devices (#95) — empty on non-HV plants. Each stack
     # is its own device, parented to the inverter, identified by the inverter
@@ -1802,6 +2013,34 @@ async def async_setup_entry(
             GivEnergyHvStackSensor(coordinator, description, stack_index)
             for description in HV_STACK_SENSORS
         )
+        # HV per-module (BMU) devices (#179), nested under the stack. Roll-ups are
+        # always created; the 24+24 per-cell entities are gated behind
+        # expose_per_cell. Dedup by serial like the AIO loop — a placeholder or
+        # repeated read would otherwise collide on unique_id.
+        seen_bmu_serials: set[str] = set()
+        for bmu_index, bmu in enumerate(stack.bmus):
+            if not bmu.is_valid():
+                continue
+            if bmu.serial_number in seen_bmu_serials:
+                _LOGGER.warning(
+                    "Skipping HV battery module at stack 0x%02x index %d: duplicate "
+                    "serial %s (real modules have unique serials — check for a "
+                    "placeholder/garbled read)",
+                    stack.device_address,
+                    bmu_index,
+                    bmu.serial_number,
+                )
+                continue
+            seen_bmu_serials.add(bmu.serial_number)
+            entities.extend(
+                GivEnergyHvModuleSensor(coordinator, description, stack_index, bmu_index)
+                for description in HV_MODULE_SENSORS
+            )
+            if expose_per_cell:
+                entities.extend(
+                    GivEnergyHvModuleSensor(coordinator, description, stack_index, bmu_index)
+                    for description in HV_MODULE_CELL_SENSORS
+                )
 
     # EMS-managed inverters — empty unless this is an EMS plant. The 0x11 device
     # is the EMS controller; each inverter it manages is a blinded rollup summary
@@ -2353,6 +2592,69 @@ class GivEnergyHvStackSensor(
         if stack is None:
             return None
         return self.entity_description.value_fn(stack.bcu)
+
+
+class GivEnergyHvModuleSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
+    """Per-module sensor for one BMU in an HV battery stack (#179).
+
+    Each module is its own HA device, nested under its HV-stack device (which is
+    in turn parented to the inverter), identified by the module's serial.
+    Resolved by serial each refresh — `hv_stacks[].bmus` is rebuilt per poll, so
+    binding by list position would cross-wire a module to a neighbour's cell data
+    if one drops out. The BMU carries no device address of its own, so
+    availability is gated on the serial still being present rather than on
+    IR-bank staleness (unlike the LV/AIO/stack sensors).
+    """
+
+    _attr_has_entity_name = True
+    entity_description: GivEnergyHvModuleSensorDescription
+
+    def __init__(
+        self,
+        coordinator: GivEnergyUpdateCoordinator,
+        description: GivEnergyHvModuleSensorDescription,
+        stack_index: int,
+        bmu_index: int,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        stack = coordinator.data.hv_stacks[stack_index]
+        bmu = stack.bmus[bmu_index]
+        serial = bmu.serial_number
+        self._bmu_serial = serial
+        inv_serial = coordinator.data.inverter_serial_number
+        stack_device_id = f"{inv_serial}_hvstack_{stack.device_address:#04x}"
+        self._attr_unique_id = f"{serial}_{description.key}"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, serial)},
+            name=f"GivEnergy HV Battery Module {serial}",
+            manufacturer="GivEnergy",
+            model="HV Battery Module",
+            serial_number=serial,
+            via_device=(DOMAIN, stack_device_id),
+        )
+
+    def _bmu(self) -> Bmu | None:
+        """Resolve this entity's module by serial across all stacks' BMUs."""
+        data = self.coordinator.data
+        if data is None:
+            return None
+        for stack in data.hv_stacks:
+            for bmu in stack.bmus:
+                if bmu.serial_number == self._bmu_serial:
+                    return bmu
+        return None
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._bmu() is not None
+
+    @property
+    def native_value(self) -> Any:
+        bmu = self._bmu()
+        if bmu is None:
+            return None
+        return self.entity_description.value_fn(bmu)
 
 
 class GivEnergyManagedInverterSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):

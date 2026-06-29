@@ -34,6 +34,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_BATTERY_DATA_ONLY,
+    CONF_EXPOSE_PER_CELL,
     CONF_PASSIVE,
     CONF_RETRIES,
     CONF_SCAN_INTERVAL,
@@ -552,6 +553,34 @@ def _reconcile_readability_gated_controls(
         _remove_stale_control(registry, serial, "datetime", SYSTEM_TIME_DESCRIPTION.key)
 
 
+# Substrings identifying a per-cell entity's unique_id (gated by
+# CONF_EXPOSE_PER_CELL). Roll-ups (`cell_voltage_min`, …) and the `v_cells_sum`
+# aggregate deliberately don't match — only the individual per-cell rows do.
+_PER_CELL_UNIQUE_ID_MARKERS = ("_v_cell_", "_t_cell_", "_t_cells_")
+
+
+def _reconcile_per_cell_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Remove per-cell entity rows when per-cell exposure is off (#179).
+
+    The sensor platform stops creating the individual per-cell voltage/temperature
+    entities when CONF_EXPOSE_PER_CELL is False, but HA keeps the pre-existing rows
+    on an entry that previously had them — so turning the option off would leave
+    orphaned, unavailable cell entities. Remove exactly those (matched by the
+    per-cell unique_id markers), leaving the roll-ups and every other entity intact.
+    Absent ⇒ legacy ⇒ on, so existing installs keep their cells untouched.
+    """
+    if entry.options.get(CONF_EXPOSE_PER_CELL, True):
+        return
+    registry = er.async_get(hass)
+    for ent in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if ent.unique_id and any(m in ent.unique_id for m in _PER_CELL_UNIQUE_ID_MARKERS):
+            _LOGGER.info(
+                "Removing per-cell entity %s (per-cell exposure disabled, #179)",
+                ent.entity_id,
+            )
+            registry.async_remove(ent.entity_id)
+
+
 def _reconcile_ac_coupled_dc_limits(
     hass: HomeAssistant, coordinator: GivEnergyUpdateCoordinator
 ) -> None:
@@ -803,6 +832,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # On AC-coupled / AIO plants the DC battery-limit controls are suppressed in
     # favour of the AC pair; remove the stale DC rows an upgraded entry would keep (#52).
     _reconcile_ac_coupled_dc_limits(hass, coordinator)
+
+    # When per-cell exposure is off, remove any individual per-cell rows a prior
+    # version (or a prior opt-in) created, so the toggle cleans up rather than
+    # leaving orphaned/unavailable cell entities (#179).
+    _reconcile_per_cell_entities(hass, entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
