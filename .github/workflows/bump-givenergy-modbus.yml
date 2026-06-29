@@ -81,11 +81,13 @@ jobs:
           python3 - <<'PY'
           import os, re, pathlib, glob
           new = os.environ["NEW"]
-          # Match "givenergy-modbus>=<version>" capturing the version as a
-          # separate group that stops at the next comma or closing quote;
-          # this handles pre-release suffixes (e.g. "1.2.0a1") in the
-          # existing pin without leaving the suffix glued to the new version.
-          pattern = re.compile(r'("givenergy-modbus>=)[^",]+(.*?")')
+          # Rewrite the givenergy-modbus requirement to an exact ==<new> pin,
+          # whatever operator or bounds it currently carries. The integration
+          # pins modbus exactly (we own both sides of the ecosystem, so each
+          # bump is a deliberate sync); the whole quoted requirement is replaced
+          # wholesale, matching the legacy ">=x,<y" range and the current "==x"
+          # shape alike, including pre-release suffixes.
+          pattern = re.compile(r'"givenergy-modbus[^"]*"')
 
           targets = ["pyproject.toml", *glob.glob("custom_components/*/manifest.json")]
           for path in targets:
@@ -93,7 +95,7 @@ jobs:
               if not p.exists():
                   continue
               text = p.read_text()
-              updated, n = pattern.subn(rf'\g<1>{new}\g<2>', text)
+              updated, n = pattern.subn(f'"givenergy-modbus=={new}"', text)
               if n == 0:
                   print(f"warning: no givenergy-modbus pin found in {path}")
                   continue

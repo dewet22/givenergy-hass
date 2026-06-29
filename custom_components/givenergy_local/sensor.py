@@ -286,7 +286,21 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     GivEnergyInverterSensorDescription(
         key="fault_code",
         name="Fault Code",
-        value_fn=lambda inv: inv.fault_code,
+        # modbus 2.8.0 split the old combined fault_code into two 16-bit words and
+        # dropped the deprecated alias from ThreePhaseInverter (it raised on 3ph).
+        # Read IR39 directly; key stays "fault_code" to keep the entity ID, recorder
+        # history, and the dashboard row that's slugged on it.
+        value_fn=lambda inv: inv.inverter_fault_code,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyInverterSensorDescription(
+        # key is "warning_code" (not the library attr inverter_warning_code) to
+        # mirror its sibling "fault_code" — both are user-facing slugs, matching
+        # the existing convention where key="fault_code" reads inverter_fault_code.
+        key="warning_code",
+        name="Warning Code",
+        # IR40 — the warning half split out of the old fault_code in modbus 2.8.0.
+        value_fn=lambda inv: inv.inverter_warning_code,
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
     GivEnergyInverterSensorDescription(
