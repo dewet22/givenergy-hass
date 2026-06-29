@@ -35,7 +35,10 @@ def mock_inverter() -> MagicMock:
     inv.precision_of = SinglePhaseInverter.precision_of
     inv.status = MagicMock()
     inv.status.name = "NORMAL"
-    inv.fault_code = "00000000"
+    # modbus 2.8.0 split the old 8-hex fault_code into IR39 (fault) + IR40 (warning),
+    # each a 4-hex word. Mirror the real model's rendering.
+    inv.inverter_fault_code = "0000"
+    inv.inverter_warning_code = "0000"
     inv.model = MagicMock()
     inv.model.name = "HYBRID"
     inv.firmware_version = "D0.19-A0.21"
