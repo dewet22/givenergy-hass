@@ -14,7 +14,7 @@ dependencies = [
     # identical to the HA-runtime pin in manifest.json) beats auto-floating onto
     # an upstream patch that wasn't validated against this integration. Bump both
     # this and manifest.json together.
-    "givenergy-modbus==2.9.2",
+    "givenergy-modbus==2.9.3",
 ]
 
 [dependency-groups]
