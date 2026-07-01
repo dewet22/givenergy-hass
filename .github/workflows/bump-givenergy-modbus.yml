@@ -61,7 +61,7 @@ jobs:
           echo "new=$NEW" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ steps.ver.outputs.base }}
           # PAT (not GITHUB_TOKEN) so the resulting push + PR-creation events
