@@ -13,7 +13,7 @@ givenergy-modbus as its core library.
 - `coordinator.py` — DataUpdateCoordinator; centralises all Modbus polling via
   `client.refresh()` + `client.load_config()` (full refresh every N ticks)
 - `sensor.py`, `number.py`, `select.py`, `switch.py`, `time.py` — entity platforms
-- `config_flow.py` — UI setup (IP, port, scan interval, battery count, passive mode)
+- `config_flow.py` — UI setup (IP, port, scan interval)
 - `dashboard.py` — `generate_dashboard` service (deprecated; scheduled for removal); produces a Lovelace YAML file
 - `www/` — bundled frontend assets (e.g. `ge-cell-heatmap.js`) served at `/local/`
 
@@ -25,7 +25,9 @@ givenergy-modbus as its core library.
 - Be conservative with polling frequency — querying too often disrupts cloud metrics
   (device address 0x11 is the EMS; its interaction with the GivEnergy cloud is a known
   sensitivity)
-- Passive mode exists: listen-only when another Modbus client is already polling
+- Passive mode was removed in v1.3.37 (#253) — all entries poll actively; a legacy
+  `passive` key in entry data is deliberately inert. Concurrent active clients at
+  30-second intervals are well within what the hardware handles.
 
 ## Entity gating patterns
 Two conditional-creation patterns exist in `async_setup_entry`; follow them when adding

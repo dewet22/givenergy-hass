@@ -10,7 +10,6 @@ from custom_components.givenergy_local.const import (
     CONF_BATTERY_DATA_ONLY,
     CONF_EXPERIMENTAL,
     CONF_EXPOSE_PER_CELL,
-    CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
     CONF_WARN_CLOCK_DRIFT,
     DOMAIN,
@@ -21,7 +20,6 @@ VALID_USER_INPUT = {
     CONF_HOST: "192.168.1.100",
     CONF_PORT: 8899,
     CONF_SCAN_INTERVAL: 30,
-    CONF_PASSIVE: False,
 }
 
 
@@ -162,25 +160,23 @@ async def test_reconfigure_form_is_prefilled(hass, mock_client, setup_integratio
     }
     assert suggested[CONF_HOST] == "192.168.1.100"
     assert suggested[CONF_SCAN_INTERVAL] == 30
-    assert suggested[CONF_PASSIVE] is False
 
 
 async def test_reconfigure_updates_settings_without_retesting_connection(
     hass, mock_client, setup_integration
 ):
-    """Changing only scan_interval/passive should skip the explicit connection test."""
+    """Changing only scan_interval should skip the explicit connection test."""
     mock_client.refresh.reset_mock()  # ignore the initial setup refresh
     mock_client.load_config.reset_mock()
 
     result = await setup_integration.start_reconfigure_flow(hass)
-    new_input = {**VALID_USER_INPUT, CONF_SCAN_INTERVAL: 60, CONF_PASSIVE: True}
+    new_input = {**VALID_USER_INPUT, CONF_SCAN_INTERVAL: 60}
     result = await hass.config_entries.flow.async_configure(result["flow_id"], new_input)
     await hass.async_block_till_done()
 
     assert result["type"] == "abort"
     assert result["reason"] == "reconfigure_successful"
     assert setup_integration.data[CONF_SCAN_INTERVAL] == 60
-    assert setup_integration.data[CONF_PASSIVE] is True
 
     # _test_connection (host/port change only) issues a bare refresh() with no
     # preceding load_config(); the post-reload coordinator always pairs the two

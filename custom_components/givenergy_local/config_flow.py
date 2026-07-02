@@ -20,11 +20,9 @@ from .const import (
     CONF_BATTERY_DATA_ONLY,
     CONF_EXPERIMENTAL,
     CONF_EXPOSE_PER_CELL,
-    CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
     CONF_WARN_CLOCK_DRIFT,
     DEFAULT_BATTERY_DATA_ONLY,
-    DEFAULT_PASSIVE,
     DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_WARN_CLOCK_DRIFT,
@@ -39,7 +37,6 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         vol.Required(CONF_HOST): str,
         vol.Required(CONF_PORT, default=DEFAULT_PORT): int,
         vol.Required(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): int,
-        vol.Required(CONF_PASSIVE, default=DEFAULT_PASSIVE): bool,
     }
 )
 
@@ -99,7 +96,7 @@ class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Update an existing entry's settings (scan interval, passive mode, …)."""
+        """Update an existing entry's settings (host, port, scan interval)."""
         entry = self._get_reconfigure_entry()
         errors: dict[str, str] = {}
 

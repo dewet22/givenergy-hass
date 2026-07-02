@@ -153,7 +153,6 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         host: str,
         port: int,
         scan_interval: int,
-        passive: bool = False,
         experimental_client_kwargs: dict[str, Any] | None = None,
         timeout_tolerance: int = 3,
         retries: int = 1,
@@ -170,7 +169,6 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         )
         self.host = host
         self.port = port
-        self.passive = passive
         # Resolved opt-in givenergy-modbus client kwargs (empty by default, so
         # Client(host, port) is unchanged). Splatted at every (re)connect.
         self._experimental_client_kwargs = experimental_client_kwargs or {}
@@ -225,8 +223,6 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         # Length of the current unbroken run of partial polls, used only to
         # throttle the partial log (see _record_partial). Reset by a clean poll.
         self._consecutive_partials: int = 0
-        self._last_inverter_time: datetime | None = None
-        self._unchanged_ticks: int = 0
         self._active_tick: int = 0
         self._full_refresh_every: int = max(1, round(_FULL_REFRESH_INTERVAL / scan_interval))
 
@@ -253,11 +249,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                 # down, and a routine unload should not log an ERROR.
                 return self.data
 
-            plant = (
-                await self._passive_update(reconnecting)
-                if self.passive
-                else await self._active_update()
-            )
+            plant = await self._active_update()
 
             # A fully clean poll ends the partial run so the next one warns afresh.
             # The last_partial_failures detail and last_partial_at are deliberately
@@ -331,7 +323,6 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
 
     def _mark_success(self, plant: Plant) -> None:
         """Record a tick that yielded usable data (full or partial success)."""
-        self._last_inverter_time = plant.inverter.system_time
         self.last_successful_refresh = dt_util.utcnow()
         self.consecutive_failures = 0
         self._accumulate_comms_counters(plant)
@@ -465,42 +456,6 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
             await self._client.load_config(retries=self.retries)
         return await self._client.refresh(retries=self.retries)
 
-    async def _passive_update(self, reconnecting: bool) -> Plant:
-        """Seed the cache on (re)connect; on subsequent ticks read the cached plant.
-
-        The library's register cache is kept fresh by a peer client on the
-        shared Modbus bus.  Raises UpdateFailed if the cache appears frozen.
-        """
-        assert self._client is not None  # _async_update_data ensures this
-        if reconnecting:
-            await self._client.load_config(retries=self.retries)
-            return await self._client.refresh(retries=self.retries)
-
-        plant = self._client.plant
-        self._check_cache_freshness(plant)
-        return plant
-
-    def _check_cache_freshness(self, plant: Plant) -> None:
-        """Raise UpdateFailed if system_time hasn't advanced for two consecutive ticks.
-
-        One unchanged tick is tolerated to absorb timing skew between our poll
-        interval and the peer's refresh cadence.
-        """
-        inverter_time = plant.inverter.system_time
-        if (
-            inverter_time is not None
-            and self._last_inverter_time is not None
-            and inverter_time == self._last_inverter_time
-        ):
-            self._unchanged_ticks += 1
-            if self._unchanged_ticks >= 2:
-                raise UpdateFailed(
-                    "Register cache unchanged for 2 consecutive ticks — "
-                    "no peer client appears to be refreshing the inverter"
-                )
-        else:
-            self._unchanged_ticks = 0
-
     # ------------------------------------------------------------------
     # Connection helpers
     # ------------------------------------------------------------------
@@ -572,8 +527,6 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                         "topology-healed callback failed; connection is up, continuing",
                         exc_info=True,
                     )
-            self._last_inverter_time = None
-            self._unchanged_ticks = 0
             self._active_tick = 0
             _LOGGER.info("Connected to inverter at %s:%s", self.host, self.port)
         except BaseException:

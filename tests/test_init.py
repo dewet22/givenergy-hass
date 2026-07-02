@@ -117,7 +117,7 @@ async def test_migrate_v1_entry_strips_retries_and_tolerance(hass, mock_client):
             "host": "192.168.1.100",
             "port": 8899,
             "scan_interval": 30,
-            "passive": False,
+            "passive": False,  # stale key from before passive mode's removal (#253)
             CONF_TIMEOUT_TOLERANCE: 7,  # user had a custom override
             CONF_RETRIES: 3,  # user had a custom override
         },
@@ -145,7 +145,7 @@ async def test_migrate_v1_entry_without_legacy_fields_is_idempotent(hass, mock_c
             "host": "192.168.1.100",
             "port": 8899,
             "scan_interval": 30,
-            "passive": False,
+            "passive": False,  # stale key from before passive mode's removal (#253)
         },
         unique_id="SA1234G123",
     )
@@ -155,6 +155,30 @@ async def test_migrate_v1_entry_without_legacy_fields_is_idempotent(hass, mock_c
     await hass.async_block_till_done()
 
     assert entry.version == 2
+
+
+async def test_entry_with_passive_enabled_polls_actively(hass, mock_client):
+    """Passive mode was removed (#253): an entry that still stores passive=True
+    must set up normally and poll the inverter itself — the stale key is inert."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "host": "192.168.1.100",
+            "port": 8899,
+            "scan_interval": 30,
+            "passive": True,
+        },
+        unique_id="SA1234G123",
+    )
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Active polling happened: the coordinator issued its own full refresh
+    # (load_config + refresh) rather than waiting on a peer client's traffic.
+    assert mock_client.load_config.call_count >= 1
+    assert mock_client.refresh.call_count >= 1
 
 
 async def test_migrate_refuses_future_version(hass, mock_client):

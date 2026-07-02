@@ -11,7 +11,6 @@ DEFAULT_PORT = 8899
 DEFAULT_SCAN_INTERVAL = 30
 
 CONF_SCAN_INTERVAL = "scan_interval"
-CONF_PASSIVE = "passive"
 # When enabled (per-entry option), suppress control entities and inverter-level
 # system sensors, leaving only battery pack / HV stack / AIO module / diagnostic
 # data. For a unit controlled by a Gateway in a parallel group, where its own
@@ -37,8 +36,6 @@ CONF_EXPOSE_PER_CELL = "expose_per_cell"
 # The current defaults live as constructor defaults on GivEnergyUpdateCoordinator.
 CONF_TIMEOUT_TOLERANCE = "timeout_tolerance"
 CONF_RETRIES = "retries"
-
-DEFAULT_PASSIVE = False
 
 PLATFORMS = ["binary_sensor", "sensor", "switch", "number", "select", "time", "datetime", "button"]
 

@@ -254,7 +254,6 @@ def mock_config_entry() -> MockConfigEntry:
             "host": "192.168.1.100",
             "port": 8899,
             "scan_interval": 30,
-            "passive": False,
         },
         unique_id="SA1234G123",
     )
