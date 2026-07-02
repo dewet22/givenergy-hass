@@ -36,13 +36,11 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONF_BATTERY_DATA_ONLY,
     CONF_EXPOSE_PER_CELL,
-    CONF_PASSIVE,
     CONF_RETRIES,
     CONF_SCAN_INTERVAL,
     CONF_TIMEOUT_TOLERANCE,
     CONF_WARN_CLOCK_DRIFT,
     DEFAULT_BATTERY_DATA_ONLY,
-    DEFAULT_PASSIVE,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_WARN_CLOCK_DRIFT,
     DOMAIN,
@@ -775,7 +773,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         host=entry.data[CONF_HOST],
         port=entry.data[CONF_PORT],
         scan_interval=entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-        passive=entry.data.get(CONF_PASSIVE, DEFAULT_PASSIVE),
+        # NB: a legacy `passive` key may remain in entry.data — deliberately
+        # ignored since passive mode's removal (#253); all entries poll actively.
         experimental_client_kwargs=experimental_client_kwargs,
         prior_capabilities=prior_capabilities,
         on_topology_changed=_on_topology_changed,

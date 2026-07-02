@@ -1468,7 +1468,7 @@ async def _setup_battery_data_only(hass, mock_client, *, enabled: bool):
     _setup_hv_plant(mock_client, [_mock_hv_stack(0x70, _mock_bcu())])
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={"host": "192.168.1.100", "port": 8899, "scan_interval": 30, "passive": False},
+        data={"host": "192.168.1.100", "port": 8899, "scan_interval": 30},
         options={CONF_BATTERY_DATA_ONLY: enabled},
         unique_id="SA1234G123",
     )
@@ -2257,7 +2257,7 @@ async def _setup_hv_with_modules(
     options = {} if expose_per_cell is None else {CONF_EXPOSE_PER_CELL: expose_per_cell}
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={"host": "192.168.1.100", "port": 8899, "scan_interval": 30, "passive": False},
+        data={"host": "192.168.1.100", "port": 8899, "scan_interval": 30},
         options=options,
         unique_id="SA1234G123",
     )
@@ -2337,7 +2337,7 @@ async def _setup_lv_with_option(hass, expose_per_cell: bool | None):
     options = {} if expose_per_cell is None else {CONF_EXPOSE_PER_CELL: expose_per_cell}
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={"host": "192.168.1.100", "port": 8899, "scan_interval": 30, "passive": False},
+        data={"host": "192.168.1.100", "port": 8899, "scan_interval": 30},
         options=options,
         unique_id="SA1234G123",
     )

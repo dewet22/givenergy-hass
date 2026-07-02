@@ -93,7 +93,6 @@ Add the integration via **Settings → Devices & Services → Add Integration �
 | Inverter IP Address | — | Local IP of the inverter's data adapter |
 | Modbus Port | `8899` | Modbus TCP port |
 | Scan Interval | `30` s | How often HA polls for updated values |
-| [Passive mode](#passive-mode) | off | Listen only — use when another local polling client is already driving the inverter and this integration should just observe |
 
 To change any of these later, open the integration's **⋮** menu in **Settings → Devices & Services → GivEnergy Local** and choose **Reconfigure**. The integration reloads automatically when you save.
 
@@ -107,9 +106,7 @@ Both this integration and other local polling solutions (GivTCP, the GivEnergy a
 
 Running both integrations in parallel makes it easy to evaluate a switch without committing: you get a live side-by-side comparison and can cut over at your own pace. A migration script (`scripts/migrate_from_givtcp.py`) carries your long-term recorder statistics across — see [`docs/migration-from-givtcp.md`](docs/migration-from-givtcp.md) for usage.
 
-#### Passive mode
-
-When enabled, the integration connects to the inverter but sends no Modbus read requests after the initial connection. Instead, it reads the library's register cache on each scan interval tick. This is a secondary option for setups where you'd prefer this integration to observe rather than poll — the main case being a client you can't reconfigure (e.g. the GivEnergy app) where you want to avoid any overlap.
+> **Note:** earlier versions offered a "passive mode" (listen only, relying on another client's polling to keep values fresh). It was removed in v1.3.37: concurrent active polling is well within what the hardware handles, while passive mode's freshness expectations could never be met by the cloud's ~5-minute polling cadence, producing continuous spurious refresh failures (#253). An entry that still has the old setting stored simply polls actively.
 
 ## Entities
 
@@ -404,8 +401,7 @@ The daily counters reset at midnight; Home Assistant's recorder detects the rese
 ## Troubleshooting
 
 - **Transient connection drops are normal.** TCP-level timeouts and the occasional connection reset get logged at WARNING level and the next scan tick re-establishes the connection. The `Last Successful Refresh` and `Consecutive Refresh Failures` diagnostic sensors will tell you if something more persistent is going on.
-- **"Register cache unchanged" failures in passive mode** mean no peer client is refreshing the inverter. Switch back to active mode, or start the other client that's supposed to be driving the bus.
-- **Conflicts with another Modbus client** — concurrent active polling is generally reliable on current firmware; if you do see persistent connection errors with two clients running, [passive mode](#passive-mode) may help.
+- **Conflicts with another Modbus client** — concurrent active polling is reliable on current firmware, including multiple clients at 30-second intervals; if you do see persistent connection errors with two clients running, please open an issue.
 - **Wrong number of battery devices appearing** — battery count is auto-discovered at startup by probing the Modbus bus; there is no manual override. If detection misfires (e.g. a battery was slow to respond), reloading the integration usually fixes it. If the count is consistently wrong, [open an issue](https://github.com/dewet22/givenergy-hass/issues/48) and attach a frame capture (see [Supported inverters](#supported-inverters)).
 
 For anything else, please [open an issue](https://github.com/dewet22/givenergy-hass/issues) with the relevant HA log lines and your inverter model.
