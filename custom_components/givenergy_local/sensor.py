@@ -808,6 +808,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         # computes a per-controller figure (e.g. -9.8) rather than whole-plant load;
         # the EMS load aggregates cover it there instead (#201).
         skip_if_ems=True,
+        # Also meaningless on AIO (#95): the derivation's PV/grid inputs are the
+        # registers whose identity is under investigation there (modbus#293), and
+        # AIO units report no raw consumption figure to fall back on.
+        skip_if_aio=True,
         # Resolves per-model: e_load_today isn't in the single-phase LUT (the
         # derived value stays untracked for staleness), but on three-phase it
         # names the native register the value_fn falls back to (#152/#158).
@@ -2625,11 +2629,14 @@ class GivEnergyHvStackSensor(
         self._init_stale_gate(coordinator, type(stack.bcu), description.key)
         inv_serial = coordinator.data.inverter_serial_number
         device_id = f"{inv_serial}_hvstack_{stack.device_address:#04x}"
-        # Only disambiguate the device name by address when there's more than one
-        # stack, so the common single-stack case stays clean.
-        name = "GivEnergy HV Battery Stack"
-        if len(stacks) > 1:
-            name = f"{name} {stack.device_address:#04x}"
+        # Name = parent serial (a BCU has no serial of its own) + the stack's bus
+        # address. The address is deliberately the SAME token used by the device
+        # id, the modbus logs, givenergy-cli and the Comms per_device attributes —
+        # one namespace, nothing to cross-map (a friendlier "Stack 1/2/3" would
+        # add an off-by-one trap against 0x70/0x71 in every log line). Carrying
+        # the serial keeps names unique across config entries: two AIOs each with
+        # one identically-named stack would otherwise slug the second to "_2" (#95).
+        name = f"GivEnergy HV Battery {inv_serial} Stack {stack.device_address:#04x}"
         self._attr_unique_id = f"{device_id}_{description.key}"
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, device_id)},
