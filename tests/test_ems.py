@@ -5,14 +5,17 @@ None); the shared fixtures default ems to None, so here we override it with a
 mock Ems before setting up the integration.
 """
 
-from unittest.mock import MagicMock
+from datetime import timedelta
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from givenergy_modbus.model.devices import InverterSummary
 from givenergy_modbus.model.inverter import Model
+from homeassistant.core import State
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.util import dt as dt_util
 
 from custom_components.givenergy_local.const import DOMAIN
 
@@ -394,6 +397,7 @@ async def test_inverter_sensors_kept_on_ems_except_gated(hass, ems_setup):
     assert _entity_id(hass, "sensor", "SA1234G123_e_self_consumption_today") is None
     assert _entity_id(hass, "sensor", "SA1234G123_e_self_consumption_total") is None
     assert _entity_id(hass, "sensor", "SA1234G123_e_pv_direct_today") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_soc_kwh") is None
 
 
 async def test_inverter_controls_suppressed_on_ems_plant(hass, ems_setup):
@@ -470,6 +474,8 @@ async def test_no_ems_sensors_for_non_ems_plant(hass, setup_integration):
     """A non-EMS plant must not get the EMS aggregate sensors."""
     assert _entity_id(hass, "sensor", "SA1234G123_ems_grid_meter_power") is None
     assert _entity_id(hass, "sensor", "SA1234G123_ems_inverter_count") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_ems_calc_load_energy_total") is None
+    assert _entity_id(hass, "sensor", "SA1234G123_ems_calc_load_energy_today") is None
 
 
 def test_ems_measured_load_power_hidden_by_default():
@@ -503,8 +509,166 @@ def test_inverter_sensors_gated_off_ems():
         "e_self_consumption_total",
         # DC-coupled GEN1 only; not validated on EMS controllers.
         "e_pv_direct_today",
+        # Derived figure; on EMS plants the per-inverter soc_kwh belongs to the
+        # per-inverter config entries, not the controller (#248).
+        "soc_kwh",
     }
     desc = next(d for d in INVERTER_SENSORS if d.key == "p_load_demand")
     inv = MagicMock()
     assert _include_inverter_sensor(desc, inv, False, False, True) is False
     assert _include_inverter_sensor(desc, inv, False, False, False) is True
+
+
+# ---------------------------------------------------------------------------
+# EMS load-energy integrals (#248)
+# ---------------------------------------------------------------------------
+
+
+def _load_energy_entity(mock_plant, mock_ems, *, daily=False):
+    """A bare integrator entity against a mocked coordinator (no hass setup)."""
+    from custom_components.givenergy_local.sensor import (
+        EMS_LOAD_ENERGY_TODAY,
+        EMS_LOAD_ENERGY_TOTAL,
+        GivEnergyEmsLoadEnergySensor,
+    )
+
+    mock_plant.ems = mock_ems
+    mock_plant.inverter.model = Model.EMS
+    mock_ems.calc_load_power = 1200  # 0.01 kWh per 30 s poll
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.last_successful_refresh = None
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    desc = EMS_LOAD_ENERGY_TODAY if daily else EMS_LOAD_ENERGY_TOTAL
+    return GivEnergyEmsLoadEnergySensor(coordinator, desc, daily_reset=daily), coordinator
+
+
+def _refresh(entity, coordinator):
+    """Mark a successful coordinator refresh and read the accumulated value."""
+    coordinator.last_successful_refresh = dt_util.utcnow()
+    return entity.native_value
+
+
+def test_load_energy_integrates_per_poll(mock_plant, mock_ems, freezer):
+    """1200 W over a 30 s poll interval accumulates 0.01 kWh per slice."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity, coordinator = _load_energy_entity(mock_plant, mock_ems)
+
+    assert _refresh(entity, coordinator) == 0.0  # first sample only seeds the clock
+    freezer.tick(30)
+    assert _refresh(entity, coordinator) == pytest.approx(0.01)
+    freezer.tick(30)
+    assert _refresh(entity, coordinator) == pytest.approx(0.02)
+
+
+def test_load_energy_repeat_reads_are_idempotent(mock_plant, mock_ems, freezer):
+    """Repeat state reads within one refresh cycle must not double-integrate, and
+    time passing without a new successful-refresh mark accumulates nothing."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity, coordinator = _load_energy_entity(mock_plant, mock_ems)
+    _refresh(entity, coordinator)
+    freezer.tick(30)
+    assert _refresh(entity, coordinator) == pytest.approx(0.01)
+    assert entity.native_value == pytest.approx(0.01)  # same mark: no change
+    freezer.tick(30)
+    assert entity.native_value == pytest.approx(0.01)  # stale mark: outage pending
+
+
+def test_load_energy_missing_sample_consumes_boundary(mock_plant, mock_ems, freezer):
+    """A successful refresh without a load sample must not be bridged by the
+    next valid one: the unknown interval contributes nothing (Codex, #249).
+    1200 W / None / 1200 W over 30 s steps is 0.01 kWh, not 0.02."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity, coordinator = _load_energy_entity(mock_plant, mock_ems)
+    _refresh(entity, coordinator)
+    freezer.tick(30)
+    mock_ems.calc_load_power = None
+    assert _refresh(entity, coordinator) == 0.0
+    freezer.tick(30)
+    mock_ems.calc_load_power = 1200
+    assert _refresh(entity, coordinator) == pytest.approx(0.01)
+
+
+def test_load_energy_gap_capped(mock_plant, mock_ems, freezer):
+    """An hour-long sampling gap contributes one capped slice (3 polls = 90 s),
+    not a rectangle of stale power — outages undercount, never overcount."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity, coordinator = _load_energy_entity(mock_plant, mock_ems)
+    _refresh(entity, coordinator)
+    freezer.tick(30)
+    assert _refresh(entity, coordinator) == pytest.approx(0.01)
+    freezer.tick(3600)
+    assert _refresh(entity, coordinator) == pytest.approx(0.01 + 0.03)
+
+
+def test_load_energy_today_resets_at_midnight(mock_plant, mock_ems, freezer):
+    """The today integral re-baselines at the local date flip; the (capped)
+    midnight-spanning slice lands wholly in the new day."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity, coordinator = _load_energy_entity(mock_plant, mock_ems, daily=True)
+    _refresh(entity, coordinator)
+    freezer.tick(30)
+    assert _refresh(entity, coordinator) == pytest.approx(0.01)
+    freezer.tick(24 * 3600)
+    assert _refresh(entity, coordinator) == pytest.approx(0.03)
+    freezer.tick(30)
+    assert _refresh(entity, coordinator) == pytest.approx(0.04)
+
+
+def test_load_energy_total_survives_midnight(mock_plant, mock_ems, freezer):
+    """The lifetime integral carries straight through the date flip."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity, coordinator = _load_energy_entity(mock_plant, mock_ems)
+    _refresh(entity, coordinator)
+    freezer.tick(30)
+    assert _refresh(entity, coordinator) == pytest.approx(0.01)
+    freezer.tick(24 * 3600)
+    assert _refresh(entity, coordinator) == pytest.approx(0.04)  # 0.01 + capped 0.03
+
+
+async def test_load_energy_restores_across_restart(hass, mock_plant, mock_ems, freezer):
+    """The accumulator seeds from the recorder and the persisted timestamp seeds
+    the sample clock, so restart downtime costs at most one capped slice."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity, coordinator = _load_energy_entity(mock_plant, mock_ems)
+    entity.hass = hass
+    entity.entity_id = "sensor.test_load_energy_total"
+    entity.async_get_last_state = AsyncMock(
+        return_value=State(
+            entity.entity_id,
+            "1.5",
+            last_updated=dt_util.utcnow() - timedelta(seconds=45),
+        )
+    )
+    await entity.async_added_to_hass()
+    # 45 s of downtime, under the 90 s cap, is credited in full on first refresh.
+    assert _refresh(entity, coordinator) == pytest.approx(1.5 + 0.015)
+
+
+async def test_load_energy_today_restore_prior_day(hass, mock_plant, mock_ems, freezer):
+    """A today-value persisted yesterday is spent: restore starts the day from
+    zero, and only the capped catch-up slice lands in it."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    entity, coordinator = _load_energy_entity(mock_plant, mock_ems, daily=True)
+    entity.hass = hass
+    entity.entity_id = "sensor.test_load_energy_today"
+    entity.async_get_last_state = AsyncMock(
+        return_value=State(
+            entity.entity_id,
+            "5.5",
+            last_updated=dt_util.utcnow() - timedelta(hours=24),
+        )
+    )
+    await entity.async_added_to_hass()
+    assert _refresh(entity, coordinator) == pytest.approx(0.03)
+
+
+async def test_load_energy_entities_created_on_ems(hass, ems_setup):
+    """Both integrals surface on the controller device, starting from zero."""
+    total = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_ems_calc_load_energy_total"))
+    today = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_ems_calc_load_energy_today"))
+    assert total.state == "0.0"
+    assert today.state == "0.0"
+    assert total.attributes["unit_of_measurement"] == "kWh"
+    assert total.attributes["state_class"] == "total_increasing"

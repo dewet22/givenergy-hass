@@ -4,6 +4,11 @@
 
 ci = { autofix_prs = false }
 
+# Hook envs must parse the py3.14-only syntax ruff enforces (target-version
+# py314, e.g. PEP 758 unparenthesised except) — prek's managed default
+# interpreter is older and chokes on it in check-ast.
+default_language_version = { python = "python3.14" }
+
 [[repos]]
 repo = "https://github.com/pre-commit/pre-commit-hooks"
 rev = "v6.0.0"

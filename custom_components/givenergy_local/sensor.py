@@ -269,6 +269,18 @@ def _grid_import_power(inv: InverterModel) -> float | None:
     return max(-p, 0) if p is not None else None
 
 
+# SOC-scaled nominal capacity: the "soc_kw" figure Predbat wants per inverter (#248),
+# natively replacing the template-sensor helper users had to hand-create. Nameplate-
+# derived — battery_capacity_kwh is Ah × nominal voltage, not measured usable
+# capacity — so it reads optimistic on aged packs: an estimate, not a meter.
+def _soc_kwh(inv: InverterModel) -> float | None:
+    soc = getattr(inv, "battery_soc", None)
+    capacity = getattr(inv, "battery_capacity_kwh", None)
+    if soc is None or capacity is None:
+        return None
+    return soc / 100 * capacity
+
+
 INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
     # --- Status ---
     GivEnergyInverterSensorDescription(
@@ -1159,6 +1171,21 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         single_phase_only=True,
     ),
+    GivEnergyInverterSensorDescription(
+        key="soc_kwh",
+        name="Battery SOC kWh",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY_STORAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=_soc_kwh,
+        # Derived, not register-backed: gate off EMS controllers (there the
+        # per-inverter figure belongs to per-inverter entries) and drop wherever
+        # either input is absent.
+        skip_if_none=True,
+        skip_if_ems=True,
+        single_phase_only=True,
+    ),
 )
 
 BATTERY_SENSORS: tuple[GivEnergyBatterySensorDescription, ...] = (
@@ -1746,6 +1773,27 @@ EMS_SENSORS: tuple[GivEnergyEmsSensorDescription, ...] = (
     ),
 )
 
+# Load-energy integrals (#248). Deliberately NOT in EMS_SENSORS: the generic setup
+# loop would build plain GivEnergyEmsSensor instances, and these need the
+# integrating subclass. value_fn is unused — GivEnergyEmsLoadEnergySensor
+# overrides native_value with its accumulator.
+EMS_LOAD_ENERGY_TOTAL = GivEnergyEmsSensorDescription(
+    key="ems_calc_load_energy_total",
+    name="EMS Calculated Load Energy Total",
+    native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+    device_class=SensorDeviceClass.ENERGY,
+    state_class=SensorStateClass.TOTAL_INCREASING,
+    suggested_display_precision=2,
+)
+EMS_LOAD_ENERGY_TODAY = GivEnergyEmsSensorDescription(
+    key="ems_calc_load_energy_today",
+    name="EMS Calculated Load Energy Today",
+    native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+    device_class=SensorDeviceClass.ENERGY,
+    state_class=SensorStateClass.TOTAL_INCREASING,
+    suggested_display_precision=2,
+)
+
 
 def _partial_failure_attributes(
     coordinator: GivEnergyUpdateCoordinator,
@@ -1974,6 +2022,13 @@ async def async_setup_entry(
         # (#201): managed-inverter count, calculated/measured load, grid-meter
         # power, total battery power and remaining battery energy.
         entities.extend(GivEnergyEmsSensor(coordinator, description) for description in EMS_SENSORS)
+        # Load energy exists only as an integral of calc_load_power on EMS (#248).
+        entities.append(
+            GivEnergyEmsLoadEnergySensor(coordinator, EMS_LOAD_ENERGY_TOTAL, daily_reset=False)
+        )
+        entities.append(
+            GivEnergyEmsLoadEnergySensor(coordinator, EMS_LOAD_ENERGY_TODAY, daily_reset=True)
+        )
 
     for battery_index, battery in enumerate(coordinator.data.batteries):
         entities.extend(
@@ -2790,6 +2845,105 @@ class GivEnergyEmsSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEn
         if ems is None:
             return None
         return self.entity_description.value_fn(ems)
+
+
+# Poll gaps beyond this many scan intervals contribute a single capped slice to the
+# load-energy integral, so an outage can't be billed as a rectangle of stale power.
+_LOAD_ENERGY_GAP_SCANS = 3
+# Fallback cap when the coordinator carries no update interval (never in practice).
+_LOAD_ENERGY_GAP_FLOOR = 300.0
+
+
+class GivEnergyEmsLoadEnergySensor(GivEnergyEmsSensor, RestoreEntity):
+    """Client-side integral of EMS calculated load power (#248).
+
+    The EMS rollup carries no energy counters and the site PV is only visible as
+    meter power samples, so on an EMS plant house-load energy exists solely as a
+    live power signal — there is nothing register-backed to read or balance
+    against (settled empirically against real EMS captures). This integrates
+    calc_load_power (IR2086) at poll cadence; measured_load_power reads a
+    constant zero on real sites and is deliberately not a fallback.
+
+    An estimate, not a meter: every failure mode undercounts, never overcounts.
+    The accumulator restores across HA restarts, and any sampling gap (restart,
+    outage, stalled polls) contributes at most one gap-capped slice.
+    """
+
+    def __init__(
+        self,
+        coordinator: GivEnergyUpdateCoordinator,
+        description: GivEnergyEmsSensorDescription,
+        *,
+        daily_reset: bool,
+    ) -> None:
+        super().__init__(coordinator, description)
+        self._daily_reset = daily_reset
+        self._total_kwh = 0.0
+        self._day: date | None = None
+        self._last_sample_at: datetime | None = None
+        self._last_mark: datetime | None = None
+        interval = coordinator.update_interval
+        self._gap_cap = (
+            _LOAD_ENERGY_GAP_SCANS * interval.total_seconds()
+            if interval
+            else _LOAD_ENERGY_GAP_FLOOR
+        )
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is None:
+            return
+        try:
+            restored = float(last_state.state)
+        except ValueError, TypeError:
+            return
+        last_date = dt_util.as_local(last_state.last_updated).date()
+        if self._daily_reset and last_date != dt_util.now().date():
+            # A prior-day value is spent; today restarts from zero.
+            self._day = dt_util.now().date()
+        else:
+            self._total_kwh = max(restored, 0.0)
+            self._day = last_date
+        # Seed the sample clock from the persisted timestamp either way, so the
+        # first post-restart refresh adds a (gap-capped) slice for the downtime
+        # rather than silently free-running from zero elapsed.
+        self._last_sample_at = last_state.last_updated
+
+    def _integrate(self) -> None:
+        """Accumulate once per successful refresh (idempotent across repeat reads)."""
+        mark = self.coordinator.last_successful_refresh
+        if mark is None or mark == self._last_mark:
+            return
+        ems = self.coordinator.data.ems
+        power = getattr(ems, "calc_load_power", None) if ems is not None else None
+        now = dt_util.utcnow()
+        if power is None:
+            # A successful refresh without a load sample (rollup bank missing or
+            # partial) consumes the sample boundary: advance the clock and mark
+            # without adding energy, so a later valid sample can't bridge the
+            # unknown interval at its own power — undercount, never overcount.
+            self._last_sample_at = now
+            self._last_mark = mark
+            return
+        if self._daily_reset:
+            today = dt_util.now().date()
+            if self._day != today:
+                # The midnight-spanning slice lands wholly in the new day — at
+                # most one scan interval of misattribution.
+                self._total_kwh = 0.0
+                self._day = today
+        if self._last_sample_at is not None:
+            elapsed = (now - self._last_sample_at).total_seconds()
+            if elapsed > 0:
+                self._total_kwh += power * min(elapsed, self._gap_cap) / 3_600_000
+        self._last_sample_at = now
+        self._last_mark = mark
+
+    @property
+    def native_value(self) -> float | None:
+        self._integrate()
+        return self._total_kwh
 
 
 class GivEnergyCoordinatorSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):

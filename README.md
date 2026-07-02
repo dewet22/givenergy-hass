@@ -128,6 +128,7 @@ When enabled, the integration connects to the inverter but sends no Modbus read 
 | PV Energy Today | kWh | |
 | PV Energy Total | kWh | |
 | Battery SOC | % | |
+| Battery SOC kWh | kWh | SOC × nominal capacity ([#248](https://github.com/dewet22/givenergy-hass/issues/248)) — nameplate-derived estimate, reads optimistic on aged packs |
 | Battery Power | W | Positive = discharging, negative = charging |
 | Battery Voltage / Current | V / A | |
 | Battery Temperature | °C | |
@@ -213,6 +214,16 @@ Cell-level entities are tagged as diagnostic, so they're hidden from the default
 #### AIO battery modules
 
 All-in-One systems expose each removable battery module separately, so on AIO hardware you'll see one extra device per module (parented to the AIO inverter) alongside the pack-level battery device. Each module device carries its `HX…` serial plus 24 per-cell voltages and 12 per-cell temperatures, all diagnostic. These mirror the LV per-cell entities, so the cell-heatmap card and the same pack-health views work at module granularity. Module data needs `givenergy-modbus` 2.2 or newer.
+
+### EMS controller device
+
+On an EMS plant the controller device carries plant-level aggregates the inverter registers don't: managed-inverter count, calculated/measured load power, grid meter power, total battery power and remaining battery energy. Two derived energy sensors build on the load aggregate:
+
+| Entity | Unit | Notes |
+|---|---|---|
+| EMS Calculated Load Energy Today / Total | kWh | Integrated client-side from *EMS Calculated Load Power* — the EMS rollup carries no energy counters, so no register-backed figure exists. An estimate, not a meter reading: it undercounts across restarts and outages (a sampling gap contributes at most one capped slice), though the accumulated value does survive Home Assistant restarts. |
+
+These replace the Integral + Utility Meter helpers a Predbat EMS setup previously had to hand-create ([#248](https://github.com/dewet22/givenergy-hass/issues/248)).
 
 ### Services
 

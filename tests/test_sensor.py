@@ -183,7 +183,7 @@ def test_single_phase_only_sensors_gated_on_three_phase():
     permanently-unavailable orphan entities on three-phase inverters (#94), and
     t_battery would read a frozen, unpopulated single-phase register there (#174)."""
     inv = MagicMock()
-    gated_keys = {"p_pv", "e_pv_day", "battery_capacity_kwh", "t_battery"}
+    gated_keys = {"p_pv", "e_pv_day", "battery_capacity_kwh", "t_battery", "soc_kwh"}
 
     # Every gated key must actually carry the flag (guards against silent drift if
     # one is renamed/removed) ...
@@ -353,6 +353,29 @@ async def test_battery_soc_sensor(hass, setup_integration):
     state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_battery_soc"))
     assert state.state == "85"
     assert state.attributes["unit_of_measurement"] == "%"
+
+
+def test_soc_kwh_value_fn():
+    """#248: SOC-scaled nominal capacity — the Predbat soc_kw figure — is
+    None-safe on either missing input (skip_if_none then drops the sensor)."""
+    desc = _inverter_desc("soc_kwh")
+    inv = MagicMock()
+    inv.battery_soc = 85
+    inv.battery_capacity_kwh = 8.19
+    assert desc.value_fn(inv) == pytest.approx(6.9615)
+    inv.battery_soc = None
+    assert desc.value_fn(inv) is None
+    inv.battery_soc = 85
+    inv.battery_capacity_kwh = None
+    assert desc.value_fn(inv) is None
+
+
+async def test_soc_kwh_sensor_reads(hass, setup_integration):
+    """#248: Battery SOC kWh surfaces natively (85% of 8.19 kWh nominal)."""
+    state = hass.states.get(_entity_id(hass, "sensor", "SA1234G123_soc_kwh"))
+    assert float(state.state) == pytest.approx(6.9615)
+    assert state.attributes["unit_of_measurement"] == "kWh"
+    assert state.attributes["device_class"] == "energy_storage"
 
 
 async def test_grid_power_sensor_negative_is_import(hass, setup_integration):
