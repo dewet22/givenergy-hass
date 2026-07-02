@@ -421,3 +421,50 @@ async def test_options_flow_omits_section_when_no_features(hass, mock_client, se
     top_keys = {marker.schema for marker in result["data_schema"].schema}
     assert CONF_EXPERIMENTAL not in top_keys
     assert CONF_BATTERY_DATA_ONLY in top_keys
+
+
+async def test_options_flow_experimental_fields_are_optional(hass, mock_client, setup_integration):
+    """Inner section fields must serialise as optional, not required (#251).
+
+    A vol.Required field inside a collapsed section is never initialised in the
+    frontend's data model, so HA's submit-time required-fields check fails with
+    "Not all required fields are filled in" and blocks saving for any entry that
+    has never opened the section. Serialising the schema the way the frontend
+    receives it, the inner field must be optional so that check never fires."""
+    import voluptuous_serialize
+    from homeassistant.helpers import config_validation as cv
+
+    with patch(
+        "custom_components.givenergy_local.config_flow.EXPERIMENTAL_FEATURES",
+        (_DEMO_FEATURE,),
+    ):
+        result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    serialised = voluptuous_serialize.convert(
+        result["data_schema"], custom_serializer=cv.custom_serializer
+    )
+    section = next(f for f in serialised if f.get("name") == CONF_EXPERIMENTAL)
+    inner = section["schema"]
+    assert inner, "experimental section rendered no inner fields"
+    for field in inner:
+        assert not field.get("required"), f"{field['name']} is required inside a collapsed section"
+        assert field.get("optional"), f"{field['name']} must be optional (#251)"
+
+
+async def test_options_flow_saves_without_touching_experimental_section(
+    hass, mock_client, setup_integration
+):
+    """End-to-end #251 guard: a legacy entry (no 'experimental' key in options) can
+    submit the form omitting the collapsed section entirely and the save succeeds."""
+    with patch(
+        "custom_components.givenergy_local.config_flow.EXPERIMENTAL_FEATURES",
+        (_DEMO_FEATURE,),
+    ):
+        result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+        # Submit as the frontend does for an untouched collapsed section: the
+        # section key is omitted from the payload entirely.
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {CONF_BATTERY_DATA_ONLY: True}
+        )
+        await hass.async_block_till_done()
+    assert result["type"] == "create_entry"
+    assert setup_integration.options[CONF_BATTERY_DATA_ONLY] is True

@@ -187,20 +187,24 @@ class GivEnergyLocalOptionsFlow(OptionsFlow):
         # Surface the collapsed "Experimental features" group only once at least one
         # flag exists, so the header never appears empty (the registry ships empty).
         if EXPERIMENTAL_FEATURES:
-            # Seed schema defaults from the currently-saved values so that a
-            # collapsed or omitted section round-trips correctly.  This works
-            # because HA's frontend either (a) submits the rendered (pre-filled)
-            # values for a collapsed section, in which case the submitted value
-            # wins, or (b) omits the section key entirely, in which case the
-            # vol.Optional / inner vol.Required defaults fill in the existing
-            # values.  The two cases are indistinguishable if the frontend sends
-            # base defaults (all False) for untouched collapsed sections — but
-            # HA keeps section inputs in the DOM, so (a) is what happens.
+            # Seed the section default from the currently-saved values so an
+            # omitted (untouched, collapsed) section round-trips its existing
+            # values: when the frontend omits the section key, the vol.Optional
+            # section default plus the inner defaults restore what was saved.
             existing_exp: dict[str, Any] = self.config_entry.options.get(CONF_EXPERIMENTAL, {})
             schema_dict[vol.Optional(CONF_EXPERIMENTAL, default=existing_exp)] = section(
                 vol.Schema(
                     {
-                        vol.Required(
+                        # vol.Optional, NOT vol.Required: a required field inside a
+                        # collapsed section is never initialised in the frontend's
+                        # data model (the inner form isn't rendered until the user
+                        # expands it), so HA's submit-time required-fields check
+                        # fails with "Not all required fields are filled in" and
+                        # blocks saving for any entry that has never opened the
+                        # section (#251). The default still applies server-side, and
+                        # resolve_experimental_client_kwargs reads via
+                        # .get(..., feature.default), so an omitted key is unchanged.
+                        vol.Optional(
                             feature.conf_key,
                             default=existing_exp.get(feature.conf_key, feature.default),
                         ): bool
