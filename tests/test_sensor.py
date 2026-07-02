@@ -150,9 +150,11 @@ def test_aio_inapplicable_inverter_sensors_skip_if_none():
 def test_aio_inapplicable_inverter_sensors_gated_on_aio():
     """MPPT Count, Solar Diverter and Battery Discharge This Year read a meaningless
     value (0, 0.0, a static figure) — not None — on an AIO, so skip_if_none never
-    dropped them. They're gated on AIO topology instead (#95)."""
+    dropped them. They're gated on AIO topology instead (#95). House Consumption
+    Today joins them: its PV/grid inputs are under identity investigation on AIO
+    (modbus#293) and the unit reports no raw consumption figure."""
     inv = MagicMock()  # every attr returns a truthy mock, i.e. "not None"
-    aio_gated = {"num_mppt", "e_solar_diverter", "e_discharge_year"}
+    aio_gated = {"num_mppt", "e_solar_diverter", "e_discharge_year", "e_consumption_today"}
     flagged = {d.key for d in INVERTER_SENSORS if d.skip_if_aio}
     assert flagged == aio_gated
     for key in aio_gated:
@@ -1260,7 +1262,7 @@ async def test_hv_stack_creates_one_device(hass, hv_setup):
     device = dev_registry.async_get(registry.async_get(entity_id).device_id)
     assert device is not None
     assert (DOMAIN, device_id) in device.identifiers
-    assert device.name == "GivEnergy HV Battery Stack"
+    assert device.name == "GivEnergy HV Battery SA1234G123 Stack 0x70"
     assert device.model == "HV Battery Stack (BCU)"
     assert device.sw_version == "GA000009"
     inverter_device = dev_registry.async_get_device(identifiers={(DOMAIN, "SA1234G123")})
@@ -1276,11 +1278,52 @@ async def test_aio_model_suppresses_pv_sensors_even_with_empty_modules(hass, hv_
     """The AIO gate keys off the detected model (Model.ALL_IN_ONE, restored from the
     capabilities cache), not decoded module telemetry. hv_setup is an AIO whose
     aio_battery_modules list is empty (the cold-start / transient-drop case), yet the
-    PV/solar-only inverter sensors must still be suppressed (#95, review)."""
+    PV/solar-only inverter sensors must still be suppressed (#95, review). The derived
+    House Consumption Today joins the gated set: its PV/grid inputs are under identity
+    investigation on AIO (modbus#293) and there is no raw backing figure."""
     registry = er.async_get(hass)
-    for key in ("num_mppt", "e_solar_diverter", "e_discharge_year"):
+    for key in ("num_mppt", "e_solar_diverter", "e_discharge_year", "e_consumption_today"):
         assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is None, key
     # Sanity: the inverter-sensor loop did run (only the PV/solar fields were gated).
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_system_mode") is not None
+
+
+async def test_hv_stack_names_unique_across_stacks(hass, mock_client, mock_config_entry):
+    """Stack device names carry serial + bus address — the same token as the device
+    id, logs, CLI and diagnostics (one namespace, no off-by-one mapping) — so
+    multi-stack and multi-entry installs never collide into HA's "_2" slug (#95)."""
+    _setup_hv_plant(
+        mock_client,
+        [_mock_hv_stack(0x70, _mock_bcu()), _mock_hv_stack(0x72, _mock_bcu())],
+    )
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    dev_registry = dr.async_get(hass)
+    names = {
+        d.name
+        for d in dr.async_entries_for_config_entry(dev_registry, mock_config_entry.entry_id)
+        if d.model == "HV Battery Stack (BCU)"
+    }
+    assert names == {
+        "GivEnergy HV Battery SA1234G123 Stack 0x70",
+        "GivEnergy HV Battery SA1234G123 Stack 0x72",
+    }
+
+
+async def test_upgrade_removes_house_consumption_on_aio(hass, mock_client, mock_config_entry):
+    """Upgrade path (#95): an existing AIO entry carries the House Consumption Today
+    row a pre-gate version created; reconciliation removes exactly that row and
+    leaves the retained inverter sensors alone."""
+    _setup_hv_plant(mock_client, [_mock_hv_stack(0x70, _mock_bcu())])
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_e_consumption_today", config_entry=mock_config_entry
+    )
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_consumption_today") is None
     assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_system_mode") is not None
 
 

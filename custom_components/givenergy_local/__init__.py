@@ -11,6 +11,7 @@ from typing import TypedDict
 
 import voluptuous as vol
 from givenergy_modbus.client import commands
+from givenergy_modbus.model.inverter import Model
 from givenergy_modbus.model.plant import PlantCapabilities
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.homeassistant.exposed_entities import async_expose_entity
@@ -499,6 +500,21 @@ def _reconcile_ems_entities(hass: HomeAssistant, entry: ConfigEntry, serial: str
             registry.async_remove(ent.entity_id)
 
 
+def _reconcile_aio_house_consumption(hass: HomeAssistant, serial: str) -> None:
+    """Remove the derived House Consumption Today row on an AIO entry (#95).
+
+    The sensor is gated off AIO — its PV/grid inputs are the registers whose
+    identity is under investigation upstream (modbus#293), and AIO units report
+    no raw consumption figure — but an upgraded entry keeps the stale registry
+    row when the platform stops creating it.
+    """
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{serial}_e_consumption_today")
+    if entity_id is not None:
+        _LOGGER.info("Removing %s: derived consumption is gated off AIO (#95)", entity_id)
+        registry.async_remove(entity_id)
+
+
 def _remove_stale_control(registry: er.EntityRegistry, serial: str, domain: str, key: str) -> None:
     """Remove a readability-gated control's stale registry row, if present (#207)."""
     entity_id = registry.async_get_entity_id(domain, DOMAIN, f"{serial}_{key}")
@@ -837,6 +853,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # version (or a prior opt-in) created, so the toggle cleans up rather than
     # leaving orphaned/unavailable cell entities (#179).
     _reconcile_per_cell_entities(hass, entry)
+
+    # House Consumption Today is gated off AIO (#95): remove the stale row an
+    # upgraded AIO entry would otherwise keep as orphaned/unavailable. Strictly
+    # ALL_IN_ONE, matching the skip_if_aio creation gate (AIO_HYBRID has real PV).
+    capabilities = coordinator.data.capabilities
+    if capabilities is not None and capabilities.device_type is Model.ALL_IN_ONE:
+        _reconcile_aio_house_consumption(hass, coordinator.data.inverter_serial_number)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
