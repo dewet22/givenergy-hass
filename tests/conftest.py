@@ -201,6 +201,9 @@ def mock_plant(mock_inverter, mock_battery) -> MagicMock:
     # No EMS by default; the EMS-specific tests override this with a mock Ems so
     # the EMS scheduling entities are only created for EMS plants.
     plant.ems = None
+    # No Gateway by default (#194) — a bare MagicMock attribute would be truthy
+    # and route every test through the gateway branch. Gateway tests override.
+    plant.gateway = None
     # A real PlantCapabilities — the integration's save-on-success path calls
     # .to_dict() through CapabilitiesCache, which would choke on a MagicMock.
     plant.capabilities = PlantCapabilities(

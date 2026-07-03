@@ -196,6 +196,49 @@ class GivEnergyEmsSensorDescription(SensorEntityDescription):
     value_fn: Callable[[Ems], Any] = field(default=lambda _: None)
 
 
+@dataclass(frozen=True, kw_only=True)
+class GivEnergyGatewaySensorDescription(SensorEntityDescription):
+    """Sensor over `plant.gateway` (GatewayV1/V2 — identical field names).
+
+    On a Gateway plant `plant.inverter` is a spurious SinglePhaseInverter decoded
+    from the gateway's own 0x11 cache (all zeros), so the standard inverter sensor
+    set is suppressed and this set reads the real whole-house data from the
+    gateway register banks instead (#194).
+    """
+
+    value_fn: Callable[[Any], Any] = field(default=lambda _: None)
+    # Skip creation when the value reads None at setup — used to gate the per-AIO
+    # slots (the register map always carries three; unpopulated slots have an
+    # empty serial and their fields read as absent).
+    skip_if_none: bool = False
+
+
+def _gateway_attr(name: str) -> Callable[[Any], Any]:
+    """Return a value_fn reading `name` off the gateway model."""
+    return lambda gateway: getattr(gateway, name, None)
+
+
+def _gateway_aio_attr(slot: int, name: str) -> Callable[[Any], Any]:
+    """Read a per-AIO field, gated on AIO slot `slot` being populated.
+
+    The Gateway register map carries three AIO slots regardless of how many
+    units are installed; unpopulated slots report zeros, which must surface as
+    absent rather than as a phantom third AIO. The gate is the parallel AIO
+    count register, NOT the per-slot serial: on the live GAAA0014 shape the
+    GatewayV2 serial layout decodes aio2_serial_number as None under the
+    pinned modbus release, which would wrongly drop a real second AIO
+    (Codex catch on #258).
+    """
+
+    def value(gateway: Any) -> Any:
+        count = getattr(gateway, "parallel_aio_num", None)
+        if count is None or slot > count:
+            return None
+        return getattr(gateway, name, None)
+
+    return value
+
+
 def _summary_attr(name: str) -> Callable[[InverterSummary], Any]:
     """Return a value_fn that reads `name` off an EMS managed-inverter summary.
 
@@ -1799,6 +1842,288 @@ EMS_LOAD_ENERGY_TODAY = GivEnergyEmsSensorDescription(
 )
 
 
+def _gateway_aio_energy(slot: int, direction: str) -> GivEnergyGatewaySensorDescription:
+    """Per-AIO daily charge/discharge energy description for AIO slot `slot`."""
+    return GivEnergyGatewaySensorDescription(
+        key=f"e_aio{slot}_{direction}_today",
+        name=f"AIO {slot} {direction.capitalize()} Energy Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=1,
+        value_fn=_gateway_aio_attr(slot, f"e_aio{slot}_{direction}_today"),
+        skip_if_none=True,
+    )
+
+
+# Whole-house + per-AIO telemetry from the Gateway register banks (#194).
+# Deliberately EXCLUDED pending upstream decode verdicts (first live data,
+# AberDino's Gen 1 Gateway, 2026-07-03): every `*_total` lifetime counter
+# (mis-scaled ~10^4), the combined `e_aio_charge/discharge_today` pair
+# (disagrees with the per-AIO sum), and `battery_type` (mis-decodes).
+GATEWAY_SENSORS: tuple[GivEnergyGatewaySensorDescription, ...] = (
+    GivEnergyGatewaySensorDescription(
+        key="p_load",
+        name="Load Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_gateway_attr("p_load"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="p_pv",
+        name="PV Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_gateway_attr("p_pv"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="p_aio_total",
+        name="AIO Power Total",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_gateway_attr("p_aio_total"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="p_ac1",
+        name="AC Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_gateway_attr("p_ac1"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="p_liberty",
+        name="Liberty Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_gateway_attr("p_liberty"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="e_load_today",
+        name="Load Energy Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr("e_load_today"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="e_pv_today",
+        name="PV Energy Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr("e_pv_today"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="e_grid_import_today",
+        name="Grid Import Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr("e_grid_import_today"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="e_grid_export_today",
+        name="Grid Export Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr("e_grid_export_today"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="e_battery_charge_today",
+        name="Battery Charge Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr("e_battery_charge_today"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="e_battery_discharge_today",
+        name="Battery Discharge Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr("e_battery_discharge_today"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="v_grid",
+        name="Grid Voltage",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr("v_grid"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="v_load",
+        name="Load Voltage",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr("v_load"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="v_grid_relay",
+        name="Grid Relay Voltage",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr("v_grid_relay"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="v_inverter_relay",
+        name="Inverter Relay Voltage",
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        device_class=SensorDeviceClass.VOLTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr("v_inverter_relay"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="i_grid",
+        name="Grid Current",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr("i_grid"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="i_load",
+        name="Load Current",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr("i_load"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="i_pv",
+        name="PV Current",
+        native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
+        device_class=SensorDeviceClass.CURRENT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr("i_pv"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="parallel_aio_num",
+        name="AIO Count",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_gateway_attr("parallel_aio_num"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="parallel_aio_online_num",
+        name="AIO Online Count",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_gateway_attr("parallel_aio_online_num"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="aio_state",
+        name="AIO State",
+        value_fn=lambda gateway: _managed_status(getattr(gateway, "aio_state", None)),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="gateway_work_mode",
+        name="Work Mode",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda gateway: _managed_status(getattr(gateway, "work_mode", None)),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="gateway_fault_codes",
+        name="Gateway Fault Codes",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda gateway: (
+            ", ".join(codes)
+            if (codes := getattr(gateway, "gateway_fault_codes", None))
+            else ("None" if codes is not None else None)
+        ),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="aio1_soc",
+        name="AIO 1 Battery SOC",
+        native_unit_of_measurement=PERCENTAGE,
+        device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_gateway_aio_attr(1, "aio1_soc"),
+        skip_if_none=True,
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="aio2_soc",
+        name="AIO 2 Battery SOC",
+        native_unit_of_measurement=PERCENTAGE,
+        device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_gateway_aio_attr(2, "aio2_soc"),
+        skip_if_none=True,
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="aio3_soc",
+        name="AIO 3 Battery SOC",
+        native_unit_of_measurement=PERCENTAGE,
+        device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_gateway_aio_attr(3, "aio3_soc"),
+        skip_if_none=True,
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="p_aio1_inverter",
+        name="AIO 1 Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_gateway_aio_attr(1, "p_aio1_inverter"),
+        skip_if_none=True,
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="p_aio2_inverter",
+        name="AIO 2 Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_gateway_aio_attr(2, "p_aio2_inverter"),
+        skip_if_none=True,
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="p_aio3_inverter",
+        name="AIO 3 Power",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_gateway_aio_attr(3, "p_aio3_inverter"),
+        skip_if_none=True,
+    ),
+    _gateway_aio_energy(1, "charge"),
+    _gateway_aio_energy(1, "discharge"),
+    _gateway_aio_energy(2, "charge"),
+    _gateway_aio_energy(2, "discharge"),
+    _gateway_aio_energy(3, "charge"),
+    _gateway_aio_energy(3, "discharge"),
+)
+
+
 def _partial_failure_attributes(
     coordinator: GivEnergyUpdateCoordinator,
 ) -> dict[str, Any] | None:
@@ -2000,6 +2325,7 @@ async def async_setup_entry(
     # CONF_EXPOSE_PER_CELL and _reconcile_per_cell_entities (__init__).
     expose_per_cell = entry.options.get(CONF_EXPOSE_PER_CELL, True)
     ems = coordinator.data.ems
+    gateway = coordinator.data.gateway
 
     entities: list[SensorEntity] = []
 
@@ -2008,17 +2334,30 @@ async def async_setup_entry(
     # sensors stay — only the derived House Consumption is gated out per-description
     # via skip_if_ems (#201). The EMS plant-level aggregates are added alongside.
     #
+    # On a Gateway plant the 0x11 device is the gateway: `plant.inverter` decodes
+    # its cache as a spurious all-zeros SinglePhaseInverter, so the whole inverter
+    # set is suppressed in favour of GATEWAY_SENSORS below (#194).
+    #
     # Battery-data-only (#95): a parallel-mode AIO is controlled by its Gateway,
     # so its own inverter-level sensors (PV/grid/load/derived consumption) are
     # misleading. Drop them; keep the battery pack / HV stack / module / coordinator
     # data below. Control platforms suppress themselves the same way.
-    if not battery_data_only:
+    if not battery_data_only and gateway is None:
         entities.extend(
             GivEnergyInverterSensor(coordinator, description)
             for description in INVERTER_SENSORS
             if _include_inverter_sensor(
                 description, inverter, is_three_phase, is_aio, ems is not None
             )
+        )
+
+    if gateway is not None:
+        # Whole-house + per-AIO telemetry from the gateway register banks (#194).
+        # skip_if_none gates the unpopulated AIO slots (empty serial ⇒ None).
+        entities.extend(
+            GivEnergyGatewaySensor(coordinator, description)
+            for description in GATEWAY_SENSORS
+            if not description.skip_if_none or description.value_fn(gateway) is not None
         )
 
     if ems is not None:
@@ -2852,6 +3191,50 @@ class GivEnergyEmsSensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEn
         if ems is None:
             return None
         return self.entity_description.value_fn(ems)
+
+
+class GivEnergyGatewaySensor(CoordinatorEntity[GivEnergyUpdateCoordinator], SensorEntity):
+    """Whole-house telemetry sensor for a Gateway (device 0x11, #194).
+
+    On a Gateway plant the 0x11 device is the gateway itself: `plant.inverter`
+    decodes its cache as a spurious all-zeros SinglePhaseInverter, so the
+    standard inverter sensor set is suppressed and this set reads the real data
+    (whole-house load/PV, grid import/export, per-AIO SOC and energy) from
+    `plant.gateway` (GatewayV1/V2) on the same device, which it also names.
+    """
+
+    _attr_has_entity_name = True
+    entity_description: GivEnergyGatewaySensorDescription
+
+    def __init__(
+        self,
+        coordinator: GivEnergyUpdateCoordinator,
+        description: GivEnergyGatewaySensorDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        serial = coordinator.data.inverter_serial_number
+        self._attr_unique_id = f"{serial}_{description.key}"
+        gateway = coordinator.data.gateway
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, serial)},
+            name=f"GivEnergy Gateway {serial}",
+            manufacturer="GivEnergy",
+            model=_MODEL_NAMES[Model.GATEWAY],
+            sw_version=getattr(gateway, "software_version", None),
+            serial_number=serial,
+        )
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.coordinator.data.gateway is not None
+
+    @property
+    def native_value(self) -> Any:
+        gateway = self.coordinator.data.gateway
+        if gateway is None:
+            return None
+        return self.entity_description.value_fn(gateway)
 
 
 # Poll gaps beyond this many scan intervals contribute a single capped slice to the

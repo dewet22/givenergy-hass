@@ -2361,3 +2361,183 @@ async def test_lv_per_cell_present_when_option_absent(hass, mock_client):
     entry = await _setup_lv_with_option(hass, expose_per_cell=None)
     uids = _sensor_uids(hass, entry)
     assert any("_v_cell_" in u for u in uids)
+
+
+# ---------------------------------------------------------------------------
+# Gateway plant sensors (#194)
+# ---------------------------------------------------------------------------
+
+
+def _mock_gateway() -> MagicMock:
+    """A GatewayV1 stand-in populated with AberDino's real daylight values (#95)."""
+    gateway = MagicMock()
+    values = {
+        "software_version": "GAAA0014",
+        "p_load": 1127,
+        "p_pv": 2229,
+        "p_ac1": 917,
+        "p_liberty": 185,
+        "p_aio_total": 155,
+        "e_load_today": 8.1,
+        "e_pv_today": 3.8,
+        "e_grid_import_today": 28.0,
+        "e_grid_export_today": 1.2,
+        "e_battery_charge_today": 19.2,
+        "e_battery_discharge_today": 2.0,
+        "v_grid": 244.1,
+        "v_load": 244.9,
+        "v_grid_relay": 243.5,
+        "v_inverter_relay": 243.9,
+        "i_grid": 4.3,
+        "i_load": 5.5,
+        "i_pv": 9.0,
+        "parallel_aio_num": 2,
+        "parallel_aio_online_num": 2,
+        "aio_state": "Static",
+        "work_mode": 2,
+        "gateway_fault_codes": [],
+        "aio1_serial_number": "CH1111G111",
+        # None mirrors the live 2.9.6 decode: the GatewayV2 serial layout reads
+        # aio2_serial_number as None on real GAAA0014 hardware — the per-AIO gate
+        # must NOT depend on serials (Codex catch on #258; parallel_aio_num rules).
+        "aio2_serial_number": None,
+        "aio3_serial_number": "",  # unpopulated third slot
+        "aio1_soc": 94,
+        "aio2_soc": 96,
+        "aio3_soc": 0,
+        "p_aio1_inverter": 76,
+        "p_aio2_inverter": 79,
+        "p_aio3_inverter": 0,
+        "e_aio1_charge_today": 9.9,
+        "e_aio1_discharge_today": 1.4,
+        "e_aio2_charge_today": 9.3,
+        "e_aio2_discharge_today": 0.6,
+        "e_aio3_charge_today": 0.0,
+        "e_aio3_discharge_today": 0.0,
+    }
+    for name, value in values.items():
+        setattr(gateway, name, value)
+    return gateway
+
+
+def _setup_gateway_plant(mock_client) -> None:
+    """Reshape the mock plant into a Gen 1 Gateway (no LV packs, two meters)."""
+    from givenergy_modbus.model.inverter import Model
+    from givenergy_modbus.model.plant import PlantCapabilities
+
+    mock_client.plant.gateway = _mock_gateway()
+    mock_client.plant.batteries = []
+    # The spurious inverter decode still reads a real HR(0), so its model is
+    # GATEWAY on real hardware — the coordinator/datetime entities name the
+    # device from it and must agree with the gateway sensors' naming.
+    mock_client.plant.inverter.model = Model.GATEWAY
+    mock_client.plant.capabilities = PlantCapabilities(
+        device_type=Model.GATEWAY,
+        inverter_address=0x11,
+        meter_addresses=[0x01, 0x02],
+        lv_battery_addresses=[],
+        bcu_stacks=[],
+    )
+
+
+@pytest.fixture
+async def gateway_setup(hass, mock_client, mock_config_entry):
+    """Set up the integration against a Gateway plant."""
+    _setup_gateway_plant(mock_client)
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+    return mock_config_entry
+
+
+async def test_gateway_creates_whole_house_and_per_aio_sensors(hass, gateway_setup):
+    """A Gateway entry surfaces whole-house + per-AIO telemetry from plant.gateway,
+    on a device named as a Gateway with the gateway's own firmware version."""
+    registry = er.async_get(hass)
+    expectations = {
+        "p_load": "1127",
+        "p_pv": "2229",
+        "e_load_today": "8.1",
+        "e_grid_import_today": "28.0",
+        "e_battery_charge_today": "19.2",
+        "v_grid": "244.1",
+        "aio1_soc": "94",
+        "aio2_soc": "96",
+        "e_aio1_charge_today": "9.9",
+        "p_aio2_inverter": "79",
+        "parallel_aio_online_num": "2",
+        "aio_state": "Static",
+        "gateway_fault_codes": "None",
+    }
+    for key, expected in expectations.items():
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}")
+        assert entity_id is not None, key
+        assert hass.states.get(entity_id).state == expected, key
+
+    dev_registry = dr.async_get(hass)
+    device = dev_registry.async_get_device(identifiers={(DOMAIN, "SA1234G123")})
+    assert device is not None
+    assert device.name == "GivEnergy Gateway SA1234G123"
+    assert device.sw_version == "GAAA0014"
+
+
+async def test_gateway_suppresses_inverter_sensors_and_controls(hass, gateway_setup):
+    """The spurious all-zeros inverter decode must surface NOTHING on a Gateway:
+    no standard inverter sensors, no controls, no Restart button (#194)."""
+    registry = er.async_get(hass)
+    for key in ("battery_soc", "e_pv_day", "p_load_demand"):
+        assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is None, key
+    control_rows = [
+        e
+        for e in er.async_entries_for_config_entry(registry, gateway_setup.entry_id)
+        if e.domain in ("number", "select", "switch", "time")
+    ]
+    assert control_rows == []
+    buttons = [
+        e
+        for e in er.async_entries_for_config_entry(registry, gateway_setup.entry_id)
+        if e.domain == "button"
+    ]
+    # Re-detect stays (safe read-side reload); Restart is gated off Gateway.
+    assert len(buttons) == 1
+    assert "redetect" in buttons[0].unique_id
+
+
+async def test_gateway_unpopulated_aio_slot_gated(hass, gateway_setup):
+    """The register map always carries three AIO slots; with parallel_aio_num=2
+    the third slot must not surface phantom sensors (gate = AIO count, not the
+    unreliable per-slot serial decode)."""
+    registry = er.async_get(hass)
+    for key in ("aio3_soc", "p_aio3_inverter", "e_aio3_charge_today", "e_aio3_discharge_today"):
+        assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is None, key
+
+
+async def test_gateway_upgrade_reconciles_stale_inverter_rows(hass, mock_client, mock_config_entry):
+    """A Gateway entry created on v1.3.38 (pre-GATEWAY_SENSORS) carries the full
+    inverter sensor/control set as 0/Unknown rows; setup removes them (#194)."""
+    from custom_components.givenergy_local.number import NUMBER_DESCRIPTIONS
+
+    _setup_gateway_plant(mock_client)
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_battery_soc", config_entry=mock_config_entry
+    )
+    number_key = NUMBER_DESCRIPTIONS[0].key
+    registry.async_get_or_create(
+        "number", DOMAIN, f"SA1234G123_{number_key}", config_entry=mock_config_entry
+    )
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_battery_soc") is None
+    assert registry.async_get_entity_id("number", DOMAIN, f"SA1234G123_{number_key}") is None
+    # The gateway sensors took over the device.
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_p_load") is not None
+
+
+async def test_non_gateway_plant_has_no_gateway_sensors(hass, setup_integration):
+    """The default (hybrid) fixture must not create any gateway sensors."""
+    registry = er.async_get(hass)
+    for key in ("aio1_soc", "p_load", "e_load_today", "gateway_fault_codes"):
+        assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is None, key

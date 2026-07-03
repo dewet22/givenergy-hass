@@ -452,15 +452,27 @@ def _retired_inverter_unique_ids(serial: str) -> set[str]:
     Keyed by the controller serial; coordinator, battery, AIO and managed-inverter
     entities use different keys or their own serials, so they're excluded.
     """
-    # Local imports: these platform modules are imported by the platform setup
-    # anyway, and importing them at module scope here risks a load-order cycle.
+    from .sensor import INVERTER_SENSORS
+
+    keys = _inverter_control_keys()
+    # Inverter sensors gated on EMS (controller-local load + Battery Charge/Discharge Today).
+    keys.update(d.key for d in INVERTER_SENSORS if d.skip_if_ems)
+    # Duplicate EMS aggregate dropped in favour of the retained inverter Status sensor.
+    keys.add("ems_status")
+    return {f"{serial}_{key}" for key in keys}
+
+
+def _inverter_control_keys() -> set[str]:
+    """Keys of every inverter-level control description across the platforms.
+
+    Local imports: these platform modules are imported by the platform setup
+    anyway, and importing them at module scope here risks a load-order cycle.
+    """
     from .number import AC_COUPLED_NUMBER_DESCRIPTIONS, NUMBER_DESCRIPTIONS
     from .select import AC_COUPLED_SELECT_DESCRIPTIONS, SELECT_DESCRIPTIONS
-    from .sensor import INVERTER_SENSORS
     from .switch import AC_COUPLED_SWITCH_DESCRIPTIONS, SWITCH_DESCRIPTIONS
     from .time import SMART_LOAD_TIME_DESCRIPTIONS, TIME_DESCRIPTIONS
 
-    # All inverter-level controls are suppressed on EMS.
     controls = (
         *SWITCH_DESCRIPTIONS,
         *AC_COUPLED_SWITCH_DESCRIPTIONS,
@@ -471,12 +483,41 @@ def _retired_inverter_unique_ids(serial: str) -> set[str]:
         *TIME_DESCRIPTIONS,
         *SMART_LOAD_TIME_DESCRIPTIONS,
     )
-    keys = {d.key for d in controls}
-    # Inverter sensors gated on EMS (controller-local load + Battery Charge/Discharge Today).
-    keys.update(d.key for d in INVERTER_SENSORS if d.skip_if_ems)
-    # Duplicate EMS aggregate dropped in favour of the retained inverter Status sensor.
-    keys.add("ems_status")
+    return {d.key for d in controls}
+
+
+def _retired_on_gateway_unique_ids(serial: str) -> set[str]:
+    """Unique IDs of the entities retired on a Gateway plant (#194).
+
+    On a Gateway the 0x11 device's inverter registers decode as a spurious
+    all-zeros SinglePhaseInverter, so the ENTIRE standard inverter sensor set is
+    suppressed (unlike EMS, where the 0x11 block carries real data) along with
+    every inverter-level control (no validated write surface yet). The
+    GATEWAY_SENSORS set replaces them on the same device; coordinator sensors
+    use different keys and stay.
+    """
+    from .sensor import INVERTER_SENSORS
+
+    keys = _inverter_control_keys()
+    keys.update(d.key for d in INVERTER_SENSORS)
     return {f"{serial}_{key}" for key in keys}
+
+
+def _reconcile_gateway_entities(hass: HomeAssistant, entry: ConfigEntry, serial: str) -> None:
+    """Remove standard inverter entities from a Gateway entry (#194).
+
+    A Gateway entry created on v1.3.38 (before GATEWAY_SENSORS existed) carries
+    the full inverter sensor/control set as 0/Unknown registry rows; suppressing
+    creation alone would leave them orphaned on upgrade.
+    """
+    registry = er.async_get(hass)
+    retired = _retired_on_gateway_unique_ids(serial)
+    for ent in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if ent.unique_id in retired:
+            _LOGGER.info(
+                "Removing inverter entity %s retired on Gateway plant (#194)", ent.entity_id
+            )
+            registry.async_remove(ent.entity_id)
 
 
 def _reconcile_ems_entities(hass: HomeAssistant, entry: ConfigEntry, serial: str) -> None:
@@ -859,6 +900,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     capabilities = coordinator.data.capabilities
     if capabilities is not None and capabilities.device_type is Model.ALL_IN_ONE:
         _reconcile_aio_house_consumption(hass, coordinator.data.inverter_serial_number)
+
+    # On a Gateway the whole standard inverter sensor/control set is suppressed in
+    # favour of GATEWAY_SENSORS (#194): remove the 0/Unknown rows a pre-gateway-
+    # support entry (v1.3.38) created.
+    if capabilities is not None and capabilities.device_type is Model.GATEWAY:
+        _reconcile_gateway_entities(hass, entry, coordinator.data.inverter_serial_number)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

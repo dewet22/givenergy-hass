@@ -99,6 +99,10 @@ async def async_setup_entry(
     if entry.options.get(CONF_BATTERY_DATA_ONLY, False):
         # Battery-data-only (#95): this unit's controls are owned by its Gateway.
         return
+    if coordinator.data.gateway is not None:
+        # Gateway plant (#194): no validated write surface yet — the HR config
+        # block reads plausibly but writing through a Gateway is untested.
+        return
     entities: list[SwitchEntity] = []
     if coordinator.data.ems is not None:
         # EMS plant: inverter-level switches are redundant — only Flexi EMS Control
