@@ -188,6 +188,96 @@ async def test_timeout_reaching_tolerance_resets_client(hass, mock_plant):
         assert coordinator._client is None
 
 
+async def test_connection_lost_resets_client_immediately(hass, mock_plant):
+    """ConnectionLost is a known-dead connection (2.9.5): unlike a transient
+    TimeoutError (which preserves the client for the whole tolerance window),
+    it must reset the client on the FIRST failure so the next tick reconnects —
+    while still serving last-known data for this one tick."""
+    from givenergy_modbus.exceptions import ConnectionLost
+
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30, timeout_tolerance=3)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh = AsyncMock(side_effect=ConnectionLost("connection lost"))
+        mock_cls.return_value = client
+        coordinator._client = client
+        coordinator.data = mock_plant  # seed stale data
+
+        result = await coordinator._async_update_data()  # failure 1 — resets anyway
+
+        client.close.assert_awaited_once()
+        assert coordinator._client is None
+        assert result is mock_plant  # one tick of last-known, no entity flap
+        assert coordinator.consecutive_failures == 1
+
+
+async def test_connection_lost_then_next_tick_reconnects(hass, mock_plant):
+    """After a ConnectionLost reset, the very next tick runs the full reconnect
+    path (fresh Client, load_config + refresh) and recovers."""
+    from givenergy_modbus.exceptions import ConnectionLost
+
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30, timeout_tolerance=3)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        dead = AsyncMock()
+        dead.connected = True
+        dead.plant = mock_plant
+        dead.refresh = AsyncMock(side_effect=ConnectionLost("connection lost"))
+        fresh = AsyncMock()
+        fresh.connected = True
+        fresh.plant = mock_plant
+        fresh.refresh = AsyncMock(return_value=mock_plant)
+        fresh.load_config = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = fresh
+        coordinator._client = dead
+        coordinator.data = mock_plant
+
+        await coordinator._async_update_data()  # ConnectionLost → reset
+        assert coordinator._client is None
+
+        result = await coordinator._async_update_data()  # reconnect tick
+
+    fresh.load_config.assert_awaited_once()
+    fresh.refresh.assert_awaited_once()
+    assert result is mock_plant
+    assert coordinator.consecutive_failures == 0
+
+
+async def test_refresh_failed_wrapping_connection_lost_resets_client(hass, mock_plant):
+    """A total refresh failure whose cause group carries ConnectionLost is the
+    wrapped form of the known-dead case: it must reset immediately and serve one
+    tick of last-known — NOT pass the timeout-only test (ConnectionLost
+    subclasses TimeoutError) and keep the dead client (#261 review)."""
+    from givenergy_modbus.exceptions import ConnectionLost
+
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30, timeout_tolerance=3)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.refresh = AsyncMock(
+            side_effect=RefreshFailed(
+                "all reads failed",
+                failures=[],
+                cause=ExceptionGroup("reads", [ConnectionLost("link dead"), TimeoutError()]),
+            )
+        )
+        mock_cls.return_value = client
+        coordinator._client = client
+        coordinator.data = mock_plant  # seed stale data
+
+        result = await coordinator._async_update_data()
+
+        client.close.assert_awaited_once()
+        assert coordinator._client is None
+        assert result is mock_plant
+        assert coordinator.consecutive_failures == 1
+
+
 async def test_detect_timeout_on_reconnect_discards_client(hass, mock_plant):
     """A reconnect whose detect() times out must not retain a capability-less client.
 
