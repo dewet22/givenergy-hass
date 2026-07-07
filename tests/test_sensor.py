@@ -2414,6 +2414,25 @@ def _mock_gateway() -> MagicMock:
         "e_aio2_discharge_today": 0.6,
         "e_aio3_charge_today": 0.0,
         "e_aio3_discharge_today": 0.0,
+        # Lifetime totals: V1-word-order sane values (modbus 2.9.7, #360).
+        "e_grid_import_total": 12710.8,
+        "e_grid_export_total": 2192.7,
+        "e_pv_total": 5087.0,
+        "e_load_total": 12006.4,
+        "e_battery_charge_total": 8855.9,
+        "e_battery_discharge_total": 8998.8,
+        "e_aio1_charge_total": 4501.2,
+        "e_aio1_discharge_total": 4602.3,
+        "e_aio2_charge_total": 4354.7,
+        "e_aio2_discharge_total": 4396.5,
+        "e_aio3_charge_total": 0.0,
+        "e_aio3_discharge_total": 0.0,
+        # AC-side site set — distinct semantics from e_battery_* (DC side);
+        # includes EV-charger energy on AberDino's unit.
+        "e_aio_charge_today": 23.9,
+        "e_aio_discharge_today": 1.5,
+        "e_aio_charge_total": 9107.4,
+        "e_aio_discharge_total": 7801.2,
     }
     for name, value in values.items():
         setattr(gateway, name, value)
@@ -2464,6 +2483,11 @@ async def test_gateway_creates_whole_house_and_per_aio_sensors(hass, gateway_set
         "aio1_soc": "94",
         "aio2_soc": "96",
         "e_aio1_charge_today": "9.9",
+        "e_grid_import_total": "12710.8",
+        "e_battery_charge_total": "8855.9",
+        "e_aio1_charge_total": "4501.2",
+        "e_aio_charge_today": "23.9",
+        "e_aio_charge_total": "9107.4",
         "p_aio2_inverter": "79",
         "parallel_aio_online_num": "2",
         "aio_state": "Static",
@@ -2508,7 +2532,14 @@ async def test_gateway_unpopulated_aio_slot_gated(hass, gateway_setup):
     the third slot must not surface phantom sensors (gate = AIO count, not the
     unreliable per-slot serial decode)."""
     registry = er.async_get(hass)
-    for key in ("aio3_soc", "p_aio3_inverter", "e_aio3_charge_today", "e_aio3_discharge_today"):
+    for key in (
+        "aio3_soc",
+        "p_aio3_inverter",
+        "e_aio3_charge_today",
+        "e_aio3_discharge_today",
+        "e_aio3_charge_total",
+        "e_aio3_discharge_total",
+    ):
         assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is None, key
 
 
