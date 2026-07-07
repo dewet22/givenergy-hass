@@ -2152,11 +2152,14 @@ GATEWAY_SENSORS: tuple[GivEnergyGatewaySensorDescription, ...] = (
     _gateway_energy("e_battery_discharge_total", "Battery Discharge Total"),
     # AC-side site charge/discharge (distinct from the battery-DC set above:
     # conversion losses sit between them, and on sites with a GivEnergy EV
-    # charger the AC-side charge figure includes EV charging energy).
-    _gateway_energy("e_aio_charge_today", "AIO AC Charge Today"),
-    _gateway_energy("e_aio_discharge_today", "AIO AC Discharge Today"),
-    _gateway_energy("e_aio_charge_total", "AIO AC Charge Total"),
-    _gateway_energy("e_aio_discharge_total", "AIO AC Discharge Total"),
+    # charger the AC-side charge figure includes EV charging energy — which is
+    # why the names deliberately DON'T say "AIO" despite the library field
+    # names: AberDino's call on #95, the figure covers more than the AIOs.
+    # Keys keep the library field names; unique_ids are unaffected.
+    _gateway_energy("e_aio_charge_today", "AC Charge Today"),
+    _gateway_energy("e_aio_discharge_today", "AC Discharge Today"),
+    _gateway_energy("e_aio_charge_total", "AC Charge Total"),
+    _gateway_energy("e_aio_discharge_total", "AC Discharge Total"),
 )
 
 
