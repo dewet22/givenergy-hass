@@ -181,6 +181,35 @@ async def test_entry_with_passive_enabled_polls_actively(hass, mock_client):
     assert mock_client.refresh.call_count >= 1
 
 
+async def test_remove_device_allows_stale_refuses_live(hass, mock_client, setup_integration):
+    """UI device deletion: a device absent from the current topology may go;
+    the live inverter and battery devices are refused."""
+    from custom_components.givenergy_local import async_remove_config_entry_device
+
+    stale = MagicMock()
+    stale.identifiers = {(DOMAIN, "BG0000G000")}  # a pack detect() no longer lists
+    assert await async_remove_config_entry_device(hass, setup_integration, stale) is True
+
+    live_inverter = MagicMock()
+    live_inverter.identifiers = {(DOMAIN, "SA1234G123")}
+    assert await async_remove_config_entry_device(hass, setup_integration, live_inverter) is False
+
+    live_battery = MagicMock()
+    live_battery.identifiers = {(DOMAIN, mock_client.plant.batteries[0].serial_number)}
+    assert await async_remove_config_entry_device(hass, setup_integration, live_battery) is False
+
+
+async def test_remove_device_allowed_when_entry_not_loaded(hass, mock_config_entry):
+    """With the entry not set up there's nothing authoritative to defend —
+    deletion is allowed so users can clean up a dead entry's devices."""
+    from custom_components.givenergy_local import async_remove_config_entry_device
+
+    mock_config_entry.add_to_hass(hass)
+    device = MagicMock()
+    device.identifiers = {(DOMAIN, "SA1234G123")}
+    assert await async_remove_config_entry_device(hass, mock_config_entry, device) is True
+
+
 async def test_migrate_refuses_future_version(hass, mock_client):
     """A config entry from a future schema version should fail migration
     rather than silently downgrade."""

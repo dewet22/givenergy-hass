@@ -12,7 +12,7 @@ from typing import TypedDict
 import voluptuous as vol
 from givenergy_modbus.client import commands
 from givenergy_modbus.model.inverter import Model
-from givenergy_modbus.model.plant import PlantCapabilities
+from givenergy_modbus.model.plant import Plant, PlantCapabilities
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.homeassistant.exposed_entities import async_expose_entity
 from homeassistant.components.http import StaticPathConfig
@@ -552,6 +552,53 @@ def _reconcile_aio_house_consumption(hass: HomeAssistant, serial: str) -> None:
     if entity_id is not None:
         _LOGGER.info("Removing %s: derived consumption is gated off AIO (#95)", entity_id)
         registry.async_remove(entity_id)
+
+
+def _live_device_identifiers(plant: Plant) -> set[tuple[str, str]]:
+    """Identifiers of every device the CURRENT topology would create.
+
+    Mirrors the DeviceInfo identifier shapes across the platforms: the 0x11
+    device (inverter/EMS controller/Gateway — plus controls and coordinator
+    diagnostics) keys on the plant serial; LV packs, AIO modules and HV BMUs on
+    their own serials; HV stacks on ``{serial}_hvstack_{addr:#04x}``; EMS
+    managed inverters on ``{serial}_managed`` (#203).
+    """
+    serial = plant.inverter_serial_number
+    live: set[tuple[str, str]] = {(DOMAIN, serial)}
+    for battery in plant.batteries:
+        if battery.serial_number:
+            live.add((DOMAIN, battery.serial_number))
+    for module in plant.aio_battery_modules:
+        if module.serial_number:
+            live.add((DOMAIN, module.serial_number))
+    for stack in plant.hv_stacks:
+        live.add((DOMAIN, f"{serial}_hvstack_{stack.device_address:#04x}"))
+        for bmu in stack.bmus:
+            if bmu.serial_number:
+                live.add((DOMAIN, bmu.serial_number))
+    ems = plant.ems
+    if ems is not None:
+        for summary in ems.managed_inverters:
+            if summary.serial_number:
+                live.add((DOMAIN, f"{summary.serial_number}_managed"))
+    return live
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, entry: ConfigEntry, device: dr.DeviceEntry
+) -> bool:
+    """Allow UI deletion of devices no longer present in the plant topology.
+
+    HA calls this when the user clicks Delete on a device page. Stale devices —
+    a removed battery pack, a module that detect() no longer lists — may go;
+    devices still in the current topology are refused (deleting them would just
+    recreate them on the next reload, minus their settings)."""
+    coordinator: GivEnergyUpdateCoordinator | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if coordinator is None or coordinator.data is None:
+        # Entry not loaded — nothing authoritative to compare against, so let
+        # the user clean up freely.
+        return True
+    return not (device.identifiers & _live_device_identifiers(coordinator.data))
 
 
 def _remove_stale_control(registry: er.EntityRegistry, serial: str, domain: str, key: str) -> None:
