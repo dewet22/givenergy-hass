@@ -716,11 +716,6 @@ def _reconcile_ac_coupled_dc_limits(
             registry.async_remove(entity_id)
 
 
-async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload the entry when its options change (registered as an update listener)."""
-    await hass.config_entries.async_reload(entry.entry_id)
-
-
 @callback
 def _check_system_time_drift(
     hass: HomeAssistant, entry: ConfigEntry, coordinator: GivEnergyUpdateCoordinator
@@ -903,11 +898,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             coordinator._prior_capabilities = live_capabilities
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
-
-    # Reload the entry when its options change (e.g. the battery-data-only toggle,
-    # #95), so the platforms re-enumerate with the new filter. No listener exists
-    # otherwise, so an options change would have no effect until a manual reload.
-    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
 
     # Watch the inverter clock each poll and raise a repair when it drifts (#219).
     @callback
