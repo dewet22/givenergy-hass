@@ -36,8 +36,13 @@ async def async_setup_entry(
     # Restart writes the inverter reboot register (HR163), which an EMS controller
     # rejects (not in its modbus write-safe set — same family as the clock-write
     # ban), so gate it off EMS like the other controls. Battery-data-only units are
-    # driven by their Gateway, so skip there too (#95).
-    if coordinator.data.ems is None and not entry.options.get(CONF_BATTERY_DATA_ONLY, False):
+    # driven by their Gateway, so skip there too (#95). Gateway entries have no
+    # validated write surface yet, so Restart is gated there as well (#194).
+    if (
+        coordinator.data.ems is None
+        and coordinator.data.gateway is None
+        and not entry.options.get(CONF_BATTERY_DATA_ONLY, False)
+    ):
         entities.append(GivEnergyRestartButton(coordinator))
     async_add_entities(entities)
 

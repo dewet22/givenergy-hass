@@ -27,11 +27,11 @@ Confirmed working on real hardware:
 - AC-coupled (Gen 1)
 - All-in-One (AIO) — including per-module battery devices with per-cell data; needs v1.2.0 or later
 - EMS controller — validated on a live two-inverter EMS plant; some polling rough edges on busy shared buses are still being smoothed out in the library
+- Gateway (V1 / V2) — validated on a Gen 1 Gateway with two AIOs; exposes whole-house load/PV power and energy, grid import/export, and per-AIO SOC and charge/discharge. Lifetime totals are held back pending a decode fix, and no controls are offered through a Gateway yet
 
 The following have modelled register maps and are expected to work, but haven't yet been validated end-to-end by an owner — if yours is one of these and you run into sensor values that look wrong, please [open an issue](https://github.com/dewet22/givenergy-hass/issues):
 
 - Hybrid three-phase
-- Gateway (V1 / V2) — register layout decoded from owner probes, but the integration hasn't been run against one directly
 - HV battery stacks (BCU/BMU)
 
 If you'd like to help validate, a wire-frame capture is the most useful thing you can include. If you already have the integration running, use the built-in action from **Developer Tools → Actions** (named **Services** in older Home Assistant versions):
@@ -221,6 +221,10 @@ On an EMS plant the controller device carries plant-level aggregates the inverte
 | EMS Calculated Load Energy Today / Total | kWh | Integrated client-side from *EMS Calculated Load Power* — the EMS rollup carries no energy counters, so no register-backed figure exists. An estimate, not a meter reading: it undercounts across restarts and outages (a sampling gap contributes at most one capped slice), though the accumulated value does survive Home Assistant restarts. |
 
 These replace the Integral + Utility Meter helpers a Predbat EMS setup previously had to hand-create ([#248](https://github.com/dewet22/givenergy-hass/issues/248)).
+
+### Gateway device
+
+An entry pointed at a Gen 1 Gateway surfaces whole-house telemetry from the Gateway's own registers ([#194](https://github.com/dewet22/givenergy-hass/issues/194)): load and PV power, today's load / PV / grid import / grid export / battery charge / battery discharge energy, grid and load voltage, and — per attached AIO — battery SOC, power, and today's charge/discharge energy (unpopulated AIO slots are omitted). The standard inverter sensor set is suppressed on a Gateway entry: the Gateway's inverter-shaped registers read as zeros, and the real data lives in the Gateway banks. Lifetime totals are deliberately held back pending an upstream decode fix, and no control entities are offered through a Gateway yet. Your per-AIO entries (typically in battery-data-only mode) continue to work alongside.
 
 ### Services
 
