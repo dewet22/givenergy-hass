@@ -96,11 +96,12 @@ async def test_partial_success_during_setup_returns_serial(hass, mock_client, mo
     assert result["title"] == "GivEnergy SA1234G123"
 
 
-async def test_partial_without_serial_during_setup_shows_cannot_connect(
+async def test_partial_without_serial_during_setup_shows_detection_failed(
     hass, mock_client, mock_plant
 ):
     """If the partial dropped the inverter read itself (no serial), there's no
-    usable unique ID — treat it as cannot_connect rather than a blank entry."""
+    usable unique ID. The connection worked, so it reports detection_failed
+    rather than blaming the IP/port (#95)."""
     mock_plant.inverter_serial_number = ""
     mock_client.refresh.side_effect = RefreshPartiallySucceeded(
         "partial",
@@ -115,16 +116,32 @@ async def test_partial_without_serial_during_setup_shows_cannot_connect(
     result = await hass.config_entries.flow.async_configure(result["flow_id"], VALID_USER_INPUT)
 
     assert result["type"] == "form"
-    assert result["errors"] == {"base": "cannot_connect"}
+    assert result["errors"] == {"base": "detection_failed"}
 
 
-async def test_refresh_failed_during_setup_shows_cannot_connect(hass, mock_client):
-    """A total failure (no data at all) during the connection test → cannot_connect."""
+async def test_refresh_failed_during_setup_shows_detection_failed(hass, mock_client):
+    """A total read failure after a successful connect → detection_failed: the
+    TCP link was fine, so "check the IP address and port" would mislead (#95 —
+    a real Gateway spent a day misdiagnosed as a network problem)."""
     mock_client.refresh.side_effect = RefreshFailed(
         "link dead",
         failures=[],
         cause=ExceptionGroup("reads", [TimeoutError()]),
     )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], VALID_USER_INPUT)
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "detection_failed"}
+
+
+async def test_connect_failure_during_setup_shows_cannot_connect(hass, mock_client):
+    """A failure at the TCP-connect stage still blames the IP/port — the
+    connect() boundary is what splits cannot_connect from detection_failed."""
+    mock_client.connect.side_effect = OSError("connection refused")
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
