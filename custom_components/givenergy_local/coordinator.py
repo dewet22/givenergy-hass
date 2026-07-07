@@ -8,6 +8,7 @@ from typing import Any
 
 from givenergy_modbus.client.client import Client
 from givenergy_modbus.exceptions import (
+    ConnectionLost,
     PlantTopologyMismatch,
     ReadFailure,
     RefreshFailed,
@@ -291,8 +292,31 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         except UpdateFailed:
             self._record_failure()
             raise
+        except ConnectionLost as err:
+            # The library has declared the connection known-dead (2.9.5+). It
+            # subclasses TimeoutError for compatibility, but treating it as a
+            # transient timeout would keep the dead client and burn the whole
+            # timeout tolerance serving stale data (~2 extra ticks). Reset now
+            # so the very next tick reconnects; serve last-known for THIS tick
+            # so entities don't flap for a single interval. Must precede the
+            # RefreshFailed/TimeoutError arms.
+            self._record_failure()
+            await self._reset_client()
+            return await self._serve_last_known_or_fail(
+                "Connection lost — reconnecting on next update", err
+            )
         except RefreshFailed as err:
             self._record_failure()
+            if self._contains_connection_lost(err):
+                # The wrapped form of the known-dead case above: a total read
+                # failure whose cause group carries ConnectionLost. It would
+                # otherwise pass the timeout-only test below (ConnectionLost
+                # subclasses TimeoutError) and keep the dead client for the
+                # whole tolerance window (#261 review).
+                await self._reset_client()
+                return await self._serve_last_known_or_fail(
+                    "Connection lost — reconnecting on next update", err
+                )
             if self._is_timeout_failure(err):
                 # Every read timed out — treat like the bare-TimeoutError path
                 # below: transient, keep the client and serve last-known data
@@ -402,6 +426,14 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                 len(exc.failures),
                 _summarize_failures(exc.failures),
             )
+
+    def _contains_connection_lost(self, err: RefreshFailed) -> bool:
+        """True when any grouped cause of a RefreshFailed is a ConnectionLost."""
+        cause = err.cause
+        if isinstance(cause, BaseExceptionGroup):
+            match, _ = cause.split(ConnectionLost)
+            return match is not None
+        return isinstance(cause, ConnectionLost)
 
     def _is_timeout_failure(self, err: RefreshFailed) -> bool:
         """True if every underlying cause of a RefreshFailed is a timeout.
