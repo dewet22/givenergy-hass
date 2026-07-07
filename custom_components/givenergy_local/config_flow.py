@@ -10,7 +10,7 @@ from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
-    OptionsFlow,
+    OptionsFlowWithReload,
 )
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.core import callback
@@ -170,13 +170,13 @@ class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
             await client.close()
 
 
-class GivEnergyLocalOptionsFlow(OptionsFlow):
+class GivEnergyLocalOptionsFlow(OptionsFlowWithReload):
     """Per-entry options.
 
     Currently just the battery-data-only toggle (#95): for a unit controlled by a
     Gateway in a parallel group, suppress its control entities and inverter-level
     system sensors, leaving only battery / HV-stack / module / diagnostic data.
-    Changing it reloads the entry (see the update listener in __init__).
+    Saving reloads the entry (OptionsFlowWithReload) so the platforms re-enumerate.
     """
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
