@@ -23,7 +23,8 @@
     },
     "error": {
       "cannot_connect": "Failed to connect to the inverter. Check the IP address and port.",
-      "wrong_inverter": "The inverter at that address has a different serial number from the one originally configured. Remove and re-add the integration if you want to switch inverters."
+      "wrong_inverter": "The inverter at that address has a different serial number from the one originally configured. Remove and re-add the integration if you want to switch inverters.",
+      "detection_failed": "Connected to the device, but detecting its capabilities failed. This can mean an unsupported or partially supported model — please open an issue and attach the Home Assistant log lines from the attempt."
     },
     "abort": {
       "already_configured": "This inverter is already configured.",
@@ -45,13 +46,13 @@
         },
         "sections": {
           "experimental": {
-            "name": "Experimental features",
-            "description": "Leave these off unless a maintainer has asked you to enable them.",
+            "name": "Advanced features",
+            "description": "Optional low-risk tuning flags. Safe to leave off; turn one on if it matches a symptom you're seeing.",
             "data": {
               "splice_reject_heal": "Enable splice-guard heal window"
             },
             "data_description": {
-              "splice_reject_heal": "Allows the battery splice-guard to recover from legitimate LiFePO4 charge-knee surges (voltage/capacity class, multi-poll streak gate) rather than keeping the battery permanently offline. Enable only if you see repeated battery disconnects near full charge and a maintainer has confirmed this is the right path."
+              "splice_reject_heal": "Allows the battery splice-guard to recover from legitimate LiFePO4 charge-knee surges (voltage/capacity class, multi-poll streak gate) rather than keeping the battery permanently offline. Worth enabling if you see repeated battery disconnects near full charge."
             }
           }
         }

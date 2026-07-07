@@ -128,8 +128,15 @@ class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _test_connection(self, host: str, port: int) -> tuple[str, str | None]:
         client = Client(host=host, port=port)
+        # Split the failure story at the connect() boundary (#95): "cannot_connect"
+        # blames the IP/port, which is actively misleading when the TCP connection
+        # succeeded and it was detection/refresh that failed (an unsupported or
+        # partially supported device — a real Gateway spent a day misdiagnosed as
+        # a network problem because of exactly this collapse).
+        connected = False
         try:
             await client.connect()
+            connected = True
             # detect() resolves the device model and topology before any reads
             # so refresh() picks the right register layout (single vs.
             # three-phase) from the first request.
@@ -141,18 +148,24 @@ class GivEnergyLocalConfigFlow(ConfigFlow, domain=DOMAIN):
                 # (device 0x32), which is virtually always among the successful
                 # reads — a partial usually means a peripheral battery/meter
                 # dropped. A usable snapshot is enough here; RefreshFailed (no
-                # data at all) falls through to "cannot_connect" below.
+                # data at all) falls through to the except below.
                 plant = exc.plant
             serial = plant.inverter_serial_number
             if not serial:
                 # The partial dropped the inverter read itself — no usable
-                # unique ID, so treat it as a failed connection rather than
-                # creating an entry with an empty serial.
-                return "", "cannot_connect"
+                # unique ID. The connection worked, so report it as a
+                # detection failure rather than a connection one.
+                _LOGGER.warning(
+                    "Connection test for %s:%s reached the device but no inverter "
+                    "serial was readable — reporting detection_failed",
+                    host,
+                    port,
+                )
+                return "", "detection_failed"
             return serial, None
         except Exception:
             _LOGGER.exception("Connection test failed for %s:%s", host, port)
-            return "", "cannot_connect"
+            return "", "detection_failed" if connected else "cannot_connect"
         finally:
             await client.close()
 
