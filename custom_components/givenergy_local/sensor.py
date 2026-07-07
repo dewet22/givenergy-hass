@@ -1842,25 +1842,41 @@ EMS_LOAD_ENERGY_TODAY = GivEnergyEmsSensorDescription(
 )
 
 
-def _gateway_aio_energy(slot: int, direction: str) -> GivEnergyGatewaySensorDescription:
-    """Per-AIO daily charge/discharge energy description for AIO slot `slot`."""
+def _gateway_aio_energy(
+    slot: int, direction: str, period: str
+) -> GivEnergyGatewaySensorDescription:
+    """Per-AIO charge/discharge energy description for AIO slot `slot`."""
     return GivEnergyGatewaySensorDescription(
-        key=f"e_aio{slot}_{direction}_today",
-        name=f"AIO {slot} {direction.capitalize()} Energy Today",
+        key=f"e_aio{slot}_{direction}_{period}",
+        name=f"AIO {slot} {direction.capitalize()} Energy {period.capitalize()}",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         suggested_display_precision=1,
-        value_fn=_gateway_aio_attr(slot, f"e_aio{slot}_{direction}_today"),
+        value_fn=_gateway_aio_attr(slot, f"e_aio{slot}_{direction}_{period}"),
         skip_if_none=True,
     )
 
 
+def _gateway_energy(key: str, name: str) -> GivEnergyGatewaySensorDescription:
+    """A plain kWh TOTAL_INCREASING gateway energy description."""
+    return GivEnergyGatewaySensorDescription(
+        key=key,
+        name=name,
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=1,
+        value_fn=_gateway_attr(key),
+    )
+
+
 # Whole-house + per-AIO telemetry from the Gateway register banks (#194).
-# Deliberately EXCLUDED pending upstream decode verdicts (first live data,
-# AberDino's Gen 1 Gateway, 2026-07-03): every `*_total` lifetime counter
-# (mis-scaled ~10^4), the combined `e_aio_charge/discharge_today` pair
-# (disagrees with the per-AIO sum), and `battery_type` (mis-decodes).
+# Lifetime `*_total` counters require modbus >= 2.9.7 (the #360 V1 word-order
+# fix — earlier releases assembled them ~10^4 too large on live hardware).
+# Energy semantics (verdict from AberDino's captures, modbus#360): `e_aio_*` is
+# the AC-side site energy set — on his unit it includes EV-charger energy —
+# while `e_battery_*` is battery-DC energy. Both are real; named distinctly.
 GATEWAY_SENSORS: tuple[GivEnergyGatewaySensorDescription, ...] = (
     GivEnergyGatewaySensorDescription(
         key="p_load",
@@ -2115,12 +2131,32 @@ GATEWAY_SENSORS: tuple[GivEnergyGatewaySensorDescription, ...] = (
         value_fn=_gateway_aio_attr(3, "p_aio3_inverter"),
         skip_if_none=True,
     ),
-    _gateway_aio_energy(1, "charge"),
-    _gateway_aio_energy(1, "discharge"),
-    _gateway_aio_energy(2, "charge"),
-    _gateway_aio_energy(2, "discharge"),
-    _gateway_aio_energy(3, "charge"),
-    _gateway_aio_energy(3, "discharge"),
+    _gateway_aio_energy(1, "charge", "today"),
+    _gateway_aio_energy(1, "discharge", "today"),
+    _gateway_aio_energy(2, "charge", "today"),
+    _gateway_aio_energy(2, "discharge", "today"),
+    _gateway_aio_energy(3, "charge", "today"),
+    _gateway_aio_energy(3, "discharge", "today"),
+    _gateway_aio_energy(1, "charge", "total"),
+    _gateway_aio_energy(1, "discharge", "total"),
+    _gateway_aio_energy(2, "charge", "total"),
+    _gateway_aio_energy(2, "discharge", "total"),
+    _gateway_aio_energy(3, "charge", "total"),
+    _gateway_aio_energy(3, "discharge", "total"),
+    # Site lifetime totals (require the modbus 2.9.7 word-order fix, #360).
+    _gateway_energy("e_grid_import_total", "Grid Import Total"),
+    _gateway_energy("e_grid_export_total", "Grid Export Total"),
+    _gateway_energy("e_pv_total", "PV Energy Total"),
+    _gateway_energy("e_load_total", "Load Energy Total"),
+    _gateway_energy("e_battery_charge_total", "Battery Charge Total"),
+    _gateway_energy("e_battery_discharge_total", "Battery Discharge Total"),
+    # AC-side site charge/discharge (distinct from the battery-DC set above:
+    # conversion losses sit between them, and on sites with a GivEnergy EV
+    # charger the AC-side charge figure includes EV charging energy).
+    _gateway_energy("e_aio_charge_today", "AIO AC Charge Today"),
+    _gateway_energy("e_aio_discharge_today", "AIO AC Discharge Today"),
+    _gateway_energy("e_aio_charge_total", "AIO AC Charge Total"),
+    _gateway_energy("e_aio_discharge_total", "AIO AC Discharge Total"),
 )
 
 
