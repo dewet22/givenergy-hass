@@ -2476,6 +2476,15 @@ async def test_gateway_creates_whole_house_and_per_aio_sensors(hass, gateway_set
     expectations = {
         "p_load": "1127",
         "p_pv": "2229",
+        # Raw register values pass through; the sign convention (these read
+        # inverted on live hardware) is being fixed in the library model (#95).
+        "p_aio_total": "155",
+        "p_liberty": "185",
+        # p_ac1 = grid connection point, signed positive-export; split pair
+        # mirrors the #151 inverter pattern.
+        "p_ac1": "917",
+        "p_ac1_import": "0",
+        "p_ac1_export": "917",
         "e_load_today": "8.1",
         "e_grid_import_today": "28.0",
         "e_battery_charge_today": "19.2",
@@ -2565,6 +2574,26 @@ async def test_gateway_upgrade_reconciles_stale_inverter_rows(hass, mock_client,
     assert registry.async_get_entity_id("number", DOMAIN, f"SA1234G123_{number_key}") is None
     # The gateway sensors took over the device.
     assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_p_load") is not None
+
+
+async def test_gateway_reconciler_spares_shared_key_rows(hass, mock_client, mock_config_entry):
+    """Five keys are shared between INVERTER_SENSORS and GATEWAY_SENSORS (p_pv,
+    the pv/load/battery lifetime totals). The gateway reconciler must NOT retire
+    them — doing so deleted the live gateway rows on every reload (latent in
+    v1.3.39/40)."""
+    _setup_gateway_plant(mock_client)
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    # Simulate the row already existing from a previous boot of the gateway entry.
+    registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_p_pv", config_entry=mock_config_entry
+    )
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    entity_id = registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_p_pv")
+    assert entity_id is not None  # survived the reconciler
+    assert hass.states.get(entity_id).state == "2229"  # and serves the gateway value
 
 
 async def test_non_gateway_plant_has_no_gateway_sensors(hass, setup_integration):

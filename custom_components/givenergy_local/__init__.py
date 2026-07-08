@@ -496,10 +496,15 @@ def _retired_on_gateway_unique_ids(serial: str) -> set[str]:
     GATEWAY_SENSORS set replaces them on the same device; coordinator sensors
     use different keys and stay.
     """
-    from .sensor import INVERTER_SENSORS
+    from .sensor import GATEWAY_SENSORS, INVERTER_SENSORS
 
     keys = _inverter_control_keys()
-    keys.update(d.key for d in INVERTER_SENSORS)
+    # Five keys are shared between the sets (p_pv and the pv/load/battery
+    # lifetime totals): the gateway sensors deliberately reuse them for
+    # continuity, so retiring every inverter key would delete those live
+    # gateway rows on EVERY reload (shipped briefly in v1.3.39/40).
+    gateway_keys = {d.key for d in GATEWAY_SENSORS}
+    keys.update(d.key for d in INVERTER_SENSORS if d.key not in gateway_keys)
     return {f"{serial}_{key}" for key in keys}
 
 
