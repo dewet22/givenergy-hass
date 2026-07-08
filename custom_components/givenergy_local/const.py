@@ -71,8 +71,11 @@ EXPOSE_RECOMMENDED_ENTITY_KEYS = (
     "p_load_demand",
     "e_consumption_today",
     "e_load_total",  # three-phase only — silently skipped elsewhere
-    # PV generation total (was e_inverter_out_total / "Inverter Output Total")
+    # PV generation total (was e_inverter_out_total / "Inverter Output Total").
+    # On Model.AC/ALL_IN_ONE this entity doesn't exist (2.10.0 Slice A) — the
+    # matcher skips absent entities, and the honest counterpart below matches.
     "e_pv_generation_total",
+    "inverter_output_total",
     # Health — entity description's `key` is "status"; `inverter_status` is
     # the translation_key, which is not what's in the unique_id suffix.
     "status",

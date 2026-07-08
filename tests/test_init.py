@@ -17,7 +17,6 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.givenergy_local import (
     _STRATEGY_URL,
     _STRATEGY_VERSION,
-    _reconcile_per_cell_entities,
     async_remove_entry,
     async_setup,
 )
@@ -34,6 +33,7 @@ from custom_components.givenergy_local.const import (
     SERVICE_REDETECT_PLANT,
     SERVICE_SET_SYSTEM_DATETIME,
 )
+from custom_components.givenergy_local.migrations import _reconcile_per_cell_entities
 
 
 async def test_frontend_modules_served_and_autoloaded():

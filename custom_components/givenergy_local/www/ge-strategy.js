@@ -652,7 +652,10 @@
         row(a.inv("e_battery_discharge_total"), "Battery Discharged"),
         row(a.inv("e_grid_out_total"), "Grid Exported"),
         row(a.inv("e_grid_in_total"), "Grid Imported"),
+        // PV Generation Total exists on hybrids; on Model.AC/ALL_IN_ONE the same
+        // register is honestly Inverter Output Total (modbus 2.10.0, #293).
         row(a.inv("e_pv_generation_total"), "PV Generation Total"),
+        row(a.inv("inverter_output_total"), "Inverter Output Total"),
         row(a.inv("e_inverter_in_total"), "Charged from Grid"),
         row(a.inv("e_discharge_year"), "Discharged This Year"),
         row(a.inv("e_solar_diverter"), "Solar Diverter Energy"),

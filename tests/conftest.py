@@ -97,6 +97,11 @@ def mock_inverter() -> MagicMock:
     del inv.e_load_total
     inv.e_pv_generation_today = 11.2
     inv.e_pv_generation_total = 5100.2
+    # 2.10.0 Slice A: e_inverter_out_* are populated ONLY on Model.AC/ALL_IN_ONE
+    # (where e_pv_generation_* honestly read None). None here — a bare MagicMock
+    # attr is truthy and would create the sensors on every hybrid test.
+    inv.e_inverter_out_today = None
+    inv.e_inverter_out_total = None
     inv.t_inverter_heatsink = 45.3
     inv.t_charger = 38.7
     inv.enable_charge = True
