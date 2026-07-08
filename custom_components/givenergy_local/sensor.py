@@ -980,12 +980,17 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         # _RENAMED_UNIQUE_ID_SUFFIXES migration renames e_inverter_out_total to
         # e_pv_generation_total unconditionally (the pre-v1.3.31 hybrid rename)
         # and would hijack these rows on restart. getattr per the SP-only rule.
+        # source_field stays e_pv_generation_today: e_inverter_out_today is a
+        # model-validator-only attribute with no registers_of() entry, so
+        # pointing the stale-IR gate at it would silently disable staleness
+        # detection (registers_of() only knows the pre-2.10.0 field name that
+        # actually backs IR44).
         key="inverter_output_today",
         name="Inverter Output Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        source_field="e_inverter_out_today",
+        source_field="e_pv_generation_today",
         value_fn=lambda inv: getattr(inv, "e_inverter_out_today", None),
         skip_if_none=True,
     ),
@@ -995,7 +1000,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        source_field="e_inverter_out_total",
+        source_field="e_pv_generation_total",
         value_fn=lambda inv: getattr(inv, "e_inverter_out_total", None),
         skip_if_none=True,
     ),

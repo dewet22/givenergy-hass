@@ -1618,11 +1618,17 @@ def test_renamed_direct_register_sensors_declare_their_source_field():
         "grid_power_export": "p_grid_out",
         "work_time_total": "work_time_total_hours",
         "e_consumption_today": "e_load_today",
-        # 2.10.0 Slice A: keys deliberately differ from the fields (the
-        # e_inverter_out_* suffixes are claimed by the legacy unique_id
-        # migration map — see migrations.py).
-        "inverter_output_today": "e_inverter_out_today",
-        "inverter_output_total": "e_inverter_out_total",
+        # 2.10.0 Slice A: keys deliberately differ from the fields the value_fn
+        # reads (the e_inverter_out_* suffixes are claimed by the legacy
+        # unique_id migration map — see migrations.py). source_field points at
+        # e_pv_generation_* instead, the name the register LUT actually knows —
+        # e_inverter_out_today/total IS a real (different) field on
+        # ThreePhaseInverter, so pointing source_field at it wouldn't raise
+        # here, but on SinglePhaseInverter (the AC/AIO models this pair is
+        # for) it resolves to no registers and silently disables the
+        # stale-bank gate (Codex review on #267).
+        "inverter_output_today": "e_pv_generation_today",
+        "inverter_output_total": "e_pv_generation_total",
     }
     declared = {d.key: d.source_field for d in INVERTER_SENSORS if d.source_field is not None}
     assert declared == expected
@@ -1633,6 +1639,19 @@ def test_renamed_direct_register_sensors_declare_their_source_field():
         assert _source_ir_registers(SinglePhaseInverter, source) or _source_ir_registers(
             ThreePhaseInverter, source
         ), f"{key}: source_field {source!r} resolves to no IR registers on any model"
+    # inverter_output_*'s target model IS SinglePhaseInverter (AC/AIO) — the
+    # OR-across-models check above isn't enough here, since ThreePhaseInverter
+    # coincidentally has its own real e_inverter_out_* fields that would mask
+    # a SinglePhaseInverter regression.
+    assert _register_shape(_source_ir_registers(SinglePhaseInverter, "e_pv_generation_today")) == [
+        ("IR", 44),
+    ]
+    assert _register_shape(_source_ir_registers(SinglePhaseInverter, "e_pv_generation_total")) == [
+        ("IR", 45),
+        ("IR", 46),
+    ]
+    assert _source_ir_registers(SinglePhaseInverter, "e_inverter_out_today") == ()
+    assert _source_ir_registers(SinglePhaseInverter, "e_inverter_out_total") == ()
     # The consumption source is per-model by construction: on single-phase the
     # value is the derived field (untracked — e_load_today isn't in that LUT),
     # on three-phase it's the native register the value_fn falls back to.
