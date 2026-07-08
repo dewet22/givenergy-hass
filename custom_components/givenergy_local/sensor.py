@@ -1858,6 +1858,16 @@ def _gateway_aio_energy(
     )
 
 
+def _gateway_grid_import(gateway: Any) -> Any:
+    p = getattr(gateway, "p_ac1", None)
+    return max(-p, 0) if p is not None else None
+
+
+def _gateway_grid_export(gateway: Any) -> Any:
+    p = getattr(gateway, "p_ac1", None)
+    return max(p, 0) if p is not None else None
+
+
 def _gateway_energy(key: str, name: str) -> GivEnergyGatewaySensorDescription:
     """A plain kWh TOTAL_INCREASING gateway energy description."""
     return GivEnergyGatewaySensorDescription(
@@ -1900,16 +1910,39 @@ GATEWAY_SENSORS: tuple[GivEnergyGatewaySensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
+        # NB reads sign-inverted vs the house convention (positive = discharging)
+        # on live hardware — the flip belongs in the library model (sign is
+        # register semantics); requested upstream with AberDino's evidence (#95).
         value_fn=_gateway_attr("p_aio_total"),
     ),
     GivEnergyGatewaySensorDescription(
         key="p_ac1",
-        name="AC Power",
+        # p_ac1 is the grid connection point (live-matched against GivTCP's
+        # Gateway "Grid Power"). Signed, positive = export (GE convention) —
+        # right for the flow card, awkward standalone; hidden by default in
+        # favour of the split import/export pair below (#151 house pattern).
+        name="Grid Power",
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
-        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_visible_default=False,
         value_fn=_gateway_attr("p_ac1"),
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="p_ac1_import",
+        name="Grid Power Import",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_gateway_grid_import,
+    ),
+    GivEnergyGatewaySensorDescription(
+        key="p_ac1_export",
+        name="Grid Power Export",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=_gateway_grid_export,
     ),
     GivEnergyGatewaySensorDescription(
         key="p_liberty",
@@ -1918,6 +1951,9 @@ GATEWAY_SENSORS: tuple[GivEnergyGatewaySensorDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
+        # NB reads sign-inverted vs GivTCP's Liberty Power on live hardware; the
+        # flip belongs in the library model alongside pinning what this field
+        # actually is — both asked upstream (#95).
         value_fn=_gateway_attr("p_liberty"),
     ),
     GivEnergyGatewaySensorDescription(
