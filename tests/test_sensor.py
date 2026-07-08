@@ -2483,8 +2483,8 @@ async def test_gateway_creates_whole_house_and_per_aio_sensors(hass, gateway_set
     expectations = {
         "p_load": "1127",
         "p_pv": "2229",
-        # Raw register values pass through; the sign convention (these read
-        # inverted on live hardware) is being fixed in the library model (#95).
+        # Raw register values pass through (sign is the library's concern —
+        # corrected upstream in modbus 2.10.1, #95).
         "p_aio_total": "155",
         "p_liberty": "185",
         # p_ac1 = grid connection point, signed positive-export; split pair

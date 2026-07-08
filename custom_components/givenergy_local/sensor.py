@@ -1940,9 +1940,6 @@ GATEWAY_SENSORS: tuple[GivEnergyGatewaySensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
-        # NB reads sign-inverted vs the house convention (positive = discharging)
-        # on live hardware — the flip belongs in the library model (sign is
-        # register semantics); requested upstream with AberDino's evidence (#95).
         value_fn=_gateway_attr("p_aio_total"),
     ),
     GivEnergyGatewaySensorDescription(
@@ -1981,9 +1978,8 @@ GATEWAY_SENSORS: tuple[GivEnergyGatewaySensorDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        # NB reads sign-inverted vs GivTCP's Liberty Power on live hardware; the
-        # flip belongs in the library model alongside pinning what this field
-        # actually is — both asked upstream (#95).
+        # Exact semantics still unconfirmed upstream (tracks p_aio_total closely;
+        # best guess is AC-side aggregate vs p_aio_total's DC side) — modbus#373.
         value_fn=_gateway_attr("p_liberty"),
     ),
     GivEnergyGatewaySensorDescription(
