@@ -235,12 +235,14 @@ async def test_expected_sensor_count(hass, setup_integration):
     # (created by default — the test entry has no expose_per_cell key, so it
     # resolves on) + coordinator diagnostics, minus e_load_total which only
     # exists on three-phase models (#154).
+    # -1: e_load_today (3ph-only). -2: the Inverter Output pair reads None on
+    # hybrids (modbus 2.10.0 Slice A — only Model.AC/ALL_IN_ONE populate it).
     expected = (
         len(INVERTER_SENSORS)
         + len(BATTERY_SENSORS)
         + len(BATTERY_CELL_SENSORS)
         + len(COORDINATOR_SENSORS)
-        - 1
+        - 3
     )
     assert len(sensors) == expected
 
@@ -1616,6 +1618,11 @@ def test_renamed_direct_register_sensors_declare_their_source_field():
         "grid_power_export": "p_grid_out",
         "work_time_total": "work_time_total_hours",
         "e_consumption_today": "e_load_today",
+        # 2.10.0 Slice A: keys deliberately differ from the fields (the
+        # e_inverter_out_* suffixes are claimed by the legacy unique_id
+        # migration map — see migrations.py).
+        "inverter_output_today": "e_inverter_out_today",
+        "inverter_output_total": "e_inverter_out_total",
     }
     declared = {d.key: d.source_field for d in INVERTER_SENSORS if d.source_field is not None}
     assert declared == expected
@@ -2601,3 +2608,107 @@ async def test_non_gateway_plant_has_no_gateway_sensors(hass, setup_integration)
     registry = er.async_get(hass)
     for key in ("aio1_soc", "p_load", "e_load_today", "gateway_fault_codes"):
         assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is None, key
+
+
+# ---------------------------------------------------------------------------
+# Model.AC / ALL_IN_ONE PV-generation routing (modbus 2.10.0 Slice A)
+# ---------------------------------------------------------------------------
+
+
+def _setup_ac_plant(mock_client, model=None):
+    """Reshape the mock into an AC-coupled plant with 2.10.0 field routing:
+    e_pv_generation_* honestly None, values in e_inverter_out_*."""
+    from givenergy_modbus.model.inverter import Model
+    from givenergy_modbus.model.plant import PlantCapabilities
+
+    inv = mock_client.plant.inverter
+    inv.e_pv_generation_today = None
+    inv.e_pv_generation_total = None
+    inv.e_inverter_out_today = 6.2
+    inv.e_inverter_out_total = 4321.0
+    # The library None-propagates every PV-derived field on AC/AIO (deliberate:
+    # the corrected formula failed modbus's evidence gate) — mirror it, or the
+    # platform would faithfully re-create the rows the migration removes.
+    inv.e_self_consumption_today = None
+    inv.e_self_consumption_total = None
+    inv.e_pv_direct_today = None
+    inv.e_consumption_today = None
+    mock_client.plant.capabilities = PlantCapabilities(
+        device_type=model or Model.AC,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
+
+
+async def test_ac_plant_routes_pv_generation_to_inverter_output(
+    hass, mock_client, mock_config_entry
+):
+    """On Model.AC the Inverter Output pair carries the IR44/45-46 values and
+    the PV Generation pair is not created (fields honestly None)."""
+    _setup_ac_plant(mock_client)
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    expectations = (("inverter_output_today", "6.2"), ("inverter_output_total", "4321.0"))
+    for key, expected in expectations:
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}")
+        assert entity_id is not None, key
+        assert hass.states.get(entity_id).state == expected, key
+    for key in ("e_pv_generation_today", "e_pv_generation_total"):
+        assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is None, key
+
+
+async def test_ac_upgrade_migrates_pv_generation_rows_in_place(
+    hass, mock_client, mock_config_entry
+):
+    """An upgraded AC entry's PV Generation rows are RENAMED to the Inverter
+    Output unique_ids (same registry row — history rides), then adopted by the
+    new sensors; the derived rows that lost their inputs are removed."""
+    _setup_ac_plant(mock_client)
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    old_today = registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_e_pv_generation_today", config_entry=mock_config_entry
+    )
+    row_id_before = old_today.id
+    registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_e_pv_generation_total", config_entry=mock_config_entry
+    )
+    for stale in ("e_self_consumption_today", "e_pv_direct_today", "e_consumption_today"):
+        registry.async_get_or_create(
+            "sensor", DOMAIN, f"SA1234G123_{stale}", config_entry=mock_config_entry
+        )
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Renamed in place: old unique_ids gone, new ones present on the SAME row.
+    old_uid = "SA1234G123_e_pv_generation_today"
+    assert registry.async_get_entity_id("sensor", DOMAIN, old_uid) is None
+    new_entity_id = registry.async_get_entity_id(
+        "sensor", DOMAIN, "SA1234G123_inverter_output_today"
+    )
+    assert new_entity_id is not None
+    assert registry.async_get(new_entity_id).id == row_id_before
+    assert hass.states.get(new_entity_id).state == "6.2"
+    total_uid = "SA1234G123_inverter_output_total"
+    assert registry.async_get_entity_id("sensor", DOMAIN, total_uid) is not None
+    # Derived rows (inputs lost by upstream None-propagation) removed.
+    for stale in ("e_self_consumption_today", "e_pv_direct_today", "e_consumption_today"):
+        assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{stale}") is None, stale
+
+
+async def test_hybrid_keeps_pv_generation_and_no_inverter_output(hass, setup_integration):
+    """The default hybrid fixture keeps its PV Generation pair (genuine PV) and
+    never grows the Inverter Output pair (fields None off AC/AIO)."""
+    registry = er.async_get(hass)
+
+    def uid(key):
+        return registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}")
+
+    assert uid("e_pv_generation_today") is not None
+    assert uid("inverter_output_today") is None
+    assert uid("inverter_output_total") is None

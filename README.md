@@ -173,6 +173,8 @@ Running both integrations in parallel makes it easy to evaluate a switch without
 | Consecutive Refresh Failures | — | Diagnostic; resets to 0 on next success |
 | Total Refresh Failures | — | Diagnostic; ever-increasing counter (resets only when HA restarts — HA's long-term statistics handle that transparently) |
 
+Some energy sensors are model-dependent: on AC-coupled and All-in-One systems the registers historically labelled *PV Generation Today/Total* actually count the unit's battery-discharge AC output, so from v1.3.41 they appear there as **Inverter Output Today/Total** instead (existing entities are renamed in place, keeping their history), and the PV-derived sensors (Self Consumption, PV Direct) don't exist on those models.
+
 #### Controls
 
 | Entity | Type | Notes |

@@ -949,17 +949,20 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: inv.e_ac_charge_today,
     ),
     GivEnergyInverterSensorDescription(
-        # IR44 is PV generation, not inverter AC output. givenergy-modbus #174
-        # renamed e_inverter_out_day -> e_pv_generation_today (single-phase). The
-        # total (IR45/46) was confirmed as PV-generation-total in #176 and renamed
-        # e_inverter_out_total -> e_pv_generation_total. Both entity keys and names
-        # move together; unique_id migrations in __init__.py carry existing history.
+        # IR44 is PV generation on DC hybrids only. givenergy-modbus #174 renamed
+        # e_inverter_out_day -> e_pv_generation_today; 2.10.0 (#293 manifest,
+        # Slice A) made the fields model-aware: on Model.AC / Model.ALL_IN_ONE
+        # they honestly return None (IR44/45-46 are battery-discharge AC output
+        # there, surfaced by the Inverter Output pair below). skip_if_none keeps
+        # these off new AC/AIO installs; _reconcile_ac_aio_pv_generation clears
+        # upgraded ones. unique_id migrations in __init__.py carry old history.
         key="e_pv_generation_today",
         name="PV Generation Today",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_pv_generation_today,
+        skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
         key="e_pv_generation_total",
@@ -968,6 +971,33 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_pv_generation_total,
+        skip_if_none=True,
+    ),
+    GivEnergyInverterSensorDescription(
+        # The honest home of IR44/45-46 on Model.AC / Model.ALL_IN_ONE (2.10.0
+        # Slice A): the unit's battery-discharge AC output. None everywhere else
+        # (skip_if_none). Keys are deliberately NOT e_inverter_out_* — the
+        # _RENAMED_UNIQUE_ID_SUFFIXES migration renames e_inverter_out_total to
+        # e_pv_generation_total unconditionally (the pre-v1.3.31 hybrid rename)
+        # and would hijack these rows on restart. getattr per the SP-only rule.
+        key="inverter_output_today",
+        name="Inverter Output Today",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        source_field="e_inverter_out_today",
+        value_fn=lambda inv: getattr(inv, "e_inverter_out_today", None),
+        skip_if_none=True,
+    ),
+    GivEnergyInverterSensorDescription(
+        key="inverter_output_total",
+        name="Inverter Output Total",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        source_field="e_inverter_out_total",
+        value_fn=lambda inv: getattr(inv, "e_inverter_out_total", None),
+        skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
         key="e_inverter_export_total",
