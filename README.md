@@ -31,7 +31,8 @@ This integration sits in a cloud-free GivEnergy ecosystem, with a hardware-agnos
 - **[givenergy-cli](https://github.com/dewet22/givenergy-cli)** — a terminal companion for the same library: probe registers, capture wire frames, export a full plant dump, or drive the inverter without Home Assistant.
 - **[Energy Conductor](https://github.com/dewet22/ha-energy-conductor)** — entity-driven, technology-agnostic energy coordination for Home Assistant. It only ever talks to the entities your integrations expose — GivEnergy or anything else — layering a polished UI, forecasting and automated control over whatever hardware you already run. Early days and actively developed; worth a look if you'd like to help shape where it goes.
 
-<p align="center"><img src="docs/energy-conductor-forecast.png" alt="Energy Conductor — forecast and plan timeline" width="840"></p>
+<p align="center"><img src="docs/energy-conductor-forecast.png" alt="Energy Conductor — the tape: 12h history, 12h forecast" width="840"></p>
+<p align="center"><em>The <b>tape</b> — twelve hours of history and twelve of forecast on one axis, with the events it's scheduling (off-peak, EV, solar diversion) laid out beneath.</em></p>
 
 <details>
 <summary><b>More of Energy Conductor</b></summary>
@@ -44,7 +45,7 @@ This integration sits in a cloud-free GivEnergy ecosystem, with a hardware-agnos
 
 <p align="center"><img src="docs/energy-conductor-ledger.png" alt="Energy Conductor — cost and savings ledger" width="440"></p>
 
-**Long-term energy** — calendar heatmaps and per-hour density across every stream: PV, load, grid, EV, hot water, gas.
+**A year at a glance** — calendar heatmaps and per-hour density for every stream (PV, load, grid, EV, hot water, gas): a whole year of energy in one straightforward view.
 
 <p align="center"><img src="docs/energy-conductor-history.png" alt="Energy Conductor — long-term energy analytics" width="740"></p>
 
