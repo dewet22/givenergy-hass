@@ -1015,6 +1015,22 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
+        # Three-phase only: the installer-set grid export power-rate cap (HR1063),
+        # a percentage of rated power. givenergy-modbus #263 corrected this from a
+        # bogus 0-6500 W "power" to the 0-100 % rate it always was, and renamed it
+        # export_power_rate. Read-only for now; a writable control awaits the write
+        # path being confirmed on real three-phase hardware (#178). getattr +
+        # skip_if_none gates it off the single-phase model, which has no such field.
+        key="export_power_rate",
+        name="Export Power Rate Limit",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_display_precision=1,
+        value_fn=lambda inv: getattr(inv, "export_power_rate", None),
+        skip_if_none=True,
+    ),
+    GivEnergyInverterSensorDescription(
         key="e_inverter_in_total",
         name="Charge from Grid Total",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,

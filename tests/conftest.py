@@ -102,6 +102,9 @@ def mock_inverter() -> MagicMock:
     # attr is truthy and would create the sensors on every hybrid test.
     inv.e_inverter_out_today = None
     inv.e_inverter_out_total = None
+    # export_power_rate (HR1063) is three-phase only; None on the single-phase
+    # hybrid mock, or a bare MagicMock attr would create the sensor here (#178).
+    inv.export_power_rate = None
     inv.t_inverter_heatsink = 45.3
     inv.t_charger = 38.7
     inv.enable_charge = True
