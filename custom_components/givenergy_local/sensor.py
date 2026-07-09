@@ -619,8 +619,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: inv.t_battery,
         # Three-phase units inherit this single-phase register address but their
         # firmware never populates it, so it reads frozen rather than unavailable
-        # (#174). Real 3ph battery temperature comes from the HV cluster
-        # (Bcu.cluster_cell_temperature) once HV-stack support lands (#179).
+        # (#174). No aggregate 3ph battery-temperature register substitutes for it:
+        # the HV cluster field once assumed to be one (Bcu.cluster_cell_temperature)
+        # is actually a count, not a temperature (givenergy-modbus#382). Per-module
+        # HV temperatures are surfaced by the BMU sensors instead (#179).
         single_phase_only=True,
     ),
     GivEnergyInverterSensorDescription(
