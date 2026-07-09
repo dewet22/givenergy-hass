@@ -119,11 +119,11 @@ To change any of these later, open the integration's **⋮** menu in **Settings 
 
 Both this integration and other local polling solutions (GivTCP, the GivEnergy app, custom scripts) can run in active mode at the same time without issue. The inverter handles concurrent Modbus clients reliably — earlier reports of polling conflicts were largely a consequence of retry and error-recovery behaviour in the older shared library, not an inverter limitation. Running multiple clients in parallel has been solid in practice, even at faster-than-default poll intervals.
 
+> **Note:** earlier versions offered a "passive mode" (listen only, relying on another client's polling to keep values fresh). It was removed in v1.3.37: concurrent active polling is well within what the hardware handles, while passive mode's freshness expectations could never be met by the cloud's ~5-minute polling cadence, producing continuous spurious refresh failures (#253). An entry that still has the old setting stored simply polls actively.
+
 #### GivTCP long-term stats migration
 
 Running both integrations in parallel makes it easy to evaluate a switch without committing: you get a live side-by-side comparison and can cut over at your own pace. A migration script (`scripts/migrate_from_givtcp.py`) carries your long-term recorder statistics across — see [`docs/migration-from-givtcp.md`](docs/migration-from-givtcp.md) for usage.
-
-> **Note:** earlier versions offered a "passive mode" (listen only, relying on another client's polling to keep values fresh). It was removed in v1.3.37: concurrent active polling is well within what the hardware handles, while passive mode's freshness expectations could never be met by the cloud's ~5-minute polling cadence, producing continuous spurious refresh failures (#253). An entry that still has the old setting stored simply polls actively.
 
 ## Dashboard
 
@@ -205,63 +205,88 @@ strategy:
 
 #### Sensors
 
+Grouped by what they tell you. Every cumulative (kWh) sensor feeds the Energy dashboard and long-term statistics automatically.
+
+**Solar**
+
 | Entity | Unit | Notes |
 |---|---|---|
 | PV Power | W | Combined PV output |
-| PV String 1 / 2 Power | W | Per-string power |
-| PV String 1 / 2 Voltage | V | |
-| PV String 1 / 2 Current | A | |
-| PV Energy Today | kWh | |
-| PV Energy Total | kWh | |
+| PV String 1 / 2 Power / Voltage / Current | W / V / A | Per-string |
+| PV Energy Today / Total | kWh | |
+
+**Battery**
+
+| Entity | Unit | Notes |
+|---|---|---|
 | Battery SOC | % | |
-| Battery SOC kWh | kWh | SOC × nominal capacity ([#248](https://github.com/dewet22/givenergy-hass/issues/248)) — nameplate-derived estimate, reads optimistic on aged packs |
+| Battery SOC kWh | kWh | SOC × nominal capacity ([#248](https://github.com/dewet22/givenergy-hass/issues/248)) — nameplate estimate, reads optimistic on aged packs |
 | Battery Power | W | Positive = discharging, negative = charging |
-| Battery Voltage / Current | V / A | |
-| Battery Temperature | °C | |
-| Battery Charge Today | kWh | |
-| Battery Discharge Today | kWh | |
+| Battery Voltage / Current / Temperature | V / A / °C | |
+| Battery Charge / Discharge Today | kWh | |
 | Battery Throughput Total | kWh | |
-| Grid Power | W | Signed net flow: positive = exporting, negative = importing. Hidden by default (feeds the bundled flow card); for the Energy Dashboard use the split sensors below |
-| Grid Power Import / Export | W | Always-positive single-direction power, for the Energy Dashboard's "Two sensors" grid option — no sign inversion, so long-term statistics aren't lost |
-| Grid Export / Import Today | kWh | |
-| Grid Export / Import Total | kWh | |
-| AC Voltage / Frequency | V / Hz | |
+
+**Grid**
+
+| Entity | Unit | Notes |
+|---|---|---|
+| Grid Power | W | Signed net flow (positive = export). Hidden by default (feeds the flow card); use the split sensors for the Energy dashboard |
+| Grid Power Import / Export | W | Always-positive single-direction power for the Energy dashboard's "Two sensors" option — no sign inversion, so long-term stats aren't lost |
+| Grid Import / Export Today / Total | kWh | |
+
+**Home & inverter output**
+
+| Entity | Unit | Notes |
+|---|---|---|
 | Load Power | W | |
-| AC Charge Today | kWh | Grid energy used to charge the battery |
 | House Consumption Today | kWh | Derived: PV + grid import − grid export − AC charge |
+| AC Charge Today | kWh | Grid energy used to charge the battery |
 | Inverter Output Today / Total | kWh | |
-| Inverter Heatsink Temperature | °C | |
-| Charger Temperature | °C | |
-| Status | — | e.g. Normal, Warning, Fault |
+| AC Voltage / Frequency | V / Hz | |
+| Inverter Heatsink / Charger Temperature | °C | |
+
+**Status**
+
+| Entity | Unit | Notes |
+|---|---|---|
+| Status | — | Normal / Warning / Fault |
 | Fault Code | — | |
-| Inverter Errors | — | Diagnostic; error bitmask |
-| Charger Warning Code | — | Diagnostic |
-| Charge Status | — | Diagnostic; raw int (BMS state code, mapping TBD) |
-| System Mode | — | Diagnostic; raw int (operating mode, mapping TBD) |
-| AC Output Voltage / Frequency / Current | V / Hz / A | Diagnostic; inverter output (post-conversion) |
-| Grid Apparent Power | VA | Diagnostic |
-| Inverter Power Factor | — | Diagnostic |
-| Grid Power Phase 1 | W | Diagnostic; useful for 3-phase models |
-| Export Power Rate Limit | % | Diagnostic; three-phase only — the installer-set grid export power-rate cap (as a percentage of rated power) |
+
+Some energy sensors are model-dependent: on AC-coupled and All-in-One systems the registers historically labelled *PV Generation Today/Total* actually count the unit's battery-discharge AC output, so from v1.4.0 they appear there as **Inverter Output Today/Total** instead (existing entities are renamed in place, keeping their history), and the PV-derived sensors (Self Consumption, PV Direct) don't exist on those models.
+
+<details>
+<summary><b>Diagnostic sensors</b> — created but hidden from the default device view (~30 entities: firmware, extra electricals, error codes, refresh counters, …)</summary>
+
+| Entity | Unit | Notes |
+|---|---|---|
+| Inverter Errors | — | Error bitmask |
+| Charger Warning Code | — | |
+| Charge Status | — | Raw int (BMS state code, mapping TBD) |
+| System Mode | — | Raw int (operating mode, mapping TBD) |
+| AC Output Voltage / Frequency / Current | V / Hz / A | Inverter output (post-conversion) |
+| Grid Apparent Power | VA | |
+| Inverter Power Factor | — | |
+| Grid Power Phase 1 | W | Useful for 3-phase models |
+| Export Power Rate Limit | % | Three-phase only — installer-set grid export power-rate cap (% of rated power) |
 | Inverter Export Total | kWh | Cumulative inverter export to grid |
 | Charge from Grid Total | kWh | Cumulative grid-sourced battery charging |
 | Battery Discharge This Year | kWh | |
 | Backup Power | W | EPS port output |
 | Combined Generation Power | W | Solar + battery combined |
 | Work Time Total | h | |
-| Device Type Code | — | Diagnostic |
-| MPPT Count | — | Diagnostic |
-| Phase Count | — | Diagnostic; 1 for single-phase, 3 for three-phase |
-| ARM / DSP / Modbus Firmware Version | — | Diagnostic |
-| Meter Type | — | Diagnostic; CT-or-EM418 / EM115 |
-| Battery Type | — | Diagnostic; Lithium / Lead-Acid |
-| Battery Capacity | Ah | Diagnostic; reported pack capacity |
-| Battery Nominal Capacity | kWh | Diagnostic; computed from Ah × nominal voltage |
-| Last Successful Refresh | timestamp | Diagnostic |
-| Consecutive Refresh Failures | — | Diagnostic; resets to 0 on next success |
-| Total Refresh Failures | — | Diagnostic; ever-increasing counter (resets only when HA restarts — HA's long-term statistics handle that transparently) |
+| Device Type Code | — | |
+| MPPT Count | — | |
+| Phase Count | — | 1 for single-phase, 3 for three-phase |
+| ARM / DSP / Modbus Firmware Version | — | |
+| Meter Type | — | CT-or-EM418 / EM115 |
+| Battery Type | — | Lithium / Lead-Acid |
+| Battery Capacity | Ah | Reported pack capacity |
+| Battery Nominal Capacity | kWh | Ah × nominal voltage |
+| Last Successful Refresh | timestamp | |
+| Consecutive Refresh Failures | — | Resets to 0 on the next good poll |
+| Total Refresh Failures | — | Ever-increasing (resets only on HA restart — long-term stats handle that) |
 
-Some energy sensors are model-dependent: on AC-coupled and All-in-One systems the registers historically labelled *PV Generation Today/Total* actually count the unit's battery-discharge AC output, so from v1.4.0 they appear there as **Inverter Output Today/Total** instead (existing entities are renamed in place, keeping their history), and the PV-derived sensors (Self Consumption, PV Direct) don't exist on those models.
+</details>
 
 #### Controls
 
@@ -292,13 +317,19 @@ Each connected battery pack appears as a separate device linked to the inverter.
 | Remaining Capacity | Ah | |
 | Design Capacity | Ah | |
 | Charge Cycles | — | |
-| Cell Count | — | Diagnostic; number of cells the BMS reports |
-| Cell Voltages Sum | V | Diagnostic; sanity-check against Voltage |
-| BMS MOSFET Temperature | °C | Diagnostic |
-| Cell 1 … 16 Voltage | V | Diagnostic; per-cell. Unused positions in smaller packs read ~0 |
-| Cells 1-4 / 5-8 / 9-12 / 13-16 Temperature | °C | Diagnostic; the BMS samples one thermistor per 4-cell group |
 
-Cell-level entities are tagged as diagnostic, so they're hidden from the default device view but available for dashboards and pack-health monitoring (cell voltage spread, temperature deltas, etc.).
+<details>
+<summary><b>Cell-level diagnostics</b> — per-cell voltages and temperatures, hidden from the default view but ideal for pack-health monitoring (cell voltage spread, temperature deltas)</summary>
+
+| Entity | Unit | Notes |
+|---|---|---|
+| Cell Count | — | Number of cells the BMS reports |
+| Cell Voltages Sum | V | Sanity-check against Voltage |
+| BMS MOSFET Temperature | °C | |
+| Cell 1 … 16 Voltage | V | Per-cell; unused positions in smaller packs read ~0 |
+| Cells 1-4 / 5-8 / 9-12 / 13-16 Temperature | °C | The BMS samples one thermistor per 4-cell group |
+
+</details>
 
 #### AIO battery modules
 
@@ -424,10 +455,11 @@ The daily counters reset at midnight; Home Assistant's recorder detects the rese
 
 ## Troubleshooting
 
-- **Transient connection drops are normal.** TCP-level timeouts and the occasional connection reset get logged at WARNING level and the next scan tick re-establishes the connection. The `Last Successful Refresh` and `Consecutive Refresh Failures` diagnostic sensors will tell you if something more persistent is going on.
-- **Control values drift back on EMS plants** — with EMS plant mode active, the controller periodically reasserts certain inverter settings (notably *Inverter Max Output Active Power*, HR50) over its own controller-to-inverter link, which this integration cannot observe. Writes succeed and hold briefly, then revert within minutes. That's the EMS doing its job, not a failed write; taking the plant out of EMS plant mode makes manually set values stick ([#52](https://github.com/dewet22/givenergy-hass/issues/52)).
-- **Conflicts with another Modbus client** — concurrent active polling is reliable on current firmware, including multiple clients at 30-second intervals; if you do see persistent connection errors with two clients running, please open an issue.
-- **Wrong number of battery devices appearing** — battery count is auto-discovered at startup by probing the Modbus bus; there is no manual override. If detection misfires (e.g. a battery was slow to respond), reloading the integration usually fixes it. If the count is consistently wrong, [open an issue](https://github.com/dewet22/givenergy-hass/issues/48) and attach a frame capture (see [Help validate your hardware](#help-validate-your-hardware)).
+- **Comms health at a glance.** Each device exposes diagnostic counters that surface connection problems without trawling logs: `Consecutive Refresh Failures` (resets to 0 on the next good poll), `Total Refresh Failures`, `Last Successful Refresh`, plus per-cause counters for CRC failures, frame-splice rejections and holds, read retries and cold-start holds. A steady trickle is normal; a sustained climb is worth a look.
+- **CRC errors are normal — and are how the library knows the bus data is trustworthy.** They're almost always electrical (cable routing near current-carrying conductors, termination, shielding), *not* a symptom of too many clients: the data adapter mediates the downstream Modbus bus no matter how many clients connect. A frame that fails its CRC is simply discarded and re-read on the next tick. The odd one logged at WARNING is the guard doing its job.
+- **Transient connection drops are normal.** TCP-level timeouts and the occasional reset are logged at WARNING and the next scan tick reconnects — the counters above will tell you if something more persistent is going on.
+- **Control values drift back on EMS plants.** With EMS plant mode active, the controller periodically reasserts certain inverter settings (notably *Inverter Max Output Active Power*, HR50) over its own controller-to-inverter link, which this integration cannot observe. Writes succeed and hold briefly, then revert within minutes. That's the EMS doing its job, not a failed write; taking the plant out of EMS plant mode makes manually set values stick ([#52](https://github.com/dewet22/givenergy-hass/issues/52)).
+- **Wrong number of battery devices.** Battery count is auto-discovered at startup by probing the Modbus bus; there is no manual override. If detection misfires (e.g. a battery was slow to respond), reloading the integration usually fixes it. If the count is consistently wrong, [open an issue](https://github.com/dewet22/givenergy-hass/issues/48) and attach a frame capture (see [Help validate your hardware](#help-validate-your-hardware)).
 
 For anything else, please [open an issue](https://github.com/dewet22/givenergy-hass/issues) with the relevant HA log lines and your inverter model.
 
