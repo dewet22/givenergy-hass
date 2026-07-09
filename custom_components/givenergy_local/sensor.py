@@ -619,8 +619,10 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         value_fn=lambda inv: inv.t_battery,
         # Three-phase units inherit this single-phase register address but their
         # firmware never populates it, so it reads frozen rather than unavailable
-        # (#174). Real 3ph battery temperature comes from the HV cluster
-        # (Bcu.cluster_cell_temperature) once HV-stack support lands (#179).
+        # (#174). No aggregate 3ph battery-temperature register substitutes for it:
+        # the HV cluster field once assumed to be one (Bcu.cluster_cell_temperature)
+        # is actually a count, not a temperature (givenergy-modbus#382). Per-module
+        # HV temperatures are surfaced by the BMU sensors instead (#179).
         single_phase_only=True,
     ),
     GivEnergyInverterSensorDescription(
@@ -1012,6 +1014,22 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_inverter_export_total,
         # None on AIO (no single-phase inverter-export register) — drop (#194).
+        skip_if_none=True,
+    ),
+    GivEnergyInverterSensorDescription(
+        # Three-phase only: the installer-set grid export power-rate cap (HR1063),
+        # a percentage of rated power. givenergy-modbus #263 corrected this from a
+        # bogus 0-6500 W "power" to the 0-100 % rate it always was, and renamed it
+        # export_power_rate. Read-only for now; a writable control awaits the write
+        # path being confirmed on real three-phase hardware (#178). getattr +
+        # skip_if_none gates it off the single-phase model, which has no such field.
+        key="export_power_rate",
+        name="Export Power Rate Limit",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_display_precision=1,
+        value_fn=lambda inv: getattr(inv, "export_power_rate", None),
         skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(

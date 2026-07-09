@@ -200,6 +200,26 @@ def test_single_phase_only_sensors_gated_on_three_phase():
         assert _include_inverter_sensor(_inverter_desc(key), inv, False) is True
 
 
+def test_export_power_rate_is_three_phase_only():
+    """Export Power Rate Limit (HR1063) exists only on the three-phase model —
+    givenergy-modbus #263 renamed it from the bogus p_export_limit and re-scaled it
+    to a 0-100 % rate. It is NOT flagged single_phase_only (that flag drops a sensor
+    ON three-phase, the opposite of what's wanted); it's gated the reverse way via
+    getattr + skip_if_none, so it appears on three-phase and drops on single-phase (#178)."""
+    from givenergy_modbus.model.inverter import SinglePhaseInverter
+    from givenergy_modbus.model.inverter_threephase import ThreePhaseInverter
+
+    desc = _inverter_desc("export_power_rate")
+    assert desc.single_phase_only is False
+    assert desc.skip_if_none is True
+    # Single-phase model has no such field → value_fn resolves to None → dropped.
+    assert not hasattr(SinglePhaseInverter(), "export_power_rate")
+    assert desc.value_fn(SinglePhaseInverter()) is None
+    # Three-phase model defines it (the field exists; None until a poll populates it).
+    assert hasattr(ThreePhaseInverter(), "export_power_rate")
+    assert desc.value_fn(ThreePhaseInverter()) is None
+
+
 def test_device_kind_buckets_to_inverter_ems_gateway():
     """Device-name noun (which drives the entity_id prefix) buckets correctly —
     every actual inverter stays "Inverter"; EMS/Gateway get their own identity."""
@@ -237,12 +257,13 @@ async def test_expected_sensor_count(hass, setup_integration):
     # exists on three-phase models (#154).
     # -1: e_load_today (3ph-only). -2: the Inverter Output pair reads None on
     # hybrids (modbus 2.10.0 Slice A — only Model.AC/ALL_IN_ONE populate it).
+    # -1: export_power_rate (3ph-only HR1063, absent on the single-phase mock — #178).
     expected = (
         len(INVERTER_SENSORS)
         + len(BATTERY_SENSORS)
         + len(BATTERY_CELL_SENSORS)
         + len(COORDINATOR_SENSORS)
-        - 3
+        - 4
     )
     assert len(sensors) == expected
 
