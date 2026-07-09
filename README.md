@@ -29,7 +29,26 @@ This integration sits in a cloud-free GivEnergy ecosystem, with a hardware-agnos
 
 - **[givenergy-modbus](https://github.com/dewet22/givenergy-modbus)** — the Python library underneath it all: local Modbus TCP, register decoding, and the hardware-capability model this integration is built on.
 - **[givenergy-cli](https://github.com/dewet22/givenergy-cli)** — a terminal companion for the same library: probe registers, capture wire frames, export a full plant dump, or drive the inverter without Home Assistant.
-- **[ha-energy-conductor](https://github.com/dewet22/ha-energy-conductor)** — entity-driven, technology-agnostic energy coordination for Home Assistant. It only ever talks to the entities your integrations expose — GivEnergy or anything else — layering a polished UI and automations over whatever hardware you already run. Early days and actively developed; worth a look if you'd like to help shape where it goes.
+- **[Energy Conductor](https://github.com/dewet22/ha-energy-conductor)** — entity-driven, technology-agnostic energy coordination for Home Assistant. It only ever talks to the entities your integrations expose — GivEnergy or anything else — layering a polished UI, forecasting and automated control over whatever hardware you already run. Early days and actively developed; worth a look if you'd like to help shape where it goes.
+
+<p align="center"><img src="docs/energy-conductor-forecast.png" alt="Energy Conductor — forecast and plan timeline" width="840"></p>
+
+<details>
+<summary><b>More of Energy Conductor</b></summary>
+
+**Tonight's plan in plain English, plus live control** — it doesn't just visualise, it decides, actuates, and tells you why.
+
+<p align="center"><img src="docs/energy-conductor-plan.png" alt="Energy Conductor — plan reasoning and control status" width="740"></p>
+
+**The money** — billing-grade costs alongside modelled savings, down to a "paying for itself" run-rate.
+
+<p align="center"><img src="docs/energy-conductor-ledger.png" alt="Energy Conductor — cost and savings ledger" width="440"></p>
+
+**Long-term energy** — calendar heatmaps and per-hour density across every stream: PV, load, grid, EV, hot water, gas.
+
+<p align="center"><img src="docs/energy-conductor-history.png" alt="Energy Conductor — long-term energy analytics" width="740"></p>
+
+</details>
 
 ## Requirements
 
