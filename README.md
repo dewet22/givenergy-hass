@@ -390,6 +390,24 @@ The integration registers the following services under the `givenergy_local` dom
 | `givenergy_local.reboot_inverter` | Sends the inverter reboot command. Requires a `device_id`. |
 | `givenergy_local.calibrate_battery_soc` | Triggers a BMS SOC calibration cycle. Requires a `device_id`. |
 
+### Not exposed by default
+
+The upstream library makes ~180 inverter fields available; this integration intentionally exposes the subset that's useful for end users without being unsafe or noisy.
+
+<details>
+<summary>What's deliberately skipped for now</summary>
+
+- `enable_*` flags for low-level inverter behaviour (buzzer, RTC, BMS read, frequency derating, auto-judge battery type, …) — changing these from a UI toggle is rarely what you actually want
+- Battery calibration registers, voltage-adjust trims, low-voltage force-charge timers
+- Charge / discharge slots 3 - 10 and their per-slot SOC stops (slots 1 and 2 cover typical Eco/Timed usage)
+- Admin / destructive actions: inverter reboot, BMS flash update, auto-test triggers, ARM-chip select, user-code register
+- Raw debug fields (internal bus voltages, countdown timers, `debug_inverter`)
+- Per-phase three-phase data beyond `Grid Power Phase 1` and the three-phase balance registers
+
+</details>
+
+If any of these would genuinely help your setup, [open an issue](https://github.com/dewet22/givenergy-hass/issues) describing the use case — the field probably can be exposed with a single description entry, but it's nicer to have a concrete reason to do it. The same applies if a sensor we *do* expose looks wrong on your inverter — see [Help validate your hardware](#help-validate-your-hardware) for how to produce a frame capture.
+
 ## Voice assistants & LLM access
 
 Home Assistant's voice assistants (Assist) and LLM tools (Claude / OpenAI via MCP) can only see entities that are explicitly **exposed**. HA auto-exposes a curated allowlist of sensor device classes — `temperature`, `humidity`, and a few others — but `power`, `energy`, and `battery` are **not** on that list, so none of this integration's headline sensors are visible to voice or LLM queries by default. Asking "what's my battery at?" silently returns nothing until you fix it.
@@ -439,24 +457,6 @@ Aliases are deliberately not shipped by the integration: the entity-registry ali
 **Why aren't these auto-exposed?** HA's conversation agent filters sensor entities by `device_class` against an allowlist tied to its intent matchers; `power`, `energy`, and `battery` aren't on the list. There's no `_attr_*` an integration can set to override this — exposure is intentionally a user-controlled decision. Background: [community thread on Assist auto-exposure](https://community.home-assistant.io/t/wth-are-all-new-entities-exposed-to-assist-by-default/803889).
 
 </details>
-
-### Not exposed by default
-
-The upstream library makes ~180 inverter fields available; this integration intentionally exposes the subset that's useful for end users without being unsafe or noisy.
-
-<details>
-<summary>What's deliberately skipped for now</summary>
-
-- `enable_*` flags for low-level inverter behaviour (buzzer, RTC, BMS read, frequency derating, auto-judge battery type, …) — changing these from a UI toggle is rarely what you actually want
-- Battery calibration registers, voltage-adjust trims, low-voltage force-charge timers
-- Charge / discharge slots 3 - 10 and their per-slot SOC stops (slots 1 and 2 cover typical Eco/Timed usage)
-- Admin / destructive actions: inverter reboot, BMS flash update, auto-test triggers, ARM-chip select, user-code register
-- Raw debug fields (internal bus voltages, countdown timers, `debug_inverter`)
-- Per-phase three-phase data beyond `Grid Power Phase 1` and the three-phase balance registers
-
-</details>
-
-If any of these would genuinely help your setup, [open an issue](https://github.com/dewet22/givenergy-hass/issues) describing the use case — the field probably can be exposed with a single description entry, but it's nicer to have a concrete reason to do it. The same applies if a sensor we *do* expose looks wrong on your inverter — see [Help validate your hardware](#help-validate-your-hardware) for how to produce a frame capture.
 
 ## Energy dashboard
 
