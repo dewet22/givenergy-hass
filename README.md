@@ -23,6 +23,14 @@ Talk to your GivEnergy inverter straight over local Modbus TCP — **no cloud, n
 
 Works with single-phase and three-phase hybrids, AC-coupled, All-in-One, EMS and Gateway systems — see [Supported inverters](#supported-inverters) for what's confirmed on real hardware.
 
+## Part of a local-first stack
+
+This integration sits in a cloud-free GivEnergy ecosystem, with a hardware-agnostic energy layer growing on top of it:
+
+- **[givenergy-modbus](https://github.com/dewet22/givenergy-modbus)** — the Python library underneath it all: local Modbus TCP, register decoding, and the hardware-capability model this integration is built on.
+- **[givenergy-cli](https://github.com/dewet22/givenergy-cli)** — a terminal companion for the same library: probe registers, capture wire frames, export a full plant dump, or drive the inverter without Home Assistant.
+- **[ha-energy-conductor](https://github.com/dewet22/ha-energy-conductor)** — entity-driven, technology-agnostic energy coordination for Home Assistant. It only ever talks to the entities your integrations expose — GivEnergy or anything else — layering a polished UI and automations over whatever hardware you already run. Early days and actively developed; worth a look if you'd like to help shape where it goes.
+
 ## Requirements
 
 - A [supported GivEnergy inverter](#supported-inverters) on your local network (wifi or ethernet), with its Modbus TCP port reachable from Home Assistant (default **8899**)
