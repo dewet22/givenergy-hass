@@ -390,7 +390,8 @@ Topology variation is handled implicitly: PV-only installs simply skip the batte
 
 Go to **Settings → Voice assistants → Expose** and tick the entities you want. The list above is a good starting set.
 
-### Suggested aliases
+<details>
+<summary><b>Suggested aliases, and why exposure is manual</b></summary>
 
 Default entity names like `GivEnergy Inverter SA1234G123 Battery SOC` are unwieldy for voice. After exposing, open each entity's voice-assistants tab (**Settings → Devices & Services → GivEnergy Local → \<entity\> → Aliases**) and add short aliases. A conservative starting set:
 
@@ -407,13 +408,16 @@ Default entity names like `GivEnergy Inverter SA1234G123 Battery SOC` are unwiel
 
 Aliases are deliberately not shipped by the integration: the entity-registry alias field has no provenance marker, so we can't distinguish "we set this" from "the user set this" — which means we couldn't preserve user edits cleanly across restarts. Add only the aliases that match your household's vocabulary; less is usually more, since each alias becomes its own intent-match candidate.
 
-### Why these aren't auto-exposed
+**Why aren't these auto-exposed?** HA's conversation agent filters sensor entities by `device_class` against an allowlist tied to its intent matchers; `power`, `energy`, and `battery` aren't on the list. There's no `_attr_*` an integration can set to override this — exposure is intentionally a user-controlled decision. Background: [community thread on Assist auto-exposure](https://community.home-assistant.io/t/wth-are-all-new-entities-exposed-to-assist-by-default/803889).
 
-HA's conversation agent filters sensor entities by `device_class` against an allowlist tied to its intent matchers; `power`, `energy`, and `battery` aren't on the list. There's no `_attr_*` an integration can set to override this — exposure is intentionally a user-controlled decision. Background: [community thread on Assist auto-exposure](https://community.home-assistant.io/t/wth-are-all-new-entities-exposed-to-assist-by-default/803889).
+</details>
 
 ### Not exposed by default
 
-The upstream library makes ~180 inverter fields available; this integration intentionally exposes the subset that's useful for end users without being unsafe or noisy. Deliberately skipped for now:
+The upstream library makes ~180 inverter fields available; this integration intentionally exposes the subset that's useful for end users without being unsafe or noisy.
+
+<details>
+<summary>What's deliberately skipped for now</summary>
 
 - `enable_*` flags for low-level inverter behaviour (buzzer, RTC, BMS read, frequency derating, auto-judge battery type, …) — changing these from a UI toggle is rarely what you actually want
 - Battery calibration registers, voltage-adjust trims, low-voltage force-charge timers
@@ -422,13 +426,18 @@ The upstream library makes ~180 inverter fields available; this integration inte
 - Raw debug fields (internal bus voltages, countdown timers, `debug_inverter`)
 - Per-phase three-phase data beyond `Grid Power Phase 1` and the three-phase balance registers
 
+</details>
+
 If any of these would genuinely help your setup, [open an issue](https://github.com/dewet22/givenergy-hass/issues) describing the use case — the field probably can be exposed with a single description entry, but it's nicer to have a concrete reason to do it. The same applies if a sensor we *do* expose looks wrong on your inverter — see [Help validate your hardware](#help-validate-your-hardware) for how to produce a frame capture.
 
 ## Energy dashboard
 
 All cumulative-energy entities (kWh) are exposed with `device_class=energy` and `state_class=total_increasing`, so Home Assistant generates long-term statistics for them automatically and they show up directly in the Energy dashboard's entity picker.
 
-### Required: energy sensors (kWh, for the dashboard graphs)
+<details>
+<summary><b>Which entity goes in each Energy-dashboard slot</b></summary>
+
+**Required — energy sensors (kWh, for the dashboard graphs)**
 
 | Dashboard slot | Entity |
 |---|---|
@@ -440,7 +449,7 @@ All cumulative-energy entities (kWh) are exposed with `device_class=energy` and 
 
 The dashboard derives household consumption automatically from the above. If you'd like to track it directly as a sanity check, `House Consumption Today` measures the derived household demand and can be added under "Individual devices".
 
-### Optional: power sensors (W, for the "Now" live view)
+**Optional — power sensors (W, for the "Now" live view)**
 
 The dashboard's live view shows current power flow between solar, grid, battery and load. Wire these in once the energy mappings above are in place:
 
@@ -452,6 +461,8 @@ The dashboard's live view shows current power flow between solar, grid, battery 
 | Household demand | `Load Power` | This would be universally positive, unless you have another generation source |
 
 The daily counters reset at midnight; Home Assistant's recorder detects the reset automatically thanks to the `total_increasing` state class, so deltas across day boundaries are accounted for correctly.
+
+</details>
 
 ## Troubleshooting
 
