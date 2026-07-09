@@ -298,7 +298,6 @@ Some energy sensors are model-dependent: on AC-coupled and All-in-One systems th
 | Export Power Rate Limit | % | Three-phase only — installer-set grid export power-rate cap (% of rated power) |
 | Inverter Export Total | kWh | Cumulative inverter export to grid |
 | Charge from Grid Total | kWh | Cumulative grid-sourced battery charging |
-| Battery Discharge This Year | kWh | |
 | Backup Power | W | EPS port output |
 | Combined Generation Power | W | Solar + battery combined |
 | Work Time Total | h | |
