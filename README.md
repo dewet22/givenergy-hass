@@ -8,18 +8,59 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/docs/use/repositories/dashboard)
 
-A Home Assistant integration for GivEnergy inverters that communicates directly over local Modbus TCP — no cloud, no GivEnergy portal account required.
+Talk to your GivEnergy inverter straight over local Modbus TCP — **no cloud, no GivEnergy portal account, no MQTT broker.** Full sensor and control coverage, a live self-building dashboard, and proper Home Assistant plumbing for automations, the Energy dashboard, voice and LLMs.
 
-Uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) for all inverter communication.
+<p align="center"><img src="docs/dashboard-flow.png" alt="GivEnergy dashboard — flow mode" width="820"></p>
+
+## ✨ Highlights
+
+- 🔒 **Fully local & private** — talks to the inverter directly on your LAN; nothing leaves the house, and no GivEnergy account is involved.
+- 🔋 **Every sensor and control** — PV, battery, grid and load telemetry; per-cell battery health; charge/discharge scheduling, SOC targets, and battery modes.
+- 📊 **A dashboard that builds itself** — a bundled strategy renders a full six-tab layout (plus Flow, Glance and Analyst views) and resolves every entity live, so it never rots when a device moves or an entity gets renamed.
+- 🤖 **Predbat- & EMS-ready** — drives Predbat on single- and multi-inverter EMS plants, with no GivTCP or MQTT broker in the loop.
+- 🗣️ **Voice & LLM in one click** — a single service exposes the right entities to Assist and LLM tools (Claude / OpenAI via MCP).
+- 🔬 **Honest about the hardware** — register maps are confirmed against real wire captures, with built-in capture tooling to diagnose anything that reads wrong.
+
+Works with single-phase and three-phase hybrids, AC-coupled, All-in-One, EMS and Gateway systems — see [Supported inverters](#supported-inverters) for what's confirmed on real hardware.
+
+## Part of a local-first stack
+
+This integration sits in a cloud-free GivEnergy ecosystem, with a hardware-agnostic energy layer growing on top of it:
+
+- **[givenergy-modbus](https://github.com/dewet22/givenergy-modbus)** — the Python library underneath it all: local Modbus TCP, register decoding, and the hardware-capability model this integration is built on.
+- **[givenergy-cli](https://github.com/dewet22/givenergy-cli)** — a terminal companion for the same library: probe registers, capture wire frames, export a full plant dump, or drive the inverter without Home Assistant.
+- **[Energy Conductor](https://github.com/dewet22/ha-energy-conductor)** — entity-driven, technology-agnostic energy coordination for Home Assistant. It only ever talks to the entities your integrations expose — GivEnergy or anything else — layering a polished UI, forecasting and automated control over whatever hardware you already run. Early days and actively developed; worth a look if you'd like to help shape where it goes.
+
+<p align="center"><img src="docs/energy-conductor-forecast.png" alt="Energy Conductor — the tape: 12h history, 12h forecast" width="840"></p>
+<p align="center"><em>The <b>tape</b> — twelve hours of history and twelve of forecast on one axis, with the events it's scheduling (off-peak, EV, solar diversion) laid out beneath.</em></p>
+
+<details>
+<summary><b>More of Energy Conductor</b></summary>
+
+**Tonight's plan in plain English, plus live control** — it doesn't just visualise, it decides, actuates, and tells you why.
+
+<p align="center"><img src="docs/energy-conductor-plan.png" alt="Energy Conductor — plan reasoning and control status" width="740"></p>
+
+**The money** — billing-grade costs alongside modelled savings, down to a "paying for itself" run-rate.
+
+<p align="center"><img src="docs/energy-conductor-ledger.png" alt="Energy Conductor — cost and savings ledger" width="440"></p>
+
+**A year at a glance** — calendar heatmaps and per-hour density for every stream (PV, load, grid, EV, hot water, gas): a whole year of energy in one straightforward view.
+
+<p align="center"><img src="docs/energy-conductor-history.png" alt="Energy Conductor — long-term energy analytics" width="740"></p>
+
+</details>
 
 ## Requirements
 
-- A [supported GivEnergy inverter](#supported-inverters) connected to your local network (wifi or ethernet), with the Modbus TCP port reachable from your Home Assistant server (default port **8899**)
-- Home Assistant 2026.5 or later (requires Python 3.14, which HA 2026.5+ ships)
+- A [supported GivEnergy inverter](#supported-inverters) on your local network (wifi or ethernet), with its Modbus TCP port reachable from Home Assistant (default **8899**)
+- Home Assistant 2026.5 or later (it ships the Python 3.14 this integration needs)
+
+Inverter communication is handled by the [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) library.
 
 ## Supported inverters
 
-The integration uses [`givenergy-modbus`](https://github.com/dewet22/givenergy-modbus) v2.2, which models the following device families: single-phase hybrid, three-phase hybrid, AC-coupled, EMS, Gateway, and All-in-One. The register maps were originally brought in from the GivTCP fork, and a growing share has since been confirmed against wire captures from real hardware — much of it thanks to owners contributing captures and testing pre-releases ([#52](https://github.com/dewet22/givenergy-hass/issues/52), [#95](https://github.com/dewet22/givenergy-hass/issues/95)).
+`givenergy-modbus` models these device families: single-phase hybrid, three-phase hybrid, AC-coupled, EMS, Gateway, and All-in-One. The register maps were originally brought in from the GivTCP fork, and a growing share has since been confirmed against wire captures from real hardware — much of it thanks to owners contributing captures and testing pre-releases ([#52](https://github.com/dewet22/givenergy-hass/issues/52), [#95](https://github.com/dewet22/givenergy-hass/issues/95)).
 
 Confirmed working on real hardware:
 
@@ -36,7 +77,9 @@ The following have modelled register maps and are expected to work, but haven't 
 - Hybrid single-phase Gen 2 — modelled, but no Gen 2 unit has ever been observed; a field report from an EA-prefix serial would settle its detection code
 - Polar, AIO Commercial, EMS Commercial, and 3-phase AC — model codes known, decode unverified against real hardware
 
-If you'd like to help validate, a wire-frame capture is the most useful thing you can include. If you already have the integration running, use the built-in action from **Developer Tools → Actions** (named **Services** in older Home Assistant versions):
+### Help validate your hardware
+
+Real-world testing on non-Hybrid-Gen-1 hardware (AC, AC3, EMS, Gateway, All-in-One) is especially appreciated, and a wire-frame capture is the single most useful thing you can attach. If the integration is already running, use the built-in action from **Developer Tools → Actions** (named **Services** in older Home Assistant versions):
 
 ```
 Service: givenergy_local.capture_frames
@@ -45,16 +88,16 @@ Duration: 60
 
 This records a redacted copy of the raw Modbus traffic (serial numbers zeroed), saves it to `<config>/givenergy_local_captures/`, and sends a persistent notification linking to a landing page where you can inspect the capture, download the file, or open a pre-filled GitHub issue. Attach the file to the issue along with your inverter model and serial prefix.
 
-![Persistent notification when a capture completes](docs/capture-notification.png)
+<p align="center"><img src="docs/capture-notification.png" alt="Persistent notification when a capture completes" width="500"></p>
 
 Following the link opens the capture's landing page:
 
-![Capture landing page — inspect, download, or file an issue](docs/capture-landing.png)
+<p align="center"><img src="docs/capture-landing.png" alt="Capture landing page — inspect, download, or file an issue" width="560"></p>
 
 If you don't yet have the integration installed, [givenergy-cli](https://github.com/dewet22/givenergy-cli) can produce a structured register dump instead:
 
 ```bash
-uv run givenergy-cli --host <inverter-ip> export -o plant.json
+uvx givenergy-cli --host <inverter-ip> export -o plant.json
 ```
 
 ## Installation
@@ -71,7 +114,7 @@ Or if that doesn't work:
 
 ### Installing a beta / pre-release via HACS
 
-New features often ship as a pre-release (e.g. `v1.1.0rc4`) before a stable release. To install one:
+New features often ship as a pre-release (e.g. `v1.4.0rc2`) before a stable release. To install one:
 
 1. Open **GivEnergy Local** in HACS, then the **⋮ menu (top-right) → Redownload**
 2. Expand **"Need a different version?"**
@@ -88,7 +131,7 @@ New features often ship as a pre-release (e.g. `v1.1.0rc4`) before a stable rele
 
 Add the integration via **Settings → Devices & Services → Add Integration → GivEnergy Local**.
 
-![Config flow — add integration dialog](docs/config-flow.png)
+<p align="center"><img src="docs/config-flow.png" alt="Config flow — add integration dialog" width="440"></p>
 
 | Field | Default | Description |
 |---|---|---|
@@ -98,82 +141,180 @@ Add the integration via **Settings → Devices & Services → Add Integration �
 
 To change any of these later, open the integration's **⋮** menu in **Settings → Devices & Services → GivEnergy Local** and choose **Reconfigure**. The integration reloads automatically when you save.
 
-![Integration ⋮ menu — Reconfigure entry](docs/config-reconfigure.png)
+<p align="center"><img src="docs/config-reconfigure.png" alt="Integration ⋮ menu — Reconfigure entry" width="340"></p>
 
 ### Running alongside other local polling clients
 
 Both this integration and other local polling solutions (GivTCP, the GivEnergy app, custom scripts) can run in active mode at the same time without issue. The inverter handles concurrent Modbus clients reliably — earlier reports of polling conflicts were largely a consequence of retry and error-recovery behaviour in the older shared library, not an inverter limitation. Running multiple clients in parallel has been solid in practice, even at faster-than-default poll intervals.
 
+> **Note:** earlier versions offered a "passive mode" (listen only, relying on another client's polling to keep values fresh). It was removed in v1.3.37: concurrent active polling is well within what the hardware handles, while passive mode's freshness expectations could never be met by the cloud's ~5-minute polling cadence, producing continuous spurious refresh failures (#253). An entry that still has the old setting stored simply polls actively.
+
 #### GivTCP long-term stats migration
 
 Running both integrations in parallel makes it easy to evaluate a switch without committing: you get a live side-by-side comparison and can cut over at your own pace. A migration script (`scripts/migrate_from_givtcp.py`) carries your long-term recorder statistics across — see [`docs/migration-from-givtcp.md`](docs/migration-from-givtcp.md) for usage.
 
-> **Note:** earlier versions offered a "passive mode" (listen only, relying on another client's polling to keep values fresh). It was removed in v1.3.37: concurrent active polling is well within what the hardware handles, while passive mode's freshness expectations could never be met by the cloud's ~5-minute polling cadence, producing continuous spurious refresh failures (#253). An entry that still has the old setting stored simply polls actively.
+## Dashboard
+
+The recommended way to set up a full dashboard is the live **dashboard strategy**. It builds the complete six-tab layout but resolves every entity from the registry each time the dashboard loads, so it never goes stale when a device moves between areas or an entity is renamed — the failure mode that left static dashboards full of "entity not available" rows once Home Assistant 2026.6 began folding a device's area into its entity IDs. (I added it because the static YAML kept silently rotting on my own install after area reassignments.)
+
+To use it, create a new dashboard, open the **raw configuration editor**, and set the whole config to:
+
+```yaml
+strategy:
+  type: custom:givenergy
+  mode: classic        # classic (default) | flow | glance | analyst | all — see below
+  max_power_kw: 10     # optional; default 10; Overview 24h chart y-axis envelope (kW)
+  serial: SA1234G000   # optional; pin one inverter on a multi-plant install
+```
+
+The strategy and the bundled cell-heatmap card are served by the integration itself, so there's nothing extra to install for them. `power-flow-card-plus` and `apexcharts-card` are still needed for the Overview/Energy charts (install them via **HACS → Frontend**); where they're missing the strategy shows a short placeholder rather than a broken card.
+
+One caveat worth knowing: on any **cold (uncached) load** the dashboard may show "Error loading the dashboard strategy: Timeout waiting for strategy element …". This is a Home Assistant limitation common to all network-loaded dashboard strategies — HA gives the strategy module a fixed 5-second window to register, and an uncached fetch frequently loses that race when it's queued behind other frontend resources. A cold load happens on a browser hard refresh (Ctrl/Cmd+Shift+R), but also on any client that has simply never loaded the module before — a fresh install, a new device, or the companion app. The fix is inelegant but genuine: **retry until it loads once** — reload in a browser; in the app, navigate away and back, pull to refresh, or close and reopen. You're not trying to bypass the cache, you're trying to fill it: the first successful load caches the module, after which it registers instantly and the dashboard stays reliable.
+
+### `mode: flow`
+
+`mode: flow` leads the dashboard with an immersive, full-width **Flow** view — an animated power-flow diagram (solar, grid, battery, home) with the live direction of each flow derived from the sign of the underlying power sensors, three big-number headers, and a today-totals strip. It's a bundled custom card (`custom:givenergy-flow`), so nothing extra to install. The full `classic` view set (Overview, Energy, Batteries, Battery Health, Controls, Diagnostics) follows behind it, so you lose nothing by switching.
+
+<p align="center"><img src="docs/dashboard-flow.png" alt="GivEnergy dashboard — flow mode" width="820"></p>
+
+```yaml
+strategy:
+  type: custom:givenergy
+  mode: flow
+```
+
+The Flow view is rendered as a `panel: true` view. If you have the **kiosk-mode** custom integration installed (HACS), the strategy adds hints to hide the header and sidebar for a true full-screen display; without it, the view simply renders inside the normal HA chrome. The card is responsive (container-query based), so it works as a wall-tablet kiosk and reflows for a phone webview.
+
+The tariff-aware `coach` direction from [the redesign brief](docs/design/dashboard-redesign-brief.md) is still to come.
+
+### `mode: glance`
+
+`mode: glance` leads the dashboard with a calm, full-width **Glance** view: a single-sentence system summary, three large numbers (solar generated today, battery SOC, house consumption today), and a row of health pills showing battery count, import and export totals for the day, and per-string PV generation when active. It's built around a bundled `custom:givenergy-glance` card — nothing extra to install.
+
+<p align="center"><img src="docs/dashboard-glance.png" alt="GivEnergy dashboard — glance mode" width="820"></p>
+
+```yaml
+strategy:
+  type: custom:givenergy
+  mode: glance
+```
+
+The status sentence is derived from the live signs of grid, battery, and solar power — covering states like self-sufficient, exporting, solar-and-grid importing, battery-only overnight, and so on. The dot to its left pulses green when the system is self-sufficient or exporting, amber when importing from the grid or when battery SOC drops below 20%. The full classic view set follows the Glance panel, so the detailed tabs are still one tap away. Like `flow`, the Glance view is `panel: true` and picks up kiosk-mode hints when the integration is present.
+
+### `mode: analyst`
+
+`mode: analyst` leads the dashboard with a dense **Analyst** view aimed at optimisation and debugging: a live metrics strip (PV, load, battery, grid), an energy ledger breaking down today's sources and sinks as kWh and percentages, a diagnostics table (temperatures, grid frequency, power factor, work time, consecutive failures), a 24-hour power overlay chart (requires `apexcharts-card`), and per-pack cell heatmaps. Nothing extra to install beyond the apexcharts card for the chart.
+
+<p align="center"><img src="docs/dashboard-analyst.png" alt="GivEnergy dashboard — analyst mode" width="820"></p>
+
+```yaml
+strategy:
+  type: custom:givenergy
+  mode: analyst
+```
+
+The Analyst view is a standard (non-panel) multi-card view, so the full classic tab set still follows it.
+
+### `mode: all`
+
+`mode: all` stacks all four views — Glance, Flow, Analyst, and the classic tab set — into a single dashboard. Useful if you want to switch between display styles without maintaining separate dashboards.
+
+```yaml
+strategy:
+  type: custom:givenergy
+  mode: all
+```
 
 ## Entities
 
-![Inverter device page in Home Assistant](docs/device-page.png)
+<p align="center"><img src="docs/device-page.png" alt="Inverter device page in Home Assistant" width="620"></p>
 
 ### Inverter device
 
 #### Sensors
 
+Grouped by what they tell you. Every cumulative (kWh) sensor feeds the Energy dashboard and long-term statistics automatically.
+
+**Solar**
+
 | Entity | Unit | Notes |
 |---|---|---|
 | PV Power | W | Combined PV output |
-| PV String 1 / 2 Power | W | Per-string power |
-| PV String 1 / 2 Voltage | V | |
-| PV String 1 / 2 Current | A | |
-| PV Energy Today | kWh | |
-| PV Energy Total | kWh | |
+| PV String 1 / 2 Power / Voltage / Current | W / V / A | Per-string |
+| PV Energy Today / Total | kWh | |
+
+**Battery**
+
+| Entity | Unit | Notes |
+|---|---|---|
 | Battery SOC | % | |
-| Battery SOC kWh | kWh | SOC × nominal capacity ([#248](https://github.com/dewet22/givenergy-hass/issues/248)) — nameplate-derived estimate, reads optimistic on aged packs |
+| Battery SOC kWh | kWh | SOC × nominal capacity ([#248](https://github.com/dewet22/givenergy-hass/issues/248)) — nameplate estimate, reads optimistic on aged packs |
 | Battery Power | W | Positive = discharging, negative = charging |
-| Battery Voltage / Current | V / A | |
-| Battery Temperature | °C | |
-| Battery Charge Today | kWh | |
-| Battery Discharge Today | kWh | |
+| Battery Voltage / Current / Temperature | V / A / °C | |
+| Battery Charge / Discharge Today | kWh | |
 | Battery Throughput Total | kWh | |
-| Grid Power | W | Signed net flow: positive = exporting, negative = importing. Hidden by default (feeds the bundled flow card); for the Energy Dashboard use the split sensors below |
-| Grid Power Import / Export | W | Always-positive single-direction power, for the Energy Dashboard's "Two sensors" grid option — no sign inversion, so long-term statistics aren't lost |
-| Grid Export / Import Today | kWh | |
-| Grid Export / Import Total | kWh | |
-| AC Voltage / Frequency | V / Hz | |
+
+**Grid**
+
+| Entity | Unit | Notes |
+|---|---|---|
+| Grid Power | W | Signed net flow (positive = export). Hidden by default (feeds the flow card); use the split sensors for the Energy dashboard |
+| Grid Power Import / Export | W | Always-positive single-direction power for the Energy dashboard's "Two sensors" option — no sign inversion, so long-term stats aren't lost |
+| Grid Import / Export Today / Total | kWh | |
+
+**Home & inverter output**
+
+| Entity | Unit | Notes |
+|---|---|---|
 | Load Power | W | |
-| AC Charge Today | kWh | Grid energy used to charge the battery |
 | House Consumption Today | kWh | Derived: PV + grid import − grid export − AC charge |
+| AC Charge Today | kWh | Grid energy used to charge the battery |
 | Inverter Output Today / Total | kWh | |
-| Inverter Heatsink Temperature | °C | |
-| Charger Temperature | °C | |
-| Status | — | e.g. Normal, Warning, Fault |
+| AC Voltage / Frequency | V / Hz | |
+| Inverter Heatsink / Charger Temperature | °C | |
+
+**Status**
+
+| Entity | Unit | Notes |
+|---|---|---|
+| Status | — | Normal / Warning / Fault |
 | Fault Code | — | |
-| Inverter Errors | — | Diagnostic; error bitmask |
-| Charger Warning Code | — | Diagnostic |
-| Charge Status | — | Diagnostic; raw int (BMS state code, mapping TBD) |
-| System Mode | — | Diagnostic; raw int (operating mode, mapping TBD) |
-| AC Output Voltage / Frequency / Current | V / Hz / A | Diagnostic; inverter output (post-conversion) |
-| Grid Apparent Power | VA | Diagnostic |
-| Inverter Power Factor | — | Diagnostic |
-| Grid Power Phase 1 | W | Diagnostic; useful for 3-phase models |
+
+Some energy sensors are model-dependent: on AC-coupled and All-in-One systems the registers historically labelled *PV Generation Today/Total* actually count the unit's battery-discharge AC output, so from v1.4.0 they appear there as **Inverter Output Today/Total** instead (existing entities are renamed in place, keeping their history), and the PV-derived sensors (Self Consumption, PV Direct) don't exist on those models.
+
+<details>
+<summary><b>Diagnostic sensors</b> — created but hidden from the default device view (~30 entities: firmware, extra electricals, error codes, refresh counters, …)</summary>
+
+| Entity | Unit | Notes |
+|---|---|---|
+| Inverter Errors | — | Error bitmask |
+| Charger Warning Code | — | |
+| Charge Status | — | Raw int (BMS state code, mapping TBD) |
+| System Mode | — | Raw int (operating mode, mapping TBD) |
+| AC Output Voltage / Frequency / Current | V / Hz / A | Inverter output (post-conversion) |
+| Grid Apparent Power | VA | |
+| Inverter Power Factor | — | |
+| Grid Power Phase 1 | W | Useful for 3-phase models |
+| Export Power Rate Limit | % | Three-phase only — installer-set grid export power-rate cap (% of rated power) |
 | Inverter Export Total | kWh | Cumulative inverter export to grid |
 | Charge from Grid Total | kWh | Cumulative grid-sourced battery charging |
 | Battery Discharge This Year | kWh | |
 | Backup Power | W | EPS port output |
 | Combined Generation Power | W | Solar + battery combined |
 | Work Time Total | h | |
-| Device Type Code | — | Diagnostic |
-| MPPT Count | — | Diagnostic |
-| Phase Count | — | Diagnostic; 1 for single-phase, 3 for three-phase |
-| ARM / DSP / Modbus Firmware Version | — | Diagnostic |
-| Meter Type | — | Diagnostic; CT-or-EM418 / EM115 |
-| Battery Type | — | Diagnostic; Lithium / Lead-Acid |
-| Battery Capacity | Ah | Diagnostic; reported pack capacity |
-| Battery Nominal Capacity | kWh | Diagnostic; computed from Ah × nominal voltage |
-| Last Successful Refresh | timestamp | Diagnostic |
-| Consecutive Refresh Failures | — | Diagnostic; resets to 0 on next success |
-| Total Refresh Failures | — | Diagnostic; ever-increasing counter (resets only when HA restarts — HA's long-term statistics handle that transparently) |
+| Device Type Code | — | |
+| MPPT Count | — | |
+| Phase Count | — | 1 for single-phase, 3 for three-phase |
+| ARM / DSP / Modbus Firmware Version | — | |
+| Meter Type | — | CT-or-EM418 / EM115 |
+| Battery Type | — | Lithium / Lead-Acid |
+| Battery Capacity | Ah | Reported pack capacity |
+| Battery Nominal Capacity | kWh | Ah × nominal voltage |
+| Last Successful Refresh | timestamp | |
+| Consecutive Refresh Failures | — | Resets to 0 on the next good poll |
+| Total Refresh Failures | — | Ever-increasing (resets only on HA restart — long-term stats handle that) |
 
-Some energy sensors are model-dependent: on AC-coupled and All-in-One systems the registers historically labelled *PV Generation Today/Total* actually count the unit's battery-discharge AC output, so from v1.3.41 they appear there as **Inverter Output Today/Total** instead (existing entities are renamed in place, keeping their history), and the PV-derived sensors (Self Consumption, PV Direct) don't exist on those models.
+</details>
 
 #### Controls
 
@@ -204,17 +345,23 @@ Each connected battery pack appears as a separate device linked to the inverter.
 | Remaining Capacity | Ah | |
 | Design Capacity | Ah | |
 | Charge Cycles | — | |
-| Cell Count | — | Diagnostic; number of cells the BMS reports |
-| Cell Voltages Sum | V | Diagnostic; sanity-check against Voltage |
-| BMS MOSFET Temperature | °C | Diagnostic |
-| Cell 1 … 16 Voltage | V | Diagnostic; per-cell. Unused positions in smaller packs read ~0 |
-| Cells 1-4 / 5-8 / 9-12 / 13-16 Temperature | °C | Diagnostic; the BMS samples one thermistor per 4-cell group |
 
-Cell-level entities are tagged as diagnostic, so they're hidden from the default device view but available for dashboards and pack-health monitoring (cell voltage spread, temperature deltas, etc.).
+<details>
+<summary><b>Cell-level diagnostics</b> — per-cell voltages and temperatures, hidden from the default view but ideal for pack-health monitoring (cell voltage spread, temperature deltas)</summary>
+
+| Entity | Unit | Notes |
+|---|---|---|
+| Cell Count | — | Number of cells the BMS reports |
+| Cell Voltages Sum | V | Sanity-check against Voltage |
+| BMS MOSFET Temperature | °C | |
+| Cell 1 … 16 Voltage | V | Per-cell; unused positions in smaller packs read ~0 |
+| Cells 1-4 / 5-8 / 9-12 / 13-16 Temperature | °C | The BMS samples one thermistor per 4-cell group |
+
+</details>
 
 #### AIO battery modules
 
-All-in-One systems expose each removable battery module separately, so on AIO hardware you'll see one extra device per module (parented to the AIO inverter) alongside the pack-level battery device. Each module device carries its `HX…` serial plus 24 per-cell voltages and 12 per-cell temperatures, all diagnostic. These mirror the LV per-cell entities, so the cell-heatmap card and the same pack-health views work at module granularity. Module data needs `givenergy-modbus` 2.2 or newer.
+All-in-One systems expose each removable battery module separately, so on AIO hardware you'll see one extra device per module (parented to the AIO inverter) alongside the pack-level battery device. Each module device carries its `HX…` serial plus 24 per-cell voltages and 12 per-cell temperatures, all diagnostic. These mirror the LV per-cell entities, so the cell-heatmap card and the same pack-health views work at module granularity. Module data needs v1.2.0 or later.
 
 ### EMS controller device
 
@@ -243,83 +390,29 @@ The integration registers the following services under the `givenergy_local` dom
 | `givenergy_local.reboot_inverter` | Sends the inverter reboot command. Requires a `device_id`. |
 | `givenergy_local.calibrate_battery_soc` | Triggers a BMS SOC calibration cycle. Requires a `device_id`. |
 
-### Dashboard
+### Not exposed by default
 
-The recommended way to set up a full dashboard is the live **dashboard strategy**. It builds the complete six-tab layout but resolves every entity from the registry each time the dashboard loads, so it never goes stale when a device moves between areas or an entity is renamed — the failure mode that left static dashboards full of "entity not available" rows once Home Assistant 2026.6 began folding a device's area into its entity IDs. (I added it because the static YAML kept silently rotting on my own install after area reassignments.)
+The upstream library makes ~180 inverter fields available; this integration intentionally exposes the subset that's useful for end users without being unsafe or noisy.
 
-To use it, create a new dashboard, open the **raw configuration editor**, and set the whole config to:
+<details>
+<summary>What's deliberately skipped for now</summary>
 
-```yaml
-strategy:
-  type: custom:givenergy
-  mode: classic        # classic (default) | flow | glance | analyst | all — see below
-  max_power_kw: 10     # optional; default 10; Overview 24h chart y-axis envelope (kW)
-  serial: SA1234G000   # optional; pin one inverter on a multi-plant install
-```
+- `enable_*` flags for low-level inverter behaviour (buzzer, RTC, BMS read, frequency derating, auto-judge battery type, …) — changing these from a UI toggle is rarely what you actually want
+- Battery calibration registers, voltage-adjust trims, low-voltage force-charge timers
+- Charge / discharge slots 3 - 10 and their per-slot SOC stops (slots 1 and 2 cover typical Eco/Timed usage)
+- Admin / destructive actions: inverter reboot, BMS flash update, auto-test triggers, ARM-chip select, user-code register
+- Raw debug fields (internal bus voltages, countdown timers, `debug_inverter`)
+- Per-phase three-phase data beyond `Grid Power Phase 1` and the three-phase balance registers
 
-The strategy and the bundled cell-heatmap card are served by the integration itself, so there's nothing extra to install for them. `power-flow-card-plus` and `apexcharts-card` are still needed for the Overview/Energy charts (install them via **HACS → Frontend**); where they're missing the strategy shows a short placeholder rather than a broken card.
+</details>
 
-One caveat worth knowing: on any **cold (uncached) load** the dashboard may show "Error loading the dashboard strategy: Timeout waiting for strategy element …". This is a Home Assistant limitation common to all network-loaded dashboard strategies — HA gives the strategy module a fixed 5-second window to register, and an uncached fetch frequently loses that race when it's queued behind other frontend resources. A cold load happens on a browser hard refresh (Ctrl/Cmd+Shift+R), but also on any client that has simply never loaded the module before — a fresh install, a new device, or the companion app. The fix is inelegant but genuine: **retry until it loads once** — reload in a browser; in the app, navigate away and back, pull to refresh, or close and reopen. You're not trying to bypass the cache, you're trying to fill it: the first successful load caches the module, after which it registers instantly and the dashboard stays reliable.
+If any of these would genuinely help your setup, [open an issue](https://github.com/dewet22/givenergy-hass/issues) describing the use case — the field probably can be exposed with a single description entry, but it's nicer to have a concrete reason to do it. The same applies if a sensor we *do* expose looks wrong on your inverter — see [Help validate your hardware](#help-validate-your-hardware) for how to produce a frame capture.
 
-#### `mode: flow`
-
-`mode: flow` leads the dashboard with an immersive, full-width **Flow** view — an animated power-flow diagram (solar, grid, battery, home) with the live direction of each flow derived from the sign of the underlying power sensors, three big-number headers, and a today-totals strip. It's a bundled custom card (`custom:givenergy-flow`), so nothing extra to install. The full `classic` view set (Overview, Energy, Batteries, Battery Health, Controls, Diagnostics) follows behind it, so you lose nothing by switching.
-
-![GivEnergy dashboard — flow mode](docs/dashboard-flow.png)
-
-```yaml
-strategy:
-  type: custom:givenergy
-  mode: flow
-```
-
-The Flow view is rendered as a `panel: true` view. If you have the **kiosk-mode** custom integration installed (HACS), the strategy adds hints to hide the header and sidebar for a true full-screen display; without it, the view simply renders inside the normal HA chrome. The card is responsive (container-query based), so it works as a wall-tablet kiosk and reflows for a phone webview.
-
-The tariff-aware `coach` direction from [the redesign brief](docs/design/dashboard-redesign-brief.md) is still to come.
-
-#### `mode: glance`
-
-`mode: glance` leads the dashboard with a calm, full-width **Glance** view: a single-sentence system summary, three large numbers (solar generated today, battery SOC, house consumption today), and a row of health pills showing battery count, import and export totals for the day, and per-string PV generation when active. It's built around a bundled `custom:givenergy-glance` card — nothing extra to install.
-
-![GivEnergy dashboard — glance mode](docs/dashboard-glance.png)
-
-```yaml
-strategy:
-  type: custom:givenergy
-  mode: glance
-```
-
-The status sentence is derived from the live signs of grid, battery, and solar power — covering states like self-sufficient, exporting, solar-and-grid importing, battery-only overnight, and so on. The dot to its left pulses green when the system is self-sufficient or exporting, amber when importing from the grid or when battery SOC drops below 20%. The full classic view set follows the Glance panel, so the detailed tabs are still one tap away. Like `flow`, the Glance view is `panel: true` and picks up kiosk-mode hints when the integration is present.
-
-#### `mode: analyst`
-
-`mode: analyst` leads the dashboard with a dense **Analyst** view aimed at optimisation and debugging: a live metrics strip (PV, load, battery, grid), an energy ledger breaking down today's sources and sinks as kWh and percentages, a diagnostics table (temperatures, grid frequency, power factor, work time, consecutive failures), a 24-hour power overlay chart (requires `apexcharts-card`), and per-pack cell heatmaps. Nothing extra to install beyond the apexcharts card for the chart.
-
-![GivEnergy dashboard — analyst mode](docs/dashboard-analyst.png)
-
-```yaml
-strategy:
-  type: custom:givenergy
-  mode: analyst
-```
-
-The Analyst view is a standard (non-panel) multi-card view, so the full classic tab set still follows it.
-
-#### `mode: all`
-
-`mode: all` stacks all four views — Glance, Flow, Analyst, and the classic tab set — into a single dashboard. Useful if you want to switch between display styles without maintaining separate dashboards.
-
-```yaml
-strategy:
-  type: custom:givenergy
-  mode: all
-```
-
-### Voice assistants & LLM access
+## Voice assistants & LLM access
 
 Home Assistant's voice assistants (Assist) and LLM tools (Claude / OpenAI via MCP) can only see entities that are explicitly **exposed**. HA auto-exposes a curated allowlist of sensor device classes — `temperature`, `humidity`, and a few others — but `power`, `energy`, and `battery` are **not** on that list, so none of this integration's headline sensors are visible to voice or LLM queries by default. Asking "what's my battery at?" silently returns nothing until you fix it.
 
-#### Option 1: run the `expose_recommended_entities` service (recommended)
+### Option 1: run the `expose_recommended_entities` service (recommended)
 
 From **Developer Tools → Actions**, pick **GivEnergy Local: Expose recommended entities to voice assistants**, choose your inverter device, and run it. You'll get a persistent notification listing what was exposed. The service is idempotent — re-run any time without losing manual customisations (it only ever exposes; it never un-exposes).
 
@@ -339,11 +432,12 @@ The opinionated set covers ~17 entities, scoped to the questions a voice user ac
 
 Topology variation is handled implicitly: PV-only installs simply skip the battery entries, and three-phase inverters use the same keys.
 
-#### Option 2: expose manually
+### Option 2: expose manually
 
 Go to **Settings → Voice assistants → Expose** and tick the entities you want. The list above is a good starting set.
 
-#### Suggested aliases
+<details>
+<summary><b>Suggested aliases, and why exposure is manual</b></summary>
 
 Default entity names like `GivEnergy Inverter SA1234G123 Battery SOC` are unwieldy for voice. After exposing, open each entity's voice-assistants tab (**Settings → Devices & Services → GivEnergy Local → \<entity\> → Aliases**) and add short aliases. A conservative starting set:
 
@@ -360,28 +454,18 @@ Default entity names like `GivEnergy Inverter SA1234G123 Battery SOC` are unwiel
 
 Aliases are deliberately not shipped by the integration: the entity-registry alias field has no provenance marker, so we can't distinguish "we set this" from "the user set this" — which means we couldn't preserve user edits cleanly across restarts. Add only the aliases that match your household's vocabulary; less is usually more, since each alias becomes its own intent-match candidate.
 
-#### Why these aren't auto-exposed
+**Why aren't these auto-exposed?** HA's conversation agent filters sensor entities by `device_class` against an allowlist tied to its intent matchers; `power`, `energy`, and `battery` aren't on the list. There's no `_attr_*` an integration can set to override this — exposure is intentionally a user-controlled decision. Background: [community thread on Assist auto-exposure](https://community.home-assistant.io/t/wth-are-all-new-entities-exposed-to-assist-by-default/803889).
 
-HA's conversation agent filters sensor entities by `device_class` against an allowlist tied to its intent matchers; `power`, `energy`, and `battery` aren't on the list. There's no `_attr_*` an integration can set to override this — exposure is intentionally a user-controlled decision. Background: [community thread on Assist auto-exposure](https://community.home-assistant.io/t/wth-are-all-new-entities-exposed-to-assist-by-default/803889).
-
-### Not exposed by default
-
-The upstream library makes ~180 inverter fields available; this integration intentionally exposes the subset that's useful for end users without being unsafe or noisy. Deliberately skipped for now:
-
-- `enable_*` flags for low-level inverter behaviour (buzzer, RTC, BMS read, frequency derating, auto-judge battery type, …) — changing these from a UI toggle is rarely what you actually want
-- Battery calibration registers, voltage-adjust trims, low-voltage force-charge timers
-- Charge / discharge slots 3 - 10 and their per-slot SOC stops (slots 1 and 2 cover typical Eco/Timed usage)
-- Admin / destructive actions: inverter reboot, BMS flash update, auto-test triggers, ARM-chip select, user-code register
-- Raw debug fields (internal bus voltages, countdown timers, `debug_inverter`)
-- Per-phase three-phase data beyond `Grid Power Phase 1` and the three-phase balance registers
-
-If any of these would genuinely help your setup, [open an issue](https://github.com/dewet22/givenergy-hass/issues) describing the use case — the field probably can be exposed with a single description entry, but it's nicer to have a concrete reason to do it. The same applies if a sensor we *do* expose looks wrong on your inverter — **real-world testing on non-Hybrid Gen 1 hardware (AC, AC3, EMS, Gateway, All-in-One) is especially appreciated**, and a frame capture from your unit goes a long way (see [Supported inverters](#supported-inverters) for how to produce one).
+</details>
 
 ## Energy dashboard
 
 All cumulative-energy entities (kWh) are exposed with `device_class=energy` and `state_class=total_increasing`, so Home Assistant generates long-term statistics for them automatically and they show up directly in the Energy dashboard's entity picker.
 
-### Required: energy sensors (kWh, for the dashboard graphs)
+<details>
+<summary><b>Which entity goes in each Energy-dashboard slot</b></summary>
+
+**Required — energy sensors (kWh, for the dashboard graphs)**
 
 | Dashboard slot | Entity |
 |---|---|
@@ -393,7 +477,7 @@ All cumulative-energy entities (kWh) are exposed with `device_class=energy` and 
 
 The dashboard derives household consumption automatically from the above. If you'd like to track it directly as a sanity check, `House Consumption Today` measures the derived household demand and can be added under "Individual devices".
 
-### Optional: power sensors (W, for the "Now" live view)
+**Optional — power sensors (W, for the "Now" live view)**
 
 The dashboard's live view shows current power flow between solar, grid, battery and load. Wire these in once the energy mappings above are in place:
 
@@ -406,12 +490,15 @@ The dashboard's live view shows current power flow between solar, grid, battery 
 
 The daily counters reset at midnight; Home Assistant's recorder detects the reset automatically thanks to the `total_increasing` state class, so deltas across day boundaries are accounted for correctly.
 
+</details>
+
 ## Troubleshooting
 
-- **Transient connection drops are normal.** TCP-level timeouts and the occasional connection reset get logged at WARNING level and the next scan tick re-establishes the connection. The `Last Successful Refresh` and `Consecutive Refresh Failures` diagnostic sensors will tell you if something more persistent is going on.
-- **Control values drift back on EMS plants** — with EMS plant mode active, the controller periodically reasserts certain inverter settings (notably *Inverter Max Output Active Power*, HR50) over its own controller-to-inverter link, which this integration cannot observe. Writes succeed and hold briefly, then revert within minutes. That's the EMS doing its job, not a failed write; taking the plant out of EMS plant mode makes manually set values stick ([#52](https://github.com/dewet22/givenergy-hass/issues/52)).
-- **Conflicts with another Modbus client** — concurrent active polling is reliable on current firmware, including multiple clients at 30-second intervals; if you do see persistent connection errors with two clients running, please open an issue.
-- **Wrong number of battery devices appearing** — battery count is auto-discovered at startup by probing the Modbus bus; there is no manual override. If detection misfires (e.g. a battery was slow to respond), reloading the integration usually fixes it. If the count is consistently wrong, [open an issue](https://github.com/dewet22/givenergy-hass/issues/48) and attach a frame capture (see [Supported inverters](#supported-inverters)).
+- **Comms health at a glance.** Each device exposes diagnostic counters that surface connection problems without trawling logs: `Consecutive Refresh Failures` (resets to 0 on the next good poll), `Total Refresh Failures`, `Last Successful Refresh`, plus per-cause counters for CRC failures, frame-splice rejections and holds, read retries and cold-start holds. A steady trickle is normal; a sustained climb is worth a look.
+- **CRC errors are normal — and are how the library knows the bus data is trustworthy.** They're almost always electrical (cable routing near current-carrying conductors, termination, shielding), *not* a symptom of too many clients: the data adapter mediates the downstream Modbus bus no matter how many clients connect. A frame that fails its CRC is simply discarded and re-read on the next tick. The odd one logged at WARNING is the guard doing its job.
+- **Transient connection drops are normal.** TCP-level timeouts and the occasional reset are logged at WARNING and the next scan tick reconnects — the counters above will tell you if something more persistent is going on.
+- **Control values drift back on EMS plants.** With EMS plant mode active, the controller periodically reasserts certain inverter settings (notably *Inverter Max Output Active Power*, HR50) over its own controller-to-inverter link, which this integration cannot observe. Writes succeed and hold briefly, then revert within minutes. That's the EMS doing its job, not a failed write; taking the plant out of EMS plant mode makes manually set values stick ([#52](https://github.com/dewet22/givenergy-hass/issues/52)).
+- **Wrong number of battery devices.** Battery count is auto-discovered at startup by probing the Modbus bus; there is no manual override. If detection misfires (e.g. a battery was slow to respond), reloading the integration usually fixes it. If the count is consistently wrong, [open an issue](https://github.com/dewet22/givenergy-hass/issues/48) and attach a frame capture (see [Help validate your hardware](#help-validate-your-hardware)).
 
 For anything else, please [open an issue](https://github.com/dewet22/givenergy-hass/issues) with the relevant HA log lines and your inverter model.
 
@@ -419,13 +506,13 @@ For anything else, please [open an issue](https://github.com/dewet22/givenergy-h
 
 Occasionally an entity's id falls out of step with its name — usually a legacy slug left behind when an entity was renamed across versions (e.g. `…_grid_export_power` for what is now the **Grid Power** sensor), or a duplicate id created by removing and re-adding the integration. The friendly name is authoritative and nothing is functionally broken, so this is cosmetic — but if you'd like the ids tidied, Home Assistant can regenerate them from the device's ⋮ menu:
 
-![Recreate entity IDs in the device ⋮ menu](docs/recreate-entity-ids-menu.png)
+<p align="center"><img src="docs/recreate-entity-ids-menu.png" alt="Recreate entity IDs in the device ⋮ menu" width="260"></p>
 
 1. Go to **Settings → Devices & Services → GivEnergy Local** and open the device.
 2. Open the **⋮** menu (top right) and choose **Recreate entity IDs**.
 3. The dialog shows how many ids will be renamed versus left unchanged — choose **Update**.
 
-![Recreate entity IDs confirmation dialog](docs/recreate-entity-ids-confirm.png)
+<p align="center"><img src="docs/recreate-entity-ids-confirm.png" alt="Recreate entity IDs confirmation dialog" width="480"></p>
 
 Home Assistant keeps each entity's history and long-term statistics across the rename. What it does *not* do is update references in your own automations, scripts, scenes, or dashboards — those still point at the old ids and need editing by hand (the dialog warns about this). The integration's bundled dashboard strategy resolves entities live, so it isn't affected.
 
