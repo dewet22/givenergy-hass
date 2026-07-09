@@ -657,7 +657,6 @@
         row(a.inv("e_pv_generation_total"), "PV Generation Total"),
         row(a.inv("inverter_output_total"), "Inverter Output Total"),
         row(a.inv("e_inverter_in_total"), "Charged from Grid"),
-        row(a.inv("e_discharge_year"), "Discharged This Year"),
         row(a.inv("e_solar_diverter"), "Solar Diverter Energy"),
       ]),
     });

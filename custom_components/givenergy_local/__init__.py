@@ -71,6 +71,7 @@ from .migrations import (
     _reconcile_gateway_entities,
     _reconcile_per_cell_entities,
     _reconcile_readability_gated_controls,
+    _remove_retired_battery_discharge_year,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,7 +87,7 @@ _STRATEGY_URL = f"/{DOMAIN}/{_STRATEGY_FILENAME}"
 # served from the same package dir so they resolve offline without a CDN.
 _FONTS_DIRNAME = "fonts"
 _FONTS_URL = f"/{DOMAIN}/{_FONTS_DIRNAME}"
-_STRATEGY_VERSION = "12"
+_STRATEGY_VERSION = "13"
 
 # Per-config-entry topology cache. PlantCapabilities is persisted as
 # `to_dict()` directly (no envelope) following HA Core's Store convention —
@@ -608,6 +609,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Re-point any entities under renamed unique_ids before the platforms create
     # them, so the existing entity (and its history) is reused rather than orphaned.
     _migrate_unique_ids(hass, entry)
+
+    # Battery Discharge This Year was retired entirely (#275) — static on AIO,
+    # 0 on inverters, unavailable on EMS, so no signal on any hardware. Clear the
+    # orphaned row an upgraded entry would otherwise keep as a dead entity.
+    _remove_retired_battery_discharge_year(hass, coordinator.data.inverter_serial_number)
 
     # On an EMS plant the 0x11 device is a controller, not an inverter (#201). An
     # upgraded entry still carries the inverter sensors/controls an earlier version
