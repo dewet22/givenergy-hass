@@ -1040,19 +1040,6 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_fn=lambda inv: inv.e_inverter_in_total,
     ),
-    GivEnergyInverterSensorDescription(
-        key="e_discharge_year",
-        name="Battery Discharge This Year",
-        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        value_fn=lambda inv: inv.e_discharge_year,
-        # AIO reports a static, meaningless figure here (not None), so skip_if_none
-        # never caught it — gate on AIO topology instead (#95). skip_if_none still
-        # drops it on any non-AIO model where the register is genuinely absent.
-        skip_if_aio=True,
-        skip_if_none=True,
-    ),
     # --- Lifetime battery energy totals (routed per-model in givenergy-modbus
     # #76; return None on models with no known total register — e.g. AC-coupled
     # — so they're skipped there rather than shown blank). These replace the

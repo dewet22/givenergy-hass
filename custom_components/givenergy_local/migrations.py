@@ -246,6 +246,25 @@ def _reconcile_aio_house_consumption(hass: HomeAssistant, serial: str) -> None:
         registry.async_remove(entity_id)
 
 
+def _remove_retired_battery_discharge_year(hass: HomeAssistant, serial: str) -> None:
+    """Remove the retired Battery Discharge This Year sensor (#275).
+
+    Introduced: v1.4.0 (2026-07-09). Removal candidate: when upgrades from
+    pre-v1.4.0 installs are presumed extinct.
+
+    `e_discharge_year` was dropped entirely — it read a static meaningless value
+    on AIO, a flat 0 on inverters, and was unavailable on EMS, so it carried no
+    signal on any hardware. The description is gone; this clears the orphaned
+    registry row an upgraded entry would otherwise keep as a dead, unavailable
+    entity.
+    """
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{serial}_e_discharge_year")
+    if entity_id is not None:
+        _LOGGER.info("Removing %s: Battery Discharge This Year retired (#275)", entity_id)
+        registry.async_remove(entity_id)
+
+
 # The PV Generation → Inverter Output rename on Model.AC / ALL_IN_ONE, plus the
 # derived rows that lose their inputs there. Values: (old_key, new_key) pairs
 # share the entity_id slug shapes (pv_generation_x → inverter_output_x).

@@ -141,7 +141,6 @@ def mock_inverter() -> MagicMock:
     # Additional energy totals
     inv.e_inverter_export_total = 2105.7
     inv.e_inverter_in_total = 312.4
-    inv.e_discharge_year = 421.8
     # EPS / generation
     inv.p_backup = 0
     inv.p_combined_generation = 2500

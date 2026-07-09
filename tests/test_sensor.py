@@ -137,7 +137,6 @@ def test_aio_inapplicable_inverter_sensors_skip_if_none():
         "num_mppt",
         "e_inverter_export_total",
         "inverter_errors",
-        "e_discharge_year",
         "e_solar_diverter",  # already had it — guard against regression
     ):
         assert _inverter_desc(key).skip_if_none is True, key
@@ -148,13 +147,13 @@ def test_aio_inapplicable_inverter_sensors_skip_if_none():
 
 
 def test_aio_inapplicable_inverter_sensors_gated_on_aio():
-    """MPPT Count, Solar Diverter and Battery Discharge This Year read a meaningless
-    value (0, 0.0, a static figure) — not None — on an AIO, so skip_if_none never
-    dropped them. They're gated on AIO topology instead (#95). House Consumption
-    Today joins them: its PV/grid inputs are under identity investigation on AIO
-    (modbus#293) and the unit reports no raw consumption figure."""
+    """MPPT Count and Solar Diverter read a meaningless value (0, 0.0) — not None —
+    on an AIO, so skip_if_none never dropped them. They're gated on AIO topology
+    instead (#95). House Consumption Today joins them: its PV/grid inputs are under
+    identity investigation on AIO (modbus#293) and the unit reports no raw
+    consumption figure."""
     inv = MagicMock()  # every attr returns a truthy mock, i.e. "not None"
-    aio_gated = {"num_mppt", "e_solar_diverter", "e_discharge_year", "e_consumption_today"}
+    aio_gated = {"num_mppt", "e_solar_diverter", "e_consumption_today"}
     flagged = {d.key for d in INVERTER_SENSORS if d.skip_if_aio}
     assert flagged == aio_gated
     for key in aio_gated:
@@ -1305,7 +1304,7 @@ async def test_aio_model_suppresses_pv_sensors_even_with_empty_modules(hass, hv_
     House Consumption Today joins the gated set: its PV/grid inputs are under identity
     investigation on AIO (modbus#293) and there is no raw backing figure."""
     registry = er.async_get(hass)
-    for key in ("num_mppt", "e_solar_diverter", "e_discharge_year", "e_consumption_today"):
+    for key in ("num_mppt", "e_solar_diverter", "e_consumption_today"):
         assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is None, key
     # Sanity: the inverter-sensor loop did run (only the PV/solar fields were gated).
     assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_system_mode") is not None

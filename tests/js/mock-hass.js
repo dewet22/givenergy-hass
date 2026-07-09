@@ -13,7 +13,7 @@ const INVERTER_KEYS = [
   // energy totals
   "e_pv_total", "e_battery_throughput", "e_battery_charge_total",
   "e_battery_discharge_total", "e_grid_out_total", "e_grid_in_total",
-  "e_pv_generation_total", "e_inverter_in_total", "e_discharge_year",
+  "e_pv_generation_total", "e_inverter_in_total",
   "e_solar_diverter",
   // controls
   "battery_power_mode", "enable_rtc", "active_power_rate", "battery_calibration_stage",

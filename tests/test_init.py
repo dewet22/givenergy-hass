@@ -1032,6 +1032,26 @@ async def test_upgrade_removes_dc_limit_rows_on_ac_coupled(
     assert _present("battery_discharge_limit_ac")
 
 
+async def test_upgrade_removes_retired_battery_discharge_year(
+    hass, mock_client, mock_plant, mock_inverter, mock_config_entry
+):
+    """#275: Battery Discharge This Year was retired entirely (no signal on any
+    hardware — static on AIO, 0 on inverters, unavailable on EMS). The description
+    is gone; an upgraded entry's orphaned row is swept pre-platform rather than
+    left as a dead, unavailable entity."""
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_e_discharge_year", config_entry=mock_config_entry
+    )
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_discharge_year") is not None
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_e_discharge_year") is None
+
+
 async def test_dc_limit_rows_retained_on_hybrid(
     hass, mock_client, mock_plant, mock_inverter, mock_config_entry
 ):
