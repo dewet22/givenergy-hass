@@ -672,3 +672,89 @@ async def test_load_energy_entities_created_on_ems(hass, ems_setup):
     assert today.state == "0.0"
     assert total.attributes["unit_of_measurement"] == "kWh"
     assert total.attributes["state_class"] == "total_increasing"
+
+
+# ---------------------------------------------------------------------------
+# EMS battery charge/discharge energy (#275) — sign-split integrals of
+# total_battery_power. The shared integral machinery (gap-cap, restore, midnight
+# reset, missing-sample boundary) is covered by the load-energy tests above; these
+# focus on the new sign split and entity creation.
+# ---------------------------------------------------------------------------
+
+
+def _battery_energy_entity(mock_plant, mock_ems, *, charge: bool, daily: bool = False):
+    """A battery charge- or discharge-energy integrator against a mocked coordinator."""
+    from custom_components.givenergy_local.sensor import (
+        _ENERGY_CHARGE,
+        _ENERGY_DISCHARGE,
+        EMS_BATTERY_CHARGE_ENERGY_TODAY,
+        EMS_BATTERY_CHARGE_ENERGY_TOTAL,
+        EMS_BATTERY_DISCHARGE_ENERGY_TODAY,
+        EMS_BATTERY_DISCHARGE_ENERGY_TOTAL,
+        GivEnergyEmsLoadEnergySensor,
+    )
+
+    mock_plant.ems = mock_ems
+    mock_plant.inverter.model = Model.EMS
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.last_successful_refresh = None
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    if charge:
+        desc = EMS_BATTERY_CHARGE_ENERGY_TODAY if daily else EMS_BATTERY_CHARGE_ENERGY_TOTAL
+        direction = _ENERGY_CHARGE
+    else:
+        desc = EMS_BATTERY_DISCHARGE_ENERGY_TODAY if daily else EMS_BATTERY_DISCHARGE_ENERGY_TOTAL
+        direction = _ENERGY_DISCHARGE
+    entity = GivEnergyEmsLoadEnergySensor(
+        coordinator,
+        desc,
+        daily_reset=daily,
+        source_field="total_battery_power",
+        direction=direction,
+    )
+    return entity, coordinator
+
+
+def test_battery_discharge_integrates_positive_power(mock_plant, mock_ems, freezer):
+    """Positive total_battery_power = discharge: the discharge integral accumulates
+    while the charge integral, seeing the off-sign, stays at zero."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    mock_ems.total_battery_power = 1800  # discharging at 1800 W → 0.015 kWh / 30 s
+    discharge, dcoord = _battery_energy_entity(mock_plant, mock_ems, charge=False)
+    charge, ccoord = _battery_energy_entity(mock_plant, mock_ems, charge=True)
+    assert _refresh(discharge, dcoord) == 0.0  # seed
+    assert _refresh(charge, ccoord) == 0.0  # seed
+    freezer.tick(30)
+    assert _refresh(discharge, dcoord) == pytest.approx(0.015)
+    assert _refresh(charge, ccoord) == 0.0
+
+
+def test_battery_charge_integrates_negative_power(mock_plant, mock_ems, freezer):
+    """Negative total_battery_power = charge: the charge integral accumulates the
+    magnitude while the discharge integral stays at zero."""
+    freezer.move_to("2026-06-12 12:00:00+00:00")
+    mock_ems.total_battery_power = -1800  # charging at 1800 W
+    charge, ccoord = _battery_energy_entity(mock_plant, mock_ems, charge=True)
+    discharge, dcoord = _battery_energy_entity(mock_plant, mock_ems, charge=False)
+    assert _refresh(charge, ccoord) == 0.0  # seed
+    assert _refresh(discharge, dcoord) == 0.0  # seed
+    freezer.tick(30)
+    assert _refresh(charge, ccoord) == pytest.approx(0.015)
+    assert _refresh(discharge, dcoord) == 0.0
+
+
+async def test_battery_energy_entities_created_on_ems(hass, ems_setup):
+    """All four battery charge/discharge integrals surface on the controller device."""
+    for key in (
+        "ems_battery_charge_energy_total",
+        "ems_battery_charge_energy_today",
+        "ems_battery_discharge_energy_total",
+        "ems_battery_discharge_energy_today",
+    ):
+        state = hass.states.get(_entity_id(hass, "sensor", f"SA1234G123_{key}"))
+        assert state is not None, key
+        assert state.state == "0.0"
+        assert state.attributes["unit_of_measurement"] == "kWh"
+        assert state.attributes["state_class"] == "total_increasing"

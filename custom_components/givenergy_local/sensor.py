@@ -1882,6 +1882,42 @@ EMS_LOAD_ENERGY_TODAY = GivEnergyEmsSensorDescription(
     suggested_display_precision=2,
 )
 
+# Battery charge/discharge energy (#275). Sign-split integrals of
+# total_battery_power (IR2090), for the Energy dashboard's battery section. Today
+# resets at midnight; Total is lifetime — HA buckets either into periods.
+EMS_BATTERY_CHARGE_ENERGY_TOTAL = GivEnergyEmsSensorDescription(
+    key="ems_battery_charge_energy_total",
+    name="EMS Battery Charge Total",
+    native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+    device_class=SensorDeviceClass.ENERGY,
+    state_class=SensorStateClass.TOTAL_INCREASING,
+    suggested_display_precision=2,
+)
+EMS_BATTERY_CHARGE_ENERGY_TODAY = GivEnergyEmsSensorDescription(
+    key="ems_battery_charge_energy_today",
+    name="EMS Battery Charge Today",
+    native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+    device_class=SensorDeviceClass.ENERGY,
+    state_class=SensorStateClass.TOTAL_INCREASING,
+    suggested_display_precision=2,
+)
+EMS_BATTERY_DISCHARGE_ENERGY_TOTAL = GivEnergyEmsSensorDescription(
+    key="ems_battery_discharge_energy_total",
+    name="EMS Battery Discharge Total",
+    native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+    device_class=SensorDeviceClass.ENERGY,
+    state_class=SensorStateClass.TOTAL_INCREASING,
+    suggested_display_precision=2,
+)
+EMS_BATTERY_DISCHARGE_ENERGY_TODAY = GivEnergyEmsSensorDescription(
+    key="ems_battery_discharge_energy_today",
+    name="EMS Battery Discharge Today",
+    native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+    device_class=SensorDeviceClass.ENERGY,
+    state_class=SensorStateClass.TOTAL_INCREASING,
+    suggested_display_precision=2,
+)
+
 
 def _gateway_aio_energy(
     slot: int, direction: str, period: str
@@ -2484,6 +2520,22 @@ async def async_setup_entry(
         entities.append(
             GivEnergyEmsLoadEnergySensor(coordinator, EMS_LOAD_ENERGY_TODAY, daily_reset=True)
         )
+        # Battery charge/discharge energy: sign-split integrals of total_battery_power (#275).
+        for description, direction, daily_reset in (
+            (EMS_BATTERY_CHARGE_ENERGY_TOTAL, _ENERGY_CHARGE, False),
+            (EMS_BATTERY_CHARGE_ENERGY_TODAY, _ENERGY_CHARGE, True),
+            (EMS_BATTERY_DISCHARGE_ENERGY_TOTAL, _ENERGY_DISCHARGE, False),
+            (EMS_BATTERY_DISCHARGE_ENERGY_TODAY, _ENERGY_DISCHARGE, True),
+        ):
+            entities.append(
+                GivEnergyEmsLoadEnergySensor(
+                    coordinator,
+                    description,
+                    daily_reset=daily_reset,
+                    source_field="total_battery_power",
+                    direction=direction,
+                )
+            )
 
     for battery_index, battery in enumerate(coordinator.data.batteries):
         # Skip a capabilities-listed-but-unreachable pack: modbus 2.11.x yields an
@@ -3369,16 +3421,26 @@ _LOAD_ENERGY_GAP_SCANS = 3
 # Fallback cap when the coordinator carries no update interval (never in practice).
 _LOAD_ENERGY_GAP_FLOOR = 300.0
 
+# Sign split for the battery-power integral. total_battery_power (IR2090):
+# positive = discharge, negative = charge — confirmed against modbus's golden EMS
+# capture (the busbar power-balance closes to the watt only under this sign, and
+# IR2090 equals the sum of the managed inverters' battery power, inheriting their
+# house convention). Kept as the single point of truth for the split.
+_ENERGY_CHARGE = "charge"
+_ENERGY_DISCHARGE = "discharge"
+
 
 class GivEnergyEmsLoadEnergySensor(GivEnergyEmsSensor, RestoreEntity):
-    """Client-side integral of EMS calculated load power (#248).
+    """Client-side integral of an EMS power signal (#248, #275).
 
-    The EMS rollup carries no energy counters and the site PV is only visible as
-    meter power samples, so on an EMS plant house-load energy exists solely as a
-    live power signal — there is nothing register-backed to read or balance
-    against (settled empirically against real EMS captures). This integrates
-    calc_load_power (IR2086) at poll cadence; measured_load_power reads a
-    constant zero on real sites and is deliberately not a fallback.
+    The EMS rollup carries no energy counters, so on an EMS plant these energies
+    exist solely as live power signals — nothing register-backed to read or
+    balance against (settled empirically against real EMS captures). Integrates
+    ``source_field`` at poll cadence:
+    - calc_load_power (IR2086) for house-load energy (measured_load_power reads a
+      constant zero on real sites and is deliberately not a fallback);
+    - total_battery_power (IR2090) for battery charge/discharge energy, sign-split
+      by ``direction`` so one accumulator collects only its half of the signal.
 
     An estimate, not a meter: every failure mode undercounts, never overcounts.
     The accumulator restores across HA restarts, and any sampling gap (restart,
@@ -3391,9 +3453,13 @@ class GivEnergyEmsLoadEnergySensor(GivEnergyEmsSensor, RestoreEntity):
         description: GivEnergyEmsSensorDescription,
         *,
         daily_reset: bool,
+        source_field: str = "calc_load_power",
+        direction: str | None = None,
     ) -> None:
         super().__init__(coordinator, description)
         self._daily_reset = daily_reset
+        self._source_field = source_field
+        self._direction = direction
         self._total_kwh = 0.0
         self._day: date | None = None
         self._last_sample_at: datetime | None = None
@@ -3432,16 +3498,17 @@ class GivEnergyEmsLoadEnergySensor(GivEnergyEmsSensor, RestoreEntity):
         if mark is None or mark == self._last_mark:
             return
         ems = self.coordinator.data.ems
-        power = getattr(ems, "calc_load_power", None) if ems is not None else None
+        raw = getattr(ems, self._source_field, None) if ems is not None else None
         now = dt_util.utcnow()
-        if power is None:
-            # A successful refresh without a load sample (rollup bank missing or
+        if raw is None:
+            # A successful refresh without a power sample (rollup bank missing or
             # partial) consumes the sample boundary: advance the clock and mark
             # without adding energy, so a later valid sample can't bridge the
             # unknown interval at its own power — undercount, never overcount.
             self._last_sample_at = now
             self._last_mark = mark
             return
+        power = self._directional_power(raw)
         if self._daily_reset:
             today = dt_util.now().date()
             if self._day != today:
@@ -3455,6 +3522,20 @@ class GivEnergyEmsLoadEnergySensor(GivEnergyEmsSensor, RestoreEntity):
                 self._total_kwh += power * min(elapsed, self._gap_cap) / 3_600_000
         self._last_sample_at = now
         self._last_mark = mark
+
+    def _directional_power(self, raw: float) -> float:
+        """Non-negative power for this sensor's half of the signal.
+
+        Load energy (direction=None) integrates the raw signal as-is. The battery
+        directions clamp to their own sign — positive=discharge, negative=charge —
+        so the off-sign periods contribute a zero slice rather than the other
+        direction's energy.
+        """
+        if self._direction == _ENERGY_CHARGE:
+            return max(-raw, 0.0)
+        if self._direction == _ENERGY_DISCHARGE:
+            return max(raw, 0.0)
+        return raw
 
     @property
     def native_value(self) -> float | None:

@@ -364,13 +364,14 @@ All-in-One systems expose each removable battery module separately, so on AIO ha
 
 ### EMS controller device
 
-On an EMS plant the controller device carries plant-level aggregates the inverter registers don't: managed-inverter count, calculated/measured load power, grid meter power, total battery power and remaining battery energy. Two derived energy sensors build on the load aggregate:
+On an EMS plant the controller device carries plant-level aggregates the inverter registers don't: managed-inverter count, calculated/measured load power, grid meter power, total battery power and remaining battery energy. Since the EMS rollup carries no energy counters, several energy sensors are derived by integrating those live power signals client-side:
 
 | Entity | Unit | Notes |
 |---|---|---|
 | EMS Calculated Load Energy Today / Total | kWh | Integrated client-side from *EMS Calculated Load Power* — the EMS rollup carries no energy counters, so no register-backed figure exists. An estimate, not a meter reading: it undercounts across restarts and outages (a sampling gap contributes at most one capped slice), though the accumulated value does survive Home Assistant restarts. |
+| EMS Battery Charge / Discharge Today / Total | kWh | Integrated client-side from *EMS Total Battery Power*, split by sign into charging and discharging energy — the pair the Home Assistant Energy dashboard's battery section expects. Same estimate caveats as the load energy above: undercounts across gaps, survives restarts. |
 
-These replace the Integral + Utility Meter helpers a Predbat EMS setup previously had to hand-create ([#248](https://github.com/dewet22/givenergy-hass/issues/248)).
+These replace the Integral + Utility Meter helpers a Predbat EMS setup previously had to hand-create ([#248](https://github.com/dewet22/givenergy-hass/issues/248), [#275](https://github.com/dewet22/givenergy-hass/issues/275)).
 
 ### Gateway device
 
