@@ -2409,6 +2409,36 @@ COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
         attributes_fn=_comms_counter_attributes("cold_start_held_by_device"),
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
+    # Reconnect health (#280). Distinct from the refresh-failure counters above:
+    # these track the connection layer — how often it re-establishes, how often the
+    # dongle hangs (up on TCP but not answering its identity read), and how often a
+    # sustained hang trips the quiet-window backoff.
+    GivEnergyCoordinatorSensorDescription(
+        key="reconnects",
+        name="Reconnects",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda coord: coord.reconnect_count,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyCoordinatorSensorDescription(
+        key="dongle_hangs",
+        name="Dongle Hangs",
+        # A reconnect where the dongle accepted the TCP connection but failed the
+        # liveness probe — the Modbus-level hang some marginal dongles fall into.
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda coord: coord.dongle_hangs,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    GivEnergyCoordinatorSensorDescription(
+        key="reconnect_backoffs",
+        name="Reconnect Backoffs",
+        # Distinct hang episodes bad enough (2+ consecutive) to trip the quiet-
+        # window backoff, where we stop reconnecting for a while to let the dongle
+        # recover. A climbing rate flags a dongle in real trouble.
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda coord: coord.reconnect_backoffs,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
 )
 
 

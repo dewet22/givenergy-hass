@@ -385,6 +385,73 @@ async def test_first_connect_skips_liveness_probe(hass, mock_plant):
         client.detect.assert_awaited_once()  # full detect ran
 
 
+async def test_two_probe_failures_arm_backoff_and_skip_reconnect(hass, mock_plant):
+    """Two consecutive hung reconnects arm the quiet-window backoff (#280): the
+    next tick must NOT attempt a reconnect at all — the socket stays released so
+    the dongle gets an uninterrupted breather — and the counters reflect it."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+    coordinator.data = mock_plant  # reconnect path
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.probe_alive = AsyncMock(return_value=False)  # hung dongle
+        mock_cls.return_value = client
+
+        # First hung reconnect: counted, no backoff yet.
+        await coordinator._async_update_data()
+        assert coordinator.consecutive_probe_failures == 1
+        assert coordinator.dongle_hangs == 1
+        assert coordinator.reconnect_backoffs == 0
+
+        # Second hung reconnect: arms the backoff.
+        await coordinator._async_update_data()
+        assert coordinator.consecutive_probe_failures == 2
+        assert coordinator.dongle_hangs == 2
+        assert coordinator.reconnect_backoffs == 1
+
+        # Third tick falls inside the backoff window: no reconnect attempted at all.
+        mock_cls.reset_mock()
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+        mock_cls.assert_not_called()  # never touched the dongle
+        assert coordinator.dongle_hangs == 2  # unchanged: we didn't probe
+
+
+async def test_backoff_clears_and_counts_reconnect_on_recovery(hass, mock_plant):
+    """Once the backoff window passes and the dongle answers again, the full detect
+    runs, the probe-failure state clears, and the successful reconnect is counted;
+    the historical hang/backoff totals are left intact."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+    coordinator.data = mock_plant
+    # Simulate mid-outage state with the backoff window already expired.
+    coordinator.consecutive_probe_failures = 2
+    coordinator.dongle_hangs = 2
+    coordinator.reconnect_backoffs = 1
+    coordinator._reconnect_backoff_until = 0.0
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.probe_alive = AsyncMock(return_value=True)  # dongle answers now
+        client.load_config = AsyncMock(return_value=mock_plant)
+        client.refresh = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+
+        result = await coordinator._async_update_data()
+
+        assert result is mock_plant
+        client.probe_alive.assert_awaited_once()
+        client.detect.assert_awaited_once()  # robust detect on recovery
+        assert coordinator.consecutive_probe_failures == 0  # cleared
+        assert coordinator._reconnect_backoff_until == 0.0
+        assert coordinator.reconnect_count == 1  # counted the successful reconnect
+        assert coordinator.dongle_hangs == 2  # historical total preserved
+        assert coordinator.reconnect_backoffs == 1  # historical total preserved
+
+
 async def test_cancelled_connect_discards_client(hass, mock_plant):
     """A cancellation during _connect() (HA cancelling the attempt) must still
     discard the half-initialised client. CancelledError is a BaseException, not
