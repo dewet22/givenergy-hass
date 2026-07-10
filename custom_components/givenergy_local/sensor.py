@@ -1558,10 +1558,11 @@ AIO_MODULE_CELL_SENSORS: tuple[GivEnergyAioModuleSensorDescription, ...] = (
 
 # All-in-One / HV battery stack (BCU) sensors (#95). The library decodes a
 # cluster-level Battery Control Unit per HV stack (device 0x70+offset); these
-# surface its pack-level metrics, which were previously unavailable — including
-# the correct pack voltage (the inverter-level `v_battery` is a sub-100V field
-# that reads Unknown on an HV stack). Power/energy go on the main device page;
-# the rest are DIAGNOSTIC, matching the inverter/battery analogues.
+# surface its pack-level metrics. This BCU-level Battery Voltage sits on the HV
+# stack device, distinct from the inverter-level `v_battery` on the main device:
+# both now read a real HV voltage (givenergy-modbus 2.11.2 / #395 widened the
+# inverter-level IR50 bound, which previously clamped HV to Unknown). Power/energy
+# go on the main device page; the rest are DIAGNOSTIC, matching the analogues.
 HV_STACK_SENSORS: tuple[GivEnergyHvStackSensorDescription, ...] = (
     GivEnergyHvStackSensorDescription(
         key="battery_voltage",
@@ -2485,6 +2486,13 @@ async def async_setup_entry(
         )
 
     for battery_index, battery in enumerate(coordinator.data.batteries):
+        # Skip a capabilities-listed-but-unreachable pack: modbus 2.11.x yields an
+        # all-None placeholder (is_valid()==False, no serial) at its index rather
+        # than dropping it, to keep siblings index-aligned (#213). Creating a
+        # device for it would key on a None serial; the index still maps correctly
+        # into `batteries` for the packs we do surface. Mirrors the AIO/BMU loops.
+        if not battery.is_valid():
+            continue
         entities.extend(
             GivEnergyBatterySensor(coordinator, description, battery_index)
             for description in BATTERY_SENSORS
@@ -2967,6 +2975,13 @@ class GivEnergyBatterySensor(
         """
         if not super().available:
             return False
+        # A pack that dropped after setup surfaces as an all-None placeholder at
+        # its index (#213, modbus 2.11.x) — go unavailable rather than show its
+        # last-good/None values frozen. Only an in-range placeholder; an
+        # out-of-range index keeps default availability via the bounds check below.
+        batteries = self.coordinator.data.batteries
+        if self._battery_index < len(batteries) and not batteries[self._battery_index].is_valid():
+            return False
         if not self._source_ir_registers:
             return True
         capabilities = self.coordinator.data.capabilities
@@ -2977,7 +2992,7 @@ class GivEnergyBatterySensor(
     @property
     def native_value(self) -> Any:
         batteries = self.coordinator.data.batteries
-        if self._battery_index >= len(batteries):
+        if self._battery_index >= len(batteries) or not batteries[self._battery_index].is_valid():
             return None
         return self.entity_description.value_fn(batteries[self._battery_index])
 

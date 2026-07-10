@@ -1823,6 +1823,49 @@ def test_battery_sensor_available_when_index_out_of_range(mock_plant):
     mock_plant.register_age.assert_not_called()
 
 
+def test_battery_sensor_unavailable_when_pack_becomes_placeholder(mock_plant):
+    """A pack that drops after setup surfaces as an all-None placeholder at its
+    index (#213, modbus 2.11.x). The sensor goes unavailable and reads None rather
+    than presenting the placeholder's blank values as if live."""
+    from datetime import timedelta
+
+    from custom_components.givenergy_local.sensor import GivEnergyBatterySensor
+
+    coordinator = MagicMock()
+    coordinator.last_update_success = True
+    coordinator.update_interval = timedelta(seconds=30)
+    coordinator.data = mock_plant
+    entity = GivEnergyBatterySensor(coordinator, _battery_desc("soc"), 0)
+
+    # Pack 0 drops: the library now serves an all-None placeholder at its index.
+    placeholder = MagicMock()
+    placeholder.is_valid.return_value = False
+    mock_plant.batteries = [placeholder]
+
+    assert entity.available is False
+    assert entity.native_value is None
+
+
+async def test_battery_setup_skips_placeholder_pack(hass, mock_client, mock_config_entry):
+    """A capabilities-listed-but-unreachable pack (#213, modbus 2.11.x) arrives as an
+    all-None placeholder (is_valid()==False, no serial). Setup must skip it rather
+    than build a phantom device keyed on a None serial; the real pack is unaffected."""
+    placeholder = MagicMock()
+    placeholder.is_valid.return_value = False
+    placeholder.serial_number = None
+    plant = mock_client.plant
+    plant.batteries = [*plant.batteries, placeholder]
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    registry = er.async_get(hass)
+    # Real pack surfaced; no phantom entity created under a None serial.
+    assert registry.async_get_entity_id("sensor", DOMAIN, "BT1234A001_soc") is not None
+    assert registry.async_get_entity_id("sensor", DOMAIN, "None_soc") is None
+
+
 def _aio_desc(key: str):
     return next(d for d in AIO_MODULE_CELL_SENSORS if d.key == key)
 
