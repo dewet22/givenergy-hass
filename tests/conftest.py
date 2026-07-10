@@ -236,6 +236,7 @@ def mock_client(mock_plant) -> AsyncMock:
             "load_config",
             "connect",
             "detect",
+            "probe_alive",
             "close",
             "one_shot_command",
             "capture_frames",
@@ -247,6 +248,9 @@ def mock_client(mock_plant) -> AsyncMock:
     client.load_config = AsyncMock(return_value=mock_plant)
     client.connect = AsyncMock()
     client.detect = AsyncMock()
+    # Reconnect liveness gate (givenergy-modbus 2.12.0): default alive so a
+    # reconnect proceeds to detect; the probe-failure path overrides this.
+    client.probe_alive = AsyncMock(return_value=True)
     client.close = AsyncMock()
     client.one_shot_command = AsyncMock()
     with (

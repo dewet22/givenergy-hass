@@ -316,6 +316,75 @@ async def test_detect_timeout_on_reconnect_discards_client(hass, mock_plant):
         assert coordinator.consecutive_failures == 0
 
 
+async def test_reconnect_probe_alive_false_serves_last_known(hass, mock_plant):
+    """On a reconnect a hung dongle fails the liveness probe: probe_alive closes
+    the socket, so we serve last-known and reprobe next tick WITHOUT running the
+    heavy detect sweep against a dead connection (#280)."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+    coordinator.data = mock_plant  # reconnect path: we've polled before
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.probe_alive = AsyncMock(return_value=False)  # hung dongle
+        mock_cls.return_value = client
+
+        result = await coordinator._async_update_data()
+
+        assert result is mock_plant  # last-known served this tick
+        client.probe_alive.assert_awaited_once()
+        client.detect.assert_not_called()  # never ran the sweep on a dead socket
+        assert coordinator._client is None  # torn down; next tick reprobes
+        assert coordinator.consecutive_failures == 1
+
+
+async def test_reconnect_probe_alive_true_runs_detect(hass, mock_plant):
+    """When the reconnect probe reports alive, the socket stays open and the full
+    (robust) detect runs on it, and the poll proceeds normally."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+    coordinator.data = mock_plant  # reconnect path
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.probe_alive = AsyncMock(return_value=True)
+        client.load_config = AsyncMock(return_value=mock_plant)
+        client.refresh = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+
+        result = await coordinator._async_update_data()
+
+        assert result is mock_plant
+        client.probe_alive.assert_awaited_once()
+        client.detect.assert_awaited_once()  # robust detect ran on the live socket
+        assert coordinator._client is client
+        assert coordinator.consecutive_failures == 0
+
+
+async def test_first_connect_skips_liveness_probe(hass, mock_plant):
+    """The first-ever setup has no prior data, so it runs the full detect to
+    establish topology rather than gating behind the reconnect liveness probe."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30)
+    # coordinator.data is None — no successful poll yet.
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.probe_alive = AsyncMock(return_value=False)  # would abort IF consulted
+        client.load_config = AsyncMock(return_value=mock_plant)
+        client.refresh = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+
+        result = await coordinator._async_update_data()
+
+        assert result is mock_plant
+        client.probe_alive.assert_not_called()  # first connect: no gate
+        client.detect.assert_awaited_once()  # full detect ran
+
+
 async def test_cancelled_connect_discards_client(hass, mock_plant):
     """A cancellation during _connect() (HA cancelling the attempt) must still
     discard the half-initialised client. CancelledError is a BaseException, not
