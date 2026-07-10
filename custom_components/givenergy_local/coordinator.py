@@ -86,6 +86,13 @@ def _summarize_failures(failures: Iterable[ReadFailure]) -> str:
 PROBE_TIMEOUT_SECONDS = 1.0
 PROBE_RETRIES = 3
 
+# On a reconnect we gate the heavy detect sweep behind a cheap HR0 liveness probe
+# (givenergy-modbus 2.12.0 `probe_alive`). retries=1 tolerates a single dropped
+# identity frame on an otherwise-healthy reconnect (fails in ~4s on a genuine
+# hang vs ~2s at 0) — the lossy-dongle case (#280) is exactly where a healthy
+# reconnect can still drop a stray frame, so we don't want to bail on the first.
+RECONNECT_PROBE_RETRIES = 1
+
 # When detect() reports a DEVICE LOSS (a previously-known battery/meter/stack
 # stopped answering), re-probe a few times before believing it — a slow BMS
 # often answers on the next sweep. Kept small: this blocks _connect(), which
@@ -516,6 +523,18 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self._comms_last_seen.clear()
         try:
             await self._client.connect()
+            # On a reconnect (we've polled before), gate the heavy detect sweep
+            # behind a cheap HR0 liveness probe (#280). A hung dongle accepts the
+            # TCP connect but refuses its identity read; probe_alive fails fast and
+            # closes the socket, so we serve last-known and reprobe next tick rather
+            # than spending the full detect timeout hammering a dead connection.
+            # On success the socket stays open and detect runs robustly on it. The
+            # first-ever setup (no data yet) skips the probe and runs the full
+            # detect to establish topology from scratch.
+            if self.data is not None and not await self._client.probe_alive(
+                retries=RECONNECT_PROBE_RETRIES
+            ):
+                raise TimeoutError("inverter did not answer the reconnect liveness probe")
             topology_confirmed = True
             try:
                 # The library's battery sweep probes each pack slot (0x33-0x37)
