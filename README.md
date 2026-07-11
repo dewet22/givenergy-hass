@@ -147,7 +147,7 @@ To change any of these later, open the integration's **⋮** menu in **Settings 
 
 Both this integration and other local polling solutions (GivTCP, the GivEnergy app, custom scripts) can run in active mode at the same time without issue. The inverter handles concurrent Modbus clients reliably — earlier reports of polling conflicts were largely a consequence of retry and error-recovery behaviour in the older shared library, not an inverter limitation. Running multiple clients in parallel has been solid in practice, even at faster-than-default poll intervals.
 
-> **Note:** earlier versions offered a "passive mode" (listen only, relying on another client's polling to keep values fresh). It was removed in v1.3.37: concurrent active polling is well within what the hardware handles, while passive mode's freshness expectations could never be met by the cloud's ~5-minute polling cadence, producing continuous spurious refresh failures (#253). An entry that still has the old setting stored simply polls actively.
+> **Note:** an optional **passive (listen-only) mode** is available under *Advanced features*. Rather than polling, it reads the register cache that another active client (for example GivTCP) keeps fresh on the same dongle — halving the polling load, which is worth having on a marginal dongle that struggles under two active clients. It was briefly removed in v1.3.37 because, with only the GivEnergy cloud's ~5-minute polling to listen to, its freshness expectations couldn't be met; it's back because that reasoning doesn't apply when a local client is actively polling. It needs another client actively polling the same inverter — on its own, values will go stale.
 
 #### GivTCP long-term stats migration
 

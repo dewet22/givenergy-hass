@@ -34,6 +34,8 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_BATTERY_DATA_ONLY,
+    CONF_EXPERIMENTAL,
+    CONF_PASSIVE,
     CONF_RETRIES,
     CONF_SCAN_INTERVAL,
     CONF_TIMEOUT_TOLERANCE,
@@ -549,14 +551,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Resolve opt-in experimental client flags from options into Client(...) kwargs.
     # Empty for the default-off case, so the construction is unchanged.
     experimental_client_kwargs = resolve_experimental_client_kwargs(entry.options)
+    # Passive (listen-only) mode is an Advanced-features opt-in in the same section,
+    # but a coordinator flag rather than a client kwarg, so read it directly (#280).
+    passive = bool(entry.options.get(CONF_EXPERIMENTAL, {}).get(CONF_PASSIVE, False))
 
     coordinator = GivEnergyUpdateCoordinator(
         hass=hass,
         host=entry.data[CONF_HOST],
         port=entry.data[CONF_PORT],
         scan_interval=entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-        # NB: a legacy `passive` key may remain in entry.data — deliberately
-        # ignored since passive mode's removal (#253); all entries poll actively.
+        passive=passive,
         experimental_client_kwargs=experimental_client_kwargs,
         prior_capabilities=prior_capabilities,
         on_topology_changed=_on_topology_changed,

@@ -452,6 +452,35 @@ async def test_backoff_clears_and_counts_reconnect_on_recovery(hass, mock_plant)
         assert coordinator.reconnect_backoffs == 1  # historical total preserved
 
 
+async def test_passive_mode_seeds_on_reconnect_then_reads_cache(hass, mock_plant):
+    """Passive mode seeds actively on (re)connect (load_config + refresh), then on
+    every subsequent tick reads the cached plant WITHOUT issuing its own requests —
+    the cache is kept fresh by a peer client on the shared dongle (#280). No
+    clock-based freshness check here; per-sensor staleness is the stale-IR gate's."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30, passive=True)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.load_config = AsyncMock(return_value=mock_plant)
+        client.refresh = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+
+        # First tick (reconnecting): active seed.
+        assert await coordinator._async_update_data() is mock_plant
+        client.load_config.assert_awaited()
+        client.refresh.assert_awaited()
+
+        # Subsequent ticks (connected): read the cache, never poll, never fail.
+        client.load_config.reset_mock()
+        client.refresh.reset_mock()
+        for _ in range(3):
+            assert await coordinator._async_update_data() is mock_plant
+        client.refresh.assert_not_called()
+        client.load_config.assert_not_called()
+
+
 async def test_cancelled_connect_discards_client(hass, mock_plant):
     """A cancellation during _connect() (HA cancelling the attempt) must still
     discard the half-initialised client. CancelledError is a BaseException, not

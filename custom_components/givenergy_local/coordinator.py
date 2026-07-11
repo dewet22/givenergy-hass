@@ -173,6 +173,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         host: str,
         port: int,
         scan_interval: int,
+        passive: bool = False,
         experimental_client_kwargs: dict[str, Any] | None = None,
         timeout_tolerance: int = 3,
         retries: int = 1,
@@ -189,6 +190,12 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         )
         self.host = host
         self.port = port
+        # Passive (listen-only) mode: seed the plant on (re)connect, then read the
+        # register cache the library keeps fresh from a PEER client's polling on
+        # the shared dongle, instead of polling ourselves (#280/#256). Off by
+        # default; an Advanced-features opt-in for a side-by-side rig (e.g. GivTCP
+        # actively polling a marginal Gateway dongle while we only listen).
+        self.passive = passive
         # Resolved opt-in givenergy-modbus client kwargs (empty by default, so
         # Client(host, port) is unchanged). Splatted at every (re)connect.
         self._experimental_client_kwargs = experimental_client_kwargs or {}
@@ -289,7 +296,11 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                 # down, and a routine unload should not log an ERROR.
                 return self.data
 
-            plant = await self._active_update()
+            plant = (
+                await self._passive_update(reconnecting)
+                if self.passive
+                else await self._active_update()
+            )
 
             # A fully clean poll ends the partial run so the next one warns afresh.
             # The last_partial_failures detail and last_partial_at are deliberately
@@ -526,6 +537,24 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         if full_refresh:
             await self._client.load_config(retries=self.retries)
         return await self._client.refresh(retries=self.retries)
+
+    async def _passive_update(self, reconnecting: bool) -> Plant:
+        """Seed the cache on (re)connect; on subsequent ticks read the cached plant.
+
+        The library's register cache is kept fresh by a peer client's polling on
+        the shared dongle — every observed response is folded in, not just our own
+        (network consumer). So we seed once on connect (load_config + refresh),
+        then read the plant without issuing our own requests. Per-sensor staleness
+        (a frozen cache = no peer polling) is caught by the stale-IR gate
+        (register_age), which is topology-agnostic; a coordinator-level freshness
+        check awaits a first-class library freshness indicator — inverter
+        system_time proved too brittle (spurious on a Gateway).
+        """
+        assert self._client is not None  # _async_update_data ensures this
+        if reconnecting:
+            await self._client.load_config(retries=self.retries)
+            return await self._client.refresh(retries=self.retries)
+        return self._client.plant
 
     # ------------------------------------------------------------------
     # Connection helpers

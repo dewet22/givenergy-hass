@@ -20,6 +20,7 @@ from .const import (
     CONF_BATTERY_DATA_ONLY,
     CONF_EXPERIMENTAL,
     CONF_EXPOSE_PER_CELL,
+    CONF_PASSIVE,
     CONF_SCAN_INTERVAL,
     CONF_WARN_CLOCK_DRIFT,
     DEFAULT_BATTERY_DATA_ONLY,
@@ -194,35 +195,34 @@ class GivEnergyLocalOptionsFlow(OptionsFlowWithReload):
             # False from config-flow creation, surfaced via add_suggested_values.
             vol.Required(CONF_EXPOSE_PER_CELL, default=True): bool,
         }
-        # Surface the collapsed "Experimental features" group only once at least one
-        # flag exists, so the header never appears empty (the registry ships empty).
-        if EXPERIMENTAL_FEATURES:
-            # Seed the section default from the currently-saved values so an
-            # omitted (untouched, collapsed) section round-trips its existing
-            # values: when the frontend omits the section key, the vol.Optional
-            # section default plus the inner defaults restore what was saved.
-            existing_exp: dict[str, Any] = self.config_entry.options.get(CONF_EXPERIMENTAL, {})
-            schema_dict[vol.Optional(CONF_EXPERIMENTAL, default=existing_exp)] = section(
-                vol.Schema(
-                    {
-                        # vol.Optional, NOT vol.Required: a required field inside a
-                        # collapsed section is never initialised in the frontend's
-                        # data model (the inner form isn't rendered until the user
-                        # expands it), so HA's submit-time required-fields check
-                        # fails with "Not all required fields are filled in" and
-                        # blocks saving for any entry that has never opened the
-                        # section (#251). The default still applies server-side, and
-                        # resolve_experimental_client_kwargs reads via
-                        # .get(..., feature.default), so an omitted key is unchanged.
-                        vol.Optional(
-                            feature.conf_key,
-                            default=existing_exp.get(feature.conf_key, feature.default),
-                        ): bool
-                        for feature in EXPERIMENTAL_FEATURES
-                    }
-                ),
-                SectionConfig(collapsed=True),
-            )
+        # The collapsed "Experimental features" group always carries the passive
+        # (listen-only) toggle, plus any registered client-kwarg feature flags.
+        # Seed defaults from the currently-saved values so an omitted (untouched,
+        # collapsed) section round-trips its existing values.
+        #
+        # vol.Optional, NOT vol.Required, throughout: a required field inside a
+        # collapsed section is never initialised in the frontend's data model (the
+        # inner form isn't rendered until the user expands it), so HA's submit-time
+        # required-fields check fails with "Not all required fields are filled in"
+        # and blocks saving for any entry that has never opened the section (#251).
+        # The default applies server-side, so an omitted key is unchanged.
+        existing_exp: dict[str, Any] = self.config_entry.options.get(CONF_EXPERIMENTAL, {})
+        section_schema: dict[Any, Any] = {
+            vol.Optional(CONF_PASSIVE, default=existing_exp.get(CONF_PASSIVE, False)): bool,
+        }
+        section_schema.update(
+            {
+                vol.Optional(
+                    feature.conf_key,
+                    default=existing_exp.get(feature.conf_key, feature.default),
+                ): bool
+                for feature in EXPERIMENTAL_FEATURES
+            }
+        )
+        schema_dict[vol.Optional(CONF_EXPERIMENTAL, default=existing_exp)] = section(
+            vol.Schema(section_schema),
+            SectionConfig(collapsed=True),
+        )
         schema = vol.Schema(schema_dict)
         return self.async_show_form(
             step_id="init",
