@@ -312,6 +312,9 @@ Some energy sensors are model-dependent: on AC-coupled and All-in-One systems th
 | Last Successful Refresh | timestamp | |
 | Consecutive Refresh Failures | — | Resets to 0 on the next good poll |
 | Total Refresh Failures | — | Ever-increasing (resets only on HA restart — long-term stats handle that) |
+| Reconnects | — | Times the connection was re-established after a drop |
+| Dongle Hangs | — | Reconnects where the dongle answered TCP but not its identity read (a Modbus-level hang) |
+| Reconnect Backoffs | — | Sustained hangs where reconnecting was paused to let the dongle recover |
 
 </details>
 
@@ -496,7 +499,7 @@ The daily counters reset at midnight; Home Assistant's recorder detects the rese
 
 ## Troubleshooting
 
-- **Comms health at a glance.** Each device exposes diagnostic counters that surface connection problems without trawling logs: `Consecutive Refresh Failures` (resets to 0 on the next good poll), `Total Refresh Failures`, `Last Successful Refresh`, plus per-cause counters for CRC failures, frame-splice rejections and holds, read retries and cold-start holds. A steady trickle is normal; a sustained climb is worth a look.
+- **Comms health at a glance.** Each device exposes diagnostic counters that surface connection problems without trawling logs: `Consecutive Refresh Failures` (resets to 0 on the next good poll), `Total Refresh Failures`, `Last Successful Refresh`, per-cause counters for CRC failures, frame-splice rejections and holds, read retries and cold-start holds, plus connection-layer counters — `Reconnects`, `Dongle Hangs` (the dongle up on TCP but not answering), and `Reconnect Backoffs`. A steady trickle is normal; a sustained climb is worth a look.
 - **CRC errors are normal — and are how the library knows the bus data is trustworthy.** They're almost always electrical (cable routing near current-carrying conductors, termination, shielding), *not* a symptom of too many clients: the data adapter mediates the downstream Modbus bus no matter how many clients connect. A frame that fails its CRC is simply discarded and re-read on the next tick. The odd one logged at WARNING is the guard doing its job.
 - **Transient connection drops are normal.** TCP-level timeouts and the occasional reset are logged at WARNING and the next scan tick reconnects — the counters above will tell you if something more persistent is going on.
 - **Control values drift back on EMS plants.** With EMS plant mode active, the controller periodically reasserts certain inverter settings (notably *Inverter Max Output Active Power*, HR50) over its own controller-to-inverter link, which this integration cannot observe. Writes succeed and hold briefly, then revert within minutes. That's the EMS doing its job, not a failed write; taking the plant out of EMS plant mode makes manually set values stick ([#52](https://github.com/dewet22/givenergy-hass/issues/52)).

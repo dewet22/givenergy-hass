@@ -93,6 +93,18 @@ PROBE_RETRIES = 3
 # reconnect can still drop a stray frame, so we don't want to bail on the first.
 RECONNECT_PROBE_RETRIES = 1
 
+# After this many CONSECUTIVE failed liveness probes we treat the dongle as hung
+# and step back from reconnecting for a quiet window (#280, Lever 2). Two (not
+# one) so a single missed probe — after retries — doesn't trip it; mirrors the
+# GivTCP "2 missed polls" field result. The window is max(floor, poll interval):
+# the floor guarantees a breather materially longer than the normal cadence even
+# for a 60s-polled Gateway (the case this targets), where the poll interval alone
+# would give no extra quiet. Flat, not exponential — deliberately conservative
+# given the evidence for a specific duration is thin; the Dongle Hangs / Reconnect
+# Backoffs diagnostics let us tune it on real data.
+BACKOFF_AFTER_PROBE_FAILURES = 2
+RECONNECT_BACKOFF_FLOOR = 120.0  # seconds
+
 # When detect() reports a DEVICE LOSS (a previously-known battery/meter/stack
 # stopped answering), re-probe a few times before believing it — a slow BMS
 # often answers on the next sweep. Kept small: this blocks _connect(), which
@@ -196,6 +208,16 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self.last_successful_refresh: datetime | None = None
         self.consecutive_failures: int = 0
         self.total_failures: int = 0
+        # Reconnect-health counters (#280): reconnects = successful re-establishments
+        # after a drop; dongle_hangs = liveness-probe failures (dongle up on TCP but
+        # refusing its identity read); reconnect_backoffs = distinct hang episodes
+        # that tripped the quiet-window backoff. consecutive_probe_failures and
+        # _reconnect_backoff_until drive that backoff (BACKOFF_AFTER_PROBE_FAILURES).
+        self.reconnect_count: int = 0
+        self.dongle_hangs: int = 0
+        self.reconnect_backoffs: int = 0
+        self.consecutive_probe_failures: int = 0
+        self._reconnect_backoff_until: float = 0.0
         # Cumulative count of polls that returned *some* data but had one or
         # more register reads fail (RefreshPartiallySucceeded). Distinct from
         # total_failures (which counts polls that yielded no usable data) so a
@@ -248,6 +270,16 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                 self._loss_redetect_after = loop.time() + LOSS_REDETECT_INTERVAL
             reconnecting = self._client is None or not self._client.connected
             if reconnecting:
+                if (
+                    self.consecutive_probe_failures >= BACKOFF_AFTER_PROBE_FAILURES
+                    and loop.time() < self._reconnect_backoff_until
+                ):
+                    # Dongle hung (#280): hold off reconnecting for a quiet window
+                    # rather than reprobing every tick. Sensors stay unavailable
+                    # (we're past the tolerance already), but the socket stays
+                    # released so the dongle gets an uninterrupted breather — which
+                    # is what a marginal unit needs to recover.
+                    raise UpdateFailed("holding off reconnect for the dongle to recover")
                 await self._connect()
             if self._client is None:
                 # The entry was unloaded while _connect() was resolving topology
@@ -523,18 +555,37 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         self._comms_last_seen.clear()
         try:
             await self._client.connect()
-            # On a reconnect (we've polled before), gate the heavy detect sweep
-            # behind a cheap HR0 liveness probe (#280). A hung dongle accepts the
-            # TCP connect but refuses its identity read; probe_alive fails fast and
-            # closes the socket, so we serve last-known and reprobe next tick rather
-            # than spending the full detect timeout hammering a dead connection.
-            # On success the socket stays open and detect runs robustly on it. The
-            # first-ever setup (no data yet) skips the probe and runs the full
-            # detect to establish topology from scratch.
-            if self.data is not None and not await self._client.probe_alive(
-                retries=RECONNECT_PROBE_RETRIES
-            ):
-                raise TimeoutError("inverter did not answer the reconnect liveness probe")
+            is_reconnect = self.data is not None
+            # On a reconnect, gate the heavy detect sweep behind a cheap HR0
+            # liveness probe (#280). A hung dongle accepts the TCP connect but
+            # refuses its identity read; probe_alive fails fast and closes the
+            # socket, so we serve last-known and reprobe rather than spending the
+            # full detect timeout on a dead connection. On success the socket stays
+            # open and detect runs robustly on it. First-ever setup (no data yet)
+            # skips the probe and runs the full detect to establish topology.
+            if is_reconnect:
+                if not await self._client.probe_alive(retries=RECONNECT_PROBE_RETRIES):
+                    # Dongle hung. Count it, and after two consecutive hangs arm the
+                    # quiet-window backoff (Lever 2): a breather longer than the poll
+                    # cadence is what lets a marginal dongle recover (GivTCP field
+                    # result). probe_alive has already closed the socket.
+                    self.dongle_hangs += 1
+                    self.consecutive_probe_failures += 1
+                    if self.consecutive_probe_failures == BACKOFF_AFTER_PROBE_FAILURES:
+                        self.reconnect_backoffs += 1
+                    if self.consecutive_probe_failures >= BACKOFF_AFTER_PROBE_FAILURES:
+                        interval = (
+                            self.update_interval.total_seconds() if self.update_interval else 0.0
+                        )
+                        self._reconnect_backoff_until = asyncio.get_running_loop().time() + max(
+                            RECONNECT_BACKOFF_FLOOR, interval
+                        )
+                    raise TimeoutError("inverter did not answer the reconnect liveness probe")
+                # Probe answered: the dongle is alive. Clear the hang state now —
+                # even if the detect below transiently fails — so a later hang
+                # episode counts fresh.
+                self.consecutive_probe_failures = 0
+                self._reconnect_backoff_until = 0.0
             topology_confirmed = True
             try:
                 # The library's battery sweep probes each pack slot (0x33-0x37)
@@ -579,6 +630,8 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                         exc_info=True,
                     )
             self._active_tick = 0
+            if is_reconnect:
+                self.reconnect_count += 1
             _LOGGER.info("Connected to inverter at %s:%s", self.host, self.port)
         except BaseException:
             # connect()/detect() failed before capabilities were established (a
