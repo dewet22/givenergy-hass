@@ -2,6 +2,11 @@
 
 This document catalogues GivTCP sensors against their `givenergy_local` equivalents, with the goal of supporting users who want to migrate long-term statistics from GivTCP without losing their Energy dashboard history (see issue #67).
 
+> **Two caveats before you rely on this.**
+>
+> 1. **It's a snapshot of one reference system, not an availability matrix.** The catalogue was built on a single-phase hybrid inverter. Several `givenergy_local` entities are deliberately *model-gated* — for example *House Consumption Today* is suppressed on All-in-One and EMS plants, and on a Gateway plant the whole-house energy figures live on the Gateway device rather than per-inverter. A "🚫 gap" row here means "absent on that reference system", which is not the same as "absent on your hardware". Check the entities your own install actually exposes.
+> 2. **The migration path is being revisited.** The catalogue and the accompanying script were built to preserve GivTCP history faithfully, but GivTCP's own recorded data turns out to be materially corrupted by the same register-splice effect this integration guards against — which hits the daily-rollover counters hardest, exactly where clean history matters most. So the long-term-statistics migration is on the to-do list for a fresh look rather than a finished, trusted path. If you'd like to preserve long-term data — including from a topology other than the single-phase-hybrid reference here — that's something I'm happy to collaborate on; more real-world source data makes for a better eventual approach.
+
 Suffixes shown are after stripping the integration prefix and the inverter/battery serial. For a given inverter with serial `SN`:
 
 - GivTCP: `sensor.givtcp_<sn>_<suffix>` (or `givtcp_<battery_sn>_battery_<suffix>` for battery-pack sensors)
