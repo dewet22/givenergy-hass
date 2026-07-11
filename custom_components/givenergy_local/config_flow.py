@@ -206,7 +206,7 @@ class GivEnergyLocalOptionsFlow(OptionsFlowWithReload):
         # required-fields check fails with "Not all required fields are filled in"
         # and blocks saving for any entry that has never opened the section (#251).
         # The default applies server-side, so an omitted key is unchanged.
-        existing_exp: dict[str, Any] = self.config_entry.options.get(CONF_EXPERIMENTAL, {})
+        existing_exp: dict[str, Any] = self.config_entry.options.get(CONF_EXPERIMENTAL) or {}
         section_schema: dict[Any, Any] = {
             vol.Optional(CONF_PASSIVE, default=existing_exp.get(CONF_PASSIVE, False)): bool,
         }

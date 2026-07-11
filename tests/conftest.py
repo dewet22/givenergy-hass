@@ -1,6 +1,6 @@
 """Shared fixtures for GivEnergy Local tests."""
 
-from datetime import datetime, time
+from datetime import UTC, datetime, time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -220,6 +220,10 @@ def mock_plant(mock_inverter, mock_battery) -> MagicMock:
         lv_battery_addresses=[0x32],
         bcu_stacks=[],
     )
+    # Freshness signal read by passive mode's stale-cache gate (#284): a real dict
+    # (not a MagicMock child) with a just-committed block so passive reads serve by
+    # default; the stale-cache test rewinds this timestamp.
+    plant.register_block_updated_at = {(0x32, "IR", 0, 60): datetime.now(UTC)}
     return plant
 
 

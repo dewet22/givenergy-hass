@@ -553,7 +553,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     experimental_client_kwargs = resolve_experimental_client_kwargs(entry.options)
     # Passive (listen-only) mode is an Advanced-features opt-in in the same section,
     # but a coordinator flag rather than a client kwarg, so read it directly (#280).
-    passive = bool(entry.options.get(CONF_EXPERIMENTAL, {}).get(CONF_PASSIVE, False))
+    passive = bool((entry.options.get(CONF_EXPERIMENTAL) or {}).get(CONF_PASSIVE, False))
 
     coordinator = GivEnergyUpdateCoordinator(
         hass=hass,
