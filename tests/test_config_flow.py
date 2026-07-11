@@ -360,7 +360,7 @@ async def test_options_flow_persists_experimental_toggle(hass, mock_client, setu
         await hass.async_block_till_done()
 
     assert result["type"] == "create_entry"
-    assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": True}
+    assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": True, "passive": False}
 
 
 async def test_options_flow_preserves_experimental_when_section_omitted(
@@ -391,7 +391,7 @@ async def test_options_flow_preserves_experimental_when_section_omitted(
     assert result["type"] == "create_entry"
     assert setup_integration.options[CONF_BATTERY_DATA_ONLY] is True
     # The experimental flag must survive the second save unmodified.
-    assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": True}
+    assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": True, "passive": False}
 
 
 async def test_options_flow_explicit_false_disables_experimental_flag(
@@ -421,18 +421,21 @@ async def test_options_flow_explicit_false_disables_experimental_flag(
         await hass.async_block_till_done()
 
     assert result["type"] == "create_entry"
-    assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": False}
+    assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": False, "passive": False}
 
 
-async def test_options_flow_omits_section_when_no_features(hass, mock_client, setup_integration):
-    """An empty registry => no experimental section in the form."""
+async def test_options_flow_renders_section_with_only_passive_when_no_features(
+    hass, mock_client, setup_integration
+):
+    """Even with no client-kwarg features registered, the experimental section still
+    renders — it always carries the passive (listen-only) toggle (#280)."""
     with patch(
         "custom_components.givenergy_local.config_flow.EXPERIMENTAL_FEATURES",
         (),
     ):
         result = await hass.config_entries.options.async_init(setup_integration.entry_id)
     top_keys = {marker.schema for marker in result["data_schema"].schema}
-    assert CONF_EXPERIMENTAL not in top_keys
+    assert CONF_EXPERIMENTAL in top_keys
     assert CONF_BATTERY_DATA_ONLY in top_keys
 
 

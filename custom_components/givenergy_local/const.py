@@ -103,6 +103,10 @@ EXPOSE_RECOMMENDED_ENTITY_KEYS = (
 #       ),
 #   )
 CONF_EXPERIMENTAL = "experimental"
+# Passive (listen-only) mode lives inside the experimental section but is a
+# coordinator flag, not a Client(...) kwarg — so it's read directly, not via
+# resolve_experimental_client_kwargs. Off by default (#280/#256 revival).
+CONF_PASSIVE = "passive"
 
 
 @dataclass(frozen=True)

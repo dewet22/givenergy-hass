@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -450,6 +450,78 @@ async def test_backoff_clears_and_counts_reconnect_on_recovery(hass, mock_plant)
         assert coordinator.reconnect_count == 1  # counted the successful reconnect
         assert coordinator.dongle_hangs == 2  # historical total preserved
         assert coordinator.reconnect_backoffs == 1  # historical total preserved
+
+
+async def test_passive_mode_seeds_on_reconnect_then_reads_cache(hass, mock_plant):
+    """Passive mode seeds actively on (re)connect (load_config + refresh), then on
+    every subsequent tick reads the cached plant WITHOUT issuing its own requests —
+    the cache is kept fresh by a peer client on the shared dongle (#280). A fresh
+    cache (mock_plant stamps a just-committed block) serves without polling or
+    failing; the stale-cache path is covered separately (#284)."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30, passive=True)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.load_config = AsyncMock(return_value=mock_plant)
+        client.refresh = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+
+        # First tick (reconnecting): active seed.
+        assert await coordinator._async_update_data() is mock_plant
+        client.load_config.assert_awaited()
+        client.refresh.assert_awaited()
+
+        # Subsequent ticks (connected): read the cache, never poll, never fail.
+        client.load_config.reset_mock()
+        client.refresh.reset_mock()
+        for _ in range(3):
+            assert await coordinator._async_update_data() is mock_plant
+        client.refresh.assert_not_called()
+        client.load_config.assert_not_called()
+
+
+async def test_passive_mode_stale_cache_fails_without_marking_success(hass, mock_plant):
+    """When the peer stops polling, the register cache freezes. Passive must NOT
+    mark the tick successful on a stale cache: register-backed sensors age out via
+    the stale-IR gate, but the EMS energy integrals sample on
+    last_successful_refresh, so advancing it over a frozen cache inflates Energy
+    Dashboard totals (#284). Once the newest committed block is older than
+    max(floor, 3x interval), the tick fails and last_successful_refresh is held."""
+    coordinator = GivEnergyUpdateCoordinator(hass, "192.168.1.1", 8899, 30, passive=True)
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.load_config = AsyncMock(return_value=mock_plant)
+        client.refresh = AsyncMock(return_value=mock_plant)
+        mock_cls.return_value = client
+
+        # Seed on the first (reconnecting) tick, then a fresh steady-state tick.
+        assert await coordinator._async_update_data() is mock_plant
+        assert await coordinator._async_update_data() is mock_plant
+        seeded_success = coordinator.last_successful_refresh
+        assert seeded_success is not None
+
+        # Rewind the newest committed block well past the staleness ceiling
+        # (floor 180s, interval 30s -> 180s) — the peer has gone quiet.
+        mock_plant.register_block_updated_at = {
+            (0x32, "IR", 0, 60): datetime.now(UTC) - timedelta(seconds=300)
+        }
+
+        client.load_config.reset_mock()
+        client.refresh.reset_mock()
+        with pytest.raises(UpdateFailed):
+            await coordinator._async_update_data()
+
+        # Never polled (still passive), and success was NOT advanced — so the EMS
+        # integrals don't sample the stale cache.
+        client.refresh.assert_not_called()
+        client.load_config.assert_not_called()
+        assert coordinator.last_successful_refresh == seeded_success
+        assert coordinator.consecutive_failures == 1
 
 
 async def test_cancelled_connect_discards_client(hass, mock_plant):
