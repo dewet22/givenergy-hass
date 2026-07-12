@@ -561,23 +561,23 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         stale-IR gate (register_age), but the derived EMS energy integrals sample
         on last_successful_refresh, so advancing it over a stale cache inflates
         Energy Dashboard totals rather than merely showing stale values (#284). So
-        gate on the newest committed register block: if nothing has been ingested
-        recently, fail the tick (UpdateFailed) rather than serve a frozen cache as
-        fresh. This reads register_block_updated_at directly for now; it moves to
-        the first-class Plant.last_updated_at accessor once givenergy-modbus ships
-        it (same newest-commit semantics). The old inverter-system_time inference
-        is gone — brittle, and spurious on a Gateway's synthetic inverter.
+        gate on Plant.last_updated_at (the newest register-block ingestion time,
+        advancing whenever any bank commits — solicited or fanned-out from a peer):
+        if nothing has been ingested recently, fail the tick (UpdateFailed) rather
+        than serve a frozen cache as fresh. It's None before the first commit
+        (cold), and topology-agnostic — meaningful even on a Gateway, where the old
+        inverter-system_time inference was spurious (synthetic all-zeros inverter).
         """
         assert self._client is not None  # _async_update_data ensures this
         if reconnecting:
             await self._client.load_config(retries=self.retries)
             return await self._client.refresh(retries=self.retries)
         plant = self._client.plant
-        stamps = plant.register_block_updated_at
-        if stamps:  # empty only before the first commit (cold); never fail on that
+        newest = plant.last_updated_at  # None before the first commit (cold); never fail on that
+        if newest is not None:
             interval = self.update_interval.total_seconds() if self.update_interval else 0.0
             max_age = max(PASSIVE_STALE_FLOOR, PASSIVE_STALE_INTERVAL_MULTIPLE * interval)
-            newest_age = (dt_util.utcnow() - max(stamps.values())).total_seconds()
+            newest_age = (dt_util.utcnow() - newest).total_seconds()
             if newest_age > max_age:
                 raise UpdateFailed(
                     f"passive cache stale: no peer refresh in {newest_age:.0f}s "
