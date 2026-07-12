@@ -114,9 +114,10 @@ NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
 
 # --- AC-config-block controls (AC-coupled inverters + single-phase All-in-One) ---
 
-# DC battery power-limit controls (HR111/112) suppressed on plants that expose the
-# AC-config block — there the AC pair (HR313/314) is the battery-power control and the
-# DC pair targets a different register (modbus #301/#302).
+# DC battery power-limit controls (HR111/112) suppressed on genuinely AC-coupled plants
+# (is_ac_coupled) — there the AC pair (HR313/314) is the battery-power control and the DC
+# pair targets a different register (modbus #301/#302). The AIO exposes the AC-config
+# block but is DC-battery-backed, so HR111/112 stays its operative control (hass#281).
 _DC_BATTERY_LIMIT_KEYS = frozenset({"battery_charge_limit", "battery_discharge_limit"})
 
 # The AC charge/discharge power limits (HR313/314) are distinct from the DC-side
@@ -269,12 +270,17 @@ async def async_setup_entry(
         )
     else:
         caps = coordinator.data.capabilities
-        ac_battery_control = (
-            caps is not None and caps.has_ac_config_block and not caps.is_three_phase
-        )
+        # Two distinct facts, deliberately not conflated (hass#281):
+        #   has_ac_config_block — register surface: which models answer HR300-359.
+        #   is_ac_coupled       — control routing: the plant has no operative DC battery.
+        # The AC pair (HR313/314) is created wherever the block is readable; the DC pair
+        # (HR111/112) is suppressed only where it isn't the real control. The AIO carries
+        # the block yet is DC-battery-backed, so it gets both.
+        create_ac_pair = caps is not None and caps.has_ac_config_block and not caps.is_three_phase
+        suppress_dc_pair = caps is not None and caps.is_ac_coupled and not caps.is_three_phase
         descriptions: tuple[GivEnergyNumberEntityDescription, ...] = NUMBER_DESCRIPTIONS
-        if ac_battery_control:
-            # On AC-coupled / AIO plants battery power is controlled via the AC pair
+        if suppress_dc_pair:
+            # On genuinely AC-coupled plants battery power is controlled via the AC pair
             # (HR313/314) created below; the DC pair (HR111/112) targets a different
             # register here and would mislead, so suppress it (modbus #301/#302).
             descriptions = tuple(
@@ -283,7 +289,7 @@ async def async_setup_entry(
         entities.extend(
             GivEnergyNumberEntity(coordinator, description) for description in descriptions
         )
-        if ac_battery_control:
+        if create_ac_pair:
             inverter = coordinator.data.inverter
             clean = not coordinator.last_partial_failures
             entities.extend(
