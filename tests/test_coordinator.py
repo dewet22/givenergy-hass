@@ -505,11 +505,9 @@ async def test_passive_mode_stale_cache_fails_without_marking_success(hass, mock
         seeded_success = coordinator.last_successful_refresh
         assert seeded_success is not None
 
-        # Rewind the newest committed block well past the staleness ceiling
+        # Rewind the freshness signal well past the staleness ceiling
         # (floor 180s, interval 30s -> 180s) — the peer has gone quiet.
-        mock_plant.register_block_updated_at = {
-            (0x32, "IR", 0, 60): datetime.now(UTC) - timedelta(seconds=300)
-        }
+        mock_plant.last_updated_at = datetime.now(UTC) - timedelta(seconds=300)
 
         client.load_config.reset_mock()
         client.refresh.reset_mock()
