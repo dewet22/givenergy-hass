@@ -56,9 +56,22 @@ NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
         set_value_cmd=lambda v: commands.set_battery_soc_reserve(int(v)),
         entity_category=EntityCategory.CONFIG,
     ),
+    # Battery charge/discharge RATE cap (HR111/112). The value is a battery
+    # C-rate, expressed as a percentage of the pack's C rating (unit C/100, so
+    # 50 = 0.5C) — NOT a percentage of inverter power (that's the AC pair,
+    # HR313/314, "Inverter … Power Percentage"). The two sit in series, so the
+    # effective rate is min(battery C-rate, inverter %, BMS). On an AIO the
+    # inverter is the tighter constraint, so this cap only bites well below
+    # inverter capacity and is otherwise redundant; on a DC hybrid it IS the
+    # binding control and the AC pair is absent. "Rate Limit" (vs the AC pair's
+    # "Power Percentage") is the naming that keeps those two knobs distinct.
+    # Range stays 0-100 even though the app slider caps at 50: the register
+    # tolerates more (hardware has been seen holding 100 via GivTCP), and values
+    # above the pack's real C-rate are accepted-but-clamped rather than rejected
+    # — hard-capping would break read-modify-write / GivTCP parity. See #281/#287.
     GivEnergyNumberEntityDescription(
         key="battery_charge_limit",
-        name="Battery Charge Limit",
+        name="Battery Charge Rate Limit",
         native_unit_of_measurement=PERCENTAGE,
         native_min_value=0,
         native_max_value=100,
@@ -70,7 +83,7 @@ NUMBER_DESCRIPTIONS: tuple[GivEnergyNumberEntityDescription, ...] = (
     ),
     GivEnergyNumberEntityDescription(
         key="battery_discharge_limit",
-        name="Battery Discharge Limit",
+        name="Battery Discharge Rate Limit",
         native_unit_of_measurement=PERCENTAGE,
         native_min_value=0,
         native_max_value=100,

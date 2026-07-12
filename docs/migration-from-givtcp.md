@@ -232,8 +232,8 @@ Suffixes shown are after stripping the integration prefix and the inverter/batte
 
 | Status | GivTCP suffix | `givenergy_local` suffix | Notes |
 |---|---|---|---|
-| 🔁 | `battery_charge_rate` | `battery_charge_limit` | AC power cap as % of inverter rating |
-| 🔁 | `battery_discharge_rate` | `battery_discharge_limit` |  |
+| 🔁 | `battery_charge_rate` | `battery_charge_limit` | Battery C-rate cap (C/100; 50 = 0.5C), not inverter power % |
+| 🔁 | `battery_discharge_rate` | `battery_discharge_limit` | Battery C-rate cap (C/100) |
 | 🔁 | `battery_power_reserve` | `battery_soc_reserve` | Identical concept (% SOC reserve) |
 | 🔁 | `target_soc` | `charge_target_soc` | Charge target SoC (%) |
 | 🚫 | `battery_power_cutoff` | — | GivTCP-specific safety floor; givenergy_local has `battery_discharge_min_power_reserve` which may be equivalent — needs verification |

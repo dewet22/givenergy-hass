@@ -326,8 +326,8 @@ Some energy sensors are model-dependent: on AC-coupled and All-in-One systems th
 | Enable Discharge | Switch | |
 | Charge Target SOC | Number | 4–100 % |
 | Battery SOC Reserve | Number | 4–100 % |
-| Battery Charge Limit | Number | 0–50 % |
-| Battery Discharge Limit | Number | 0–50 % |
+| Battery Charge Rate Limit | Number | Battery C-rate (C/100; 50 = 0.5C) |
+| Battery Discharge Rate Limit | Number | Battery C-rate (C/100; 50 = 0.5C) |
 | Battery Discharge Min Power Reserve | Number | 4–100 % |
 | Battery Power Mode | Select | Export / Self Consumption |
 | Battery Pause Mode | Select | Disabled / Pause Charge / Pause Discharge / Pause Both |
