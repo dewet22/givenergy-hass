@@ -421,7 +421,7 @@ def _reconcile_per_cell_entities(hass: HomeAssistant, entry: ConfigEntry) -> Non
 def _reconcile_ac_coupled_dc_limits(
     hass: HomeAssistant, coordinator: GivEnergyUpdateCoordinator
 ) -> None:
-    """Remove the DC battery-limit rows on AC-coupled / AIO plants (#52).
+    """Remove the DC battery-limit rows on genuinely AC-coupled plants (#52).
 
     Introduced: v1.3.17 (2026-06). Ongoing while the AC-pair suppression exists
     (cheap no-op once rows are gone).
@@ -431,7 +431,10 @@ def _reconcile_ac_coupled_dc_limits(
     entry HA keeps the pre-existing DC rows when the platform stops adding them, so
     the bundled dashboard would still resolve the now-orphaned DC controls from the
     registry. Mirror the other reconcilers and remove exactly those rows pre-platform.
-    DC-coupled hybrids don't enter this branch and keep their DC controls.
+    The gate must match the platform's suppression: is_ac_coupled, not the broader
+    has_ac_config_block — the AIO carries the block but is DC-battery-backed, so HR111/112
+    is its operative control and its rows must survive (hass#281). DC-coupled hybrids
+    don't enter this branch either and keep their DC controls.
     """
     # Local import: the platform imports from this package, so a module-scope import
     # risks a load-order cycle. The key set is the same one the platform suppresses on.
@@ -441,7 +444,7 @@ def _reconcile_ac_coupled_dc_limits(
     # EMS reconciliation — it needs no partial-poll guard: a None/incomplete
     # capabilities simply fails the positive check and removes nothing.
     caps = coordinator.data.capabilities
-    if caps is None or not caps.has_ac_config_block or caps.is_three_phase:
+    if caps is None or not caps.is_ac_coupled or caps.is_three_phase:
         return
     serial = coordinator.data.inverter_serial_number
     registry = er.async_get(hass)

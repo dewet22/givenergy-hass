@@ -1073,6 +1073,40 @@ async def test_dc_limit_rows_retained_on_hybrid(
     assert _present("battery_discharge_limit")
 
 
+async def test_dc_limit_rows_retained_on_all_in_one(
+    hass, mock_client, mock_plant, mock_inverter, mock_config_entry
+):
+    """hass#281: the AIO carries the AC-config block but is not AC-coupled — HR111/112
+    is its operative battery-rate control. The reconciler gates on is_ac_coupled, so it
+    must not delete the DC rows on an AIO upgrade (only the AC pair is additive)."""
+    mock_plant.capabilities = PlantCapabilities(
+        device_type=Model.ALL_IN_ONE,
+        inverter_address=0x32,
+        meter_addresses=[],
+        lv_battery_addresses=[0x32],
+        bcu_stacks=[],
+    )
+    mock_inverter.battery_charge_limit_ac = 50
+    mock_inverter.battery_discharge_limit_ac = 60
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    for unique_id in ("SA1234G123_battery_charge_limit", "SA1234G123_battery_discharge_limit"):
+        registry.async_get_or_create("number", DOMAIN, unique_id, config_entry=mock_config_entry)
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    def _present(key: str) -> bool:
+        return registry.async_get_entity_id("number", DOMAIN, f"SA1234G123_{key}") is not None
+
+    # DC pair is the operative control on an AIO — retained...
+    assert _present("battery_charge_limit")
+    assert _present("battery_discharge_limit")
+    # ...and the AC pair is created alongside it, not instead of it.
+    assert _present("battery_charge_limit_ac")
+    assert _present("battery_discharge_limit_ac")
+
+
 # --- Experimental-features registry + resolver (client feature-flagging) ------
 
 

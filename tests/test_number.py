@@ -203,10 +203,12 @@ async def test_dc_limits_suppressed_on_ac_coupled_plant(hass, ac_coupled_setup):
     assert _maybe_entity_id(hass, "SA1234G123_battery_discharge_limit") is None
 
 
-async def test_dc_limits_suppressed_on_all_in_one_plant(hass, aio_setup):
-    """AIO exposes the AC-config block, so the DC battery limits are suppressed too."""
-    assert _maybe_entity_id(hass, "SA1234G123_battery_charge_limit") is None
-    assert _maybe_entity_id(hass, "SA1234G123_battery_discharge_limit") is None
+async def test_dc_limits_present_on_all_in_one_plant(hass, aio_setup):
+    """The AIO is not AC-coupled: HR111/112 is its operative battery-rate control, so
+    the DC pair is kept. The AC-config block only adds the AC-side extras alongside it
+    (hass#281) — suppression gates on is_ac_coupled, not has_ac_config_block."""
+    _entity_id(hass, "SA1234G123_battery_charge_limit")
+    _entity_id(hass, "SA1234G123_battery_discharge_limit")
 
 
 async def test_dc_limits_present_on_hybrid_plant(hass, setup_integration):
