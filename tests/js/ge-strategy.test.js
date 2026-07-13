@@ -565,3 +565,57 @@ describe("analyst mode", () => {
     expect(view(dash, "Analyst")).toBeUndefined();
   });
 });
+
+// The cold-load custom-card race (#255): the apexcharts / power-flow HACS modules
+// can still be registering when the strategy runs, so a synchronous haveCard()
+// check would wrongly emit the "not installed" placeholder. ensureCards() gives an
+// undefined-but-registering card a bounded chance to define first.
+describe("cold-load custom-card race (#255)", () => {
+  afterEach(() => {
+    delete global.customElements;
+  });
+
+  it("waits for a slow-to-register card instead of showing the placeholder", async () => {
+    const defined = new Set();
+    const resolvers = [];
+    global.customElements = {
+      get: (n) => (defined.has(n) ? class {} : undefined),
+      whenDefined: (n) =>
+        new Promise((resolve) => {
+          resolvers.push(() => {
+            defined.add(n);
+            resolve();
+          });
+        }),
+    };
+    const hass = makeHass({ batterySerials: ["BAT1"], acCoupled: true });
+    // ensureCards registers its whenDefined waiters synchronously as generate()
+    // starts; let a microtask pass, then "register" the HACS cards late.
+    const p = GE.generateDashboard({ mode: "classic" }, hass);
+    await Promise.resolve();
+    resolvers.forEach((fn) => fn());
+    const dash = await p;
+    const flat = JSON.stringify(dash);
+    expect(flat).not.toContain("is not installed");
+    expect(flat).toContain("custom:apexcharts-card");
+    expect(flat).toContain("custom:power-flow-card-plus");
+  });
+
+  it("still falls back to the placeholder for a genuinely absent card (bounded wait)", async () => {
+    vi.useFakeTimers();
+    try {
+      // whenDefined never resolves; only the bounded timer lets generate() finish.
+      global.customElements = {
+        get: () => undefined,
+        whenDefined: () => new Promise(() => {}),
+      };
+      const hass = makeHass({ batterySerials: ["BAT1"], acCoupled: true });
+      const p = GE.generateDashboard({ mode: "classic" }, hass);
+      await vi.advanceTimersByTimeAsync(2000);
+      const dash = await p;
+      expect(JSON.stringify(dash)).toContain("is not installed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
