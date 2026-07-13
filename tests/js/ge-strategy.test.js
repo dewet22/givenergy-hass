@@ -601,6 +601,13 @@ describe("cold-load custom-card race (#255)", () => {
     expect(flat).toContain("custom:power-flow-card-plus");
   });
 
+  it("offers the Generate Predbat Config action on both standard and EMS diagnostics", async () => {
+    const std = await GE.generateDashboard({ mode: "classic" }, makeHass({ batterySerials: ["BAT1"] }));
+    expect(JSON.stringify(std)).toContain("givenergy_local.generate_predbat_config");
+    const ems = await GE.generateDashboard({ mode: "classic" }, makeHass({ ems: true }));
+    expect(JSON.stringify(ems)).toContain("givenergy_local.generate_predbat_config");
+  });
+
   it("still falls back to the placeholder for a genuinely absent card (bounded wait)", async () => {
     vi.useFakeTimers();
     try {
