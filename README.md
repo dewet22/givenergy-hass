@@ -4,13 +4,13 @@
 
 [![release](https://img.shields.io/github/v/release/dewet22/givenergy-hass)](https://github.com/dewet22/givenergy-hass/releases)
 [![CI](https://github.com/dewet22/givenergy-hass/actions/workflows/validate.yml/badge.svg?branch=main)](https://github.com/dewet22/givenergy-hass/actions?query=branch%3Amain)
-[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/dewet22/givenergy-hass/blob/main/LICENSE)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![HACS](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/docs/use/repositories/dashboard)
 
 Talk to your GivEnergy inverter straight over local Modbus TCP — **no cloud, no GivEnergy portal account, no MQTT broker.** Full sensor and control coverage, a live self-building dashboard, and proper Home Assistant plumbing for automations, the Energy dashboard, voice and LLMs.
 
-<p align="center"><img src="docs/dashboard-flow.png" alt="GivEnergy dashboard — flow mode" width="820"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/dashboard-flow.png" alt="GivEnergy dashboard — flow mode" width="820"></p>
 
 ## ✨ Highlights
 
@@ -31,7 +31,7 @@ This integration sits in a cloud-free GivEnergy ecosystem, with a hardware-agnos
 - **[givenergy-cli](https://github.com/dewet22/givenergy-cli)** — a terminal companion for the same library: probe registers, capture wire frames, export a full plant dump, or drive the inverter without Home Assistant.
 - **[Energy Conductor](https://github.com/dewet22/ha-energy-conductor)** — entity-driven, technology-agnostic energy coordination for Home Assistant. It only ever talks to the entities your integrations expose — GivEnergy or anything else — layering a polished UI, forecasting and automated control over whatever hardware you already run. Early days and actively developed; worth a look if you'd like to help shape where it goes.
 
-<p align="center"><img src="docs/energy-conductor-forecast.png" alt="Energy Conductor — the tape: 12h history, 12h forecast" width="840"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/energy-conductor-forecast.png" alt="Energy Conductor — the tape: 12h history, 12h forecast" width="840"></p>
 <p align="center"><em>The <b>tape</b> — twelve hours of history and twelve of forecast on one axis, with the events it's scheduling (off-peak, EV, solar diversion) laid out beneath.</em></p>
 
 <details>
@@ -39,15 +39,15 @@ This integration sits in a cloud-free GivEnergy ecosystem, with a hardware-agnos
 
 **Tonight's plan in plain English, plus live control** — it doesn't just visualise, it decides, actuates, and tells you why.
 
-<p align="center"><img src="docs/energy-conductor-plan.png" alt="Energy Conductor — plan reasoning and control status" width="740"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/energy-conductor-plan.png" alt="Energy Conductor — plan reasoning and control status" width="740"></p>
 
 **The money** — billing-grade costs alongside modelled savings, down to a "paying for itself" run-rate.
 
-<p align="center"><img src="docs/energy-conductor-ledger.png" alt="Energy Conductor — cost and savings ledger" width="440"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/energy-conductor-ledger.png" alt="Energy Conductor — cost and savings ledger" width="440"></p>
 
 **A year at a glance** — calendar heatmaps and per-hour density for every stream (PV, load, grid, EV, hot water, gas): a whole year of energy in one straightforward view.
 
-<p align="center"><img src="docs/energy-conductor-history.png" alt="Energy Conductor — long-term energy analytics" width="740"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/energy-conductor-history.png" alt="Energy Conductor — long-term energy analytics" width="740"></p>
 
 </details>
 
@@ -88,11 +88,11 @@ Duration: 60
 
 This records a redacted copy of the raw Modbus traffic (serial numbers zeroed), saves it to `<config>/givenergy_local_captures/`, and sends a persistent notification linking to a landing page where you can inspect the capture, download the file, or open a pre-filled GitHub issue. Attach the file to the issue along with your inverter model and serial prefix.
 
-<p align="center"><img src="docs/capture-notification.png" alt="Persistent notification when a capture completes" width="500"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/capture-notification.png" alt="Persistent notification when a capture completes" width="500"></p>
 
 Following the link opens the capture's landing page:
 
-<p align="center"><img src="docs/capture-landing.png" alt="Capture landing page — inspect, download, or file an issue" width="560"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/capture-landing.png" alt="Capture landing page — inspect, download, or file an issue" width="560"></p>
 
 If you don't yet have the integration installed, [givenergy-cli](https://github.com/dewet22/givenergy-cli) can produce a structured register dump instead:
 
@@ -131,7 +131,7 @@ New features often ship as a pre-release (e.g. `v1.4.0rc2`) before a stable rele
 
 Add the integration via **Settings → Devices & Services → Add Integration → GivEnergy Local**.
 
-<p align="center"><img src="docs/config-flow.png" alt="Config flow — add integration dialog" width="440"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/config-flow.png" alt="Config flow — add integration dialog" width="440"></p>
 
 | Field | Default | Description |
 |---|---|---|
@@ -141,7 +141,7 @@ Add the integration via **Settings → Devices & Services → Add Integration �
 
 To change any of these later, open the integration's **⋮** menu in **Settings → Devices & Services → GivEnergy Local** and choose **Reconfigure**. The integration reloads automatically when you save.
 
-<p align="center"><img src="docs/config-reconfigure.png" alt="Integration ⋮ menu — Reconfigure entry" width="340"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/config-reconfigure.png" alt="Integration ⋮ menu — Reconfigure entry" width="340"></p>
 
 ### Running alongside other local polling clients
 
@@ -175,7 +175,7 @@ One caveat worth knowing: on any **cold (uncached) load** the dashboard may show
 
 `mode: flow` leads the dashboard with an immersive, full-width **Flow** view — an animated power-flow diagram (solar, grid, battery, home) with the live direction of each flow derived from the sign of the underlying power sensors, three big-number headers, and a today-totals strip. It's a bundled custom card (`custom:givenergy-flow`), so nothing extra to install. The full `classic` view set (Overview, Energy, Batteries, Battery Health, Controls, Diagnostics) follows behind it, so you lose nothing by switching.
 
-<p align="center"><img src="docs/dashboard-flow.png" alt="GivEnergy dashboard — flow mode" width="820"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/dashboard-flow.png" alt="GivEnergy dashboard — flow mode" width="820"></p>
 
 ```yaml
 strategy:
@@ -191,7 +191,7 @@ The tariff-aware `coach` direction from [the redesign brief](docs/design/dashboa
 
 `mode: glance` leads the dashboard with a calm, full-width **Glance** view: a single-sentence system summary, three large numbers (solar generated today, battery SOC, house consumption today), and a row of health pills showing battery count, import and export totals for the day, and per-string PV generation when active. It's built around a bundled `custom:givenergy-glance` card — nothing extra to install.
 
-<p align="center"><img src="docs/dashboard-glance.png" alt="GivEnergy dashboard — glance mode" width="820"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/dashboard-glance.png" alt="GivEnergy dashboard — glance mode" width="820"></p>
 
 ```yaml
 strategy:
@@ -205,7 +205,7 @@ The status sentence is derived from the live signs of grid, battery, and solar p
 
 `mode: analyst` leads the dashboard with a dense **Analyst** view aimed at optimisation and debugging: a live metrics strip (PV, load, battery, grid), an energy ledger breaking down today's sources and sinks as kWh and percentages, a diagnostics table (temperatures, grid frequency, power factor, work time, consecutive failures), a 24-hour power overlay chart (requires `apexcharts-card`), and per-pack cell heatmaps. Nothing extra to install beyond the apexcharts card for the chart.
 
-<p align="center"><img src="docs/dashboard-analyst.png" alt="GivEnergy dashboard — analyst mode" width="820"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/dashboard-analyst.png" alt="GivEnergy dashboard — analyst mode" width="820"></p>
 
 ```yaml
 strategy:
@@ -227,7 +227,7 @@ strategy:
 
 ## Entities
 
-<p align="center"><img src="docs/device-page.png" alt="Inverter device page in Home Assistant" width="620"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/device-page.png" alt="Inverter device page in Home Assistant" width="620"></p>
 
 ### Inverter device
 
@@ -511,19 +511,19 @@ For anything else, please [open an issue](https://github.com/dewet22/givenergy-h
 
 Occasionally an entity's id falls out of step with its name — usually a legacy slug left behind when an entity was renamed across versions (e.g. `…_grid_export_power` for what is now the **Grid Power** sensor), or a duplicate id created by removing and re-adding the integration. The friendly name is authoritative and nothing is functionally broken, so this is cosmetic — but if you'd like the ids tidied, Home Assistant can regenerate them from the device's ⋮ menu:
 
-<p align="center"><img src="docs/recreate-entity-ids-menu.png" alt="Recreate entity IDs in the device ⋮ menu" width="260"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/recreate-entity-ids-menu.png" alt="Recreate entity IDs in the device ⋮ menu" width="260"></p>
 
 1. Go to **Settings → Devices & Services → GivEnergy Local** and open the device.
 2. Open the **⋮** menu (top right) and choose **Recreate entity IDs**.
 3. The dialog shows how many ids will be renamed versus left unchanged — choose **Update**.
 
-<p align="center"><img src="docs/recreate-entity-ids-confirm.png" alt="Recreate entity IDs confirmation dialog" width="480"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/dewet22/givenergy-hass/main/docs/recreate-entity-ids-confirm.png" alt="Recreate entity IDs confirmation dialog" width="480"></p>
 
 Home Assistant keeps each entity's history and long-term statistics across the rename. What it does *not* do is update references in your own automations, scripts, scenes, or dashboards — those still point at the old ids and need editing by hand (the dialog warns about this). The integration's bundled dashboard strategy resolves entities live, so it isn't affected.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Apache License 2.0 — see [LICENSE](https://github.com/dewet22/givenergy-hass/blob/main/LICENSE).
 
 ## Development
 
