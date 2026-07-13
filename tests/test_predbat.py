@@ -88,9 +88,9 @@ def test_single_hybrid_maps_controls_and_telemetry():
     # soc% from the inverter's battery_soc; soc energy from soc_kwh
     assert "giv_inv1_battery_soc" in out
     assert "giv_inv1_soc_kwh" in out
-    # a pure hybrid has no AC pair -> rate lines auto-omit as comments
-    assert "# charge_rate_percent:" in out
-    assert "# discharge_rate_percent:" in out
+    # a pure hybrid has no AC pair -> rate omitted with an explanatory HR111/112 comment
+    assert "# charge_rate_percent: hybrid rate is the HR111/112 C-rate" in out
+    assert "# discharge_rate_percent: hybrid rate is the HR111/112 C-rate" in out
 
 
 def test_ac_coupled_wires_rate_to_ac_pair_and_flags_pv():
@@ -106,6 +106,37 @@ def test_ac_coupled_wires_rate_to_ac_pair_and_flags_pv():
     # PV is not wired from the AC unit; the user is pointed at their PV inverter
     assert "AC-coupled inverter has no PV of its own" in out
     assert "sensor.giv_ac1_e_pv_day" not in out  # not wired
+
+
+def test_ac_coupled_detected_even_when_rate_entity_disabled():
+    # battery_charge_limit_ac present but DISABLED: topology must still read as
+    # AC-coupled from the full key set, so PV isn't wired to the AC unit's ~0 sensors
+    # and the hybrid C-rate path isn't taken.
+    ents = _entities("AC1", _HYBRID_INV_KEYS, "dev_inv")
+    ents.append(_ent("AC1", "battery_charge_limit_ac", "dev_inv", disabled=True))
+    ents.append(_ent("AC1", "battery_discharge_limit_ac", "dev_inv", disabled=True))
+    ents += _entities("BAT1", _BAT_KEYS, "dev_bat")
+    devs = [_dev("dev_inv", "AC1"), _dev("dev_bat", "BAT1", via="dev_inv")]
+
+    out = generate_apps_yaml(ents, devs)
+
+    assert "AC-coupled inverter has no PV of its own" in out  # took the AC path
+    assert "HR111/112 C-rate" not in out  # not the hybrid path
+    assert "sensor.giv_ac1_e_pv_day" not in out  # PV not wired
+
+
+def test_soc_falls_back_to_battery_device_when_inverter_soc_disabled():
+    # inverter battery_soc disabled, battery device soc enabled -> soc_percent still
+    # resolves to the battery's own soc entity (the promised merge fallback).
+    keys = [k for k in _HYBRID_INV_KEYS if k != "battery_soc"]
+    ents = _entities("INV1", keys, "dev_inv")
+    ents.append(_ent("INV1", "battery_soc", "dev_inv", disabled=True))
+    ents += _entities("BAT1", _BAT_KEYS, "dev_bat")
+    devs = [_dev("dev_inv", "INV1"), _dev("dev_bat", "BAT1", via="dev_inv")]
+
+    out = generate_apps_yaml(ents, devs)
+
+    assert "soc_percent:\n  - sensor.giv_bat1_soc" in out
 
 
 def test_ems_uses_controller_and_omits_rate_and_reserve():

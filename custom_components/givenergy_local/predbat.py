@@ -51,7 +51,10 @@ class _Plant:
 
     def __init__(self) -> None:
         self.ems: tuple[str, dict[str, str]] | None = None  # (serial, key->entity_id)
-        self.inverters: list[tuple[str, dict[str, str]]] = []
+        # inverters carry (serial, enabled key->entity_id, full key set incl. disabled).
+        # The full set drives topology decisions (e.g. AC-coupled), so disabling an
+        # entity can't silently reclassify the plant — mirrors _classify.
+        self.inverters: list[tuple[str, dict[str, str], set[str]]] = []
         self.batteries: list[tuple[str, dict[str, str]]] = []
 
     @property
@@ -94,7 +97,7 @@ def _build_plant(entities: Iterable[Any], devices: Iterable[Any]) -> _Plant:
         if kind == "ems":
             plant.ems = (serial, keys)
         elif kind == "inverter":
-            plant.inverters.append((serial, keys))
+            plant.inverters.append((serial, keys, all_keys.get(device_id, set())))
         elif kind == "battery":
             plant.batteries.append((serial, keys))
     return plant
@@ -215,8 +218,18 @@ def _header(topology: str) -> str:
     return "\n".join(lines)
 
 
-def _ac_coupled(inv_keys: dict[str, str]) -> bool:
-    return "battery_charge_limit_ac" in inv_keys
+def _ac_coupled(inv_all_keys: set[str]) -> bool:
+    # From the register's presence, not whether the user disabled the entity —
+    # mirrors _classify's use of the full key set for the same robustness.
+    return "battery_charge_limit_ac" in inv_all_keys
+
+
+# Hybrid rate control is the HR111/112 C-rate, which we don't wire yet (#281) — a
+# permanent omission, so it gets an explanatory comment rather than "not found".
+_HYBRID_RATE_UNMAPPABLE: dict[str, str] = {
+    "charge_rate_percent": "hybrid rate is the HR111/112 C-rate — not wired yet (#281)",
+    "discharge_rate_percent": "hybrid rate is the HR111/112 C-rate — not wired yet (#281)",
+}
 
 
 def generate_apps_yaml(
@@ -248,14 +261,20 @@ def generate_apps_yaml(
     if len(plant.inverters) == 1 and not plant.batteries and not plant.inverters[0][1]:
         return _unsupported_note()
     if len(plant.inverters) == 1:
-        _serial, inv_keys = plant.inverters[0]
+        _serial, inv_keys, inv_all_keys = plant.inverters[0]
         merged = dict(inv_keys)
         for _bat_serial, bat_keys in plant.batteries:
             for key, eid in bat_keys.items():
                 merged.setdefault(key, eid)
-        ac = _ac_coupled(inv_keys)
+        # soc_percent maps to the inverter's battery_soc; fall back to the battery
+        # device's own soc if the inverter one is disabled/absent (the "battery keys
+        # merged in for soc" the module comment promises).
+        if "battery_soc" not in merged and "soc" in merged:
+            merged["battery_soc"] = merged["soc"]
+        ac = _ac_coupled(inv_all_keys)
         mapping = _SINGLE_INVERTER_MAP
         pv_note: list[str] = []
+        unmappable: dict[str, str] = {}
         if ac:
             # An AC-coupled unit has no PV of its own; don't wire its ~0 readings.
             mapping = tuple(
@@ -269,7 +288,16 @@ def generate_apps_yaml(
                 "  # pv_power:",
                 "  # - sensor.<your_pv_inverter>_power",
             ]
-        lines = _lines_for(mapping, merged, {})
+        else:
+            # Hybrid rate is the HR111/112 C-rate — omit with an explanatory comment
+            # rather than the generic "not found" (it's never going to be there yet).
+            mapping = tuple(
+                (f, k)
+                for (f, k) in _SINGLE_INVERTER_MAP
+                if f not in ("charge_rate_percent", "discharge_rate_percent")
+            )
+            unmappable = _HYBRID_RATE_UNMAPPABLE
+        lines = _lines_for(mapping, merged, unmappable)
         body = "\n".join(
             [
                 _header("single"),
