@@ -207,6 +207,42 @@
     }
   }
 
+  // Custom cards the views render as first-class content (otherwise a placeholder).
+  // These are separate HACS frontend modules that load independently of this
+  // strategy, so on a cold load they can still be registering when generate()
+  // runs -- haveCard() would then wrongly report them missing and drop in the
+  // "not installed" placeholder (#255). Give each undefined one a brief, bounded
+  // chance to register before we decide; a genuinely-absent card still times out
+  // to the placeholder. Overlapped with the registry fetch (see generateDashboard)
+  // so it adds no serial latency on the common, warm path.
+  var STRATEGY_CARDS = ["apexcharts-card", "power-flow-card-plus"];
+  var CARD_WAIT_MS = 1500;
+
+  function ensureCards(names, timeoutMs) {
+    if (typeof customElements === "undefined" || !customElements.whenDefined) {
+      return Promise.resolve();
+    }
+    return Promise.all(
+      names.map(function (name) {
+        try {
+          if (customElements.get(name)) return null; // already registered -- no wait
+          return new Promise(function (resolve) {
+            var timer = setTimeout(resolve, timeoutMs);
+            customElements.whenDefined(name).then(function () {
+              clearTimeout(timer);
+              resolve();
+            }, function () {});
+          });
+        } catch (e) {
+          // Pathological environment (e.g. a browser that throws on the lookup) --
+          // proceed without waiting; the later haveCard() check fails closed to
+          // the placeholder, matching its own defensive try/catch.
+          return null;
+        }
+      })
+    );
+  }
+
   function pad2(n) {
     return n < 10 ? "0" + n : "" + n;
   }
@@ -1181,7 +1217,13 @@
       serial: config.serial || null,
       mode: config.mode || "classic",
     };
-    var plant = await buildPlant(hass, opts);
+    // Overlap the bounded card-registration wait (#255) with the registry fetch,
+    // so on a warm load (cards already defined) it costs nothing, and on a cold
+    // load the wait hides behind the registry round-trip rather than adding to it.
+    var plant = (await Promise.all([
+      buildPlant(hass, opts),
+      ensureCards(STRATEGY_CARDS, CARD_WAIT_MS),
+    ]))[0];
     if (!plant.target) {
       var notice;
       if (plant.registryError) {
