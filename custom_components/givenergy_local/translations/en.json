@@ -135,6 +135,10 @@
           "description": "How long to capture frames for. Defaults to 60 seconds."
         }
       }
+    },
+    "generate_predbat_config": {
+      "name": "Generate Predbat config",
+      "description": "Builds a starting Predbat apps.yaml for this install, wiring entity IDs resolved live from your registry. A persistent notification links to a page to review and download the file; you still fill in the tariff and other Predbat settings."
     }
   },
   "entity": {

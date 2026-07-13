@@ -150,3 +150,11 @@ redetect_plant:
       required: false
       selector:
         text:
+
+generate_predbat_config:
+  name: Generate Predbat config
+  description: >
+    Builds a starting Predbat apps.yaml for this install, wiring the correct
+    entity IDs resolved live from your registry (so it survives entity renames).
+    A persistent notification links to a page where you can review and download
+    the file. You still need to fill in the tariff and other Predbat settings.

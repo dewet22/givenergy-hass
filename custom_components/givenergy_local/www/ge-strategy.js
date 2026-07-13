@@ -1149,7 +1149,16 @@
       ]),
     });
 
-    cards.push({
+    cards.push(integrationCard());
+
+    return { title: "Diagnostics", path: "diagnostics", icon: "mdi:wrench", cards: cards };
+  }
+
+  // The "Integration" action card, shared by the standard and EMS diagnostics
+  // views: capture debug frames, and generate a Predbat apps.yaml from the live
+  // registry (#289). Both apply on either plant type.
+  function integrationCard() {
+    return {
       type: "entities",
       title: "Integration",
       entities: [
@@ -1164,10 +1173,18 @@
             data: { duration: 60 },
           },
         },
+        {
+          type: "button",
+          name: "Generate Predbat Config",
+          icon: "mdi:robot-outline",
+          action_name: "Run",
+          tap_action: {
+            action: "perform-action",
+            perform_action: "givenergy_local.generate_predbat_config",
+          },
+        },
       ],
-    });
-
-    return { title: "Diagnostics", path: "diagnostics", icon: "mdi:wrench", cards: cards };
+    };
   }
 
   // ----- EMS plant views -----------------------------------------------------
@@ -1204,7 +1221,7 @@
       title: "Diagnostics",
       path: "diagnostics",
       icon: "mdi:wrench",
-      cards: [integrationHealthCard(a)],
+      cards: [integrationHealthCard(a), integrationCard()],
     };
   }
 

@@ -233,6 +233,126 @@ def build_capture_notification_url(hass: HomeAssistant, filename: str) -> str:
     return _sign(hass, landing_path(filename))
 
 
+# --- Predbat apps.yaml generator egress (#289) ---------------------------------
+# Same delivery model as captures: write the file server-side, notify with a
+# signed landing link, serve inspect + download. Reuses _sign / _authorized /
+# write_capture / _read_if_present.
+
+PREDBAT_DIR_NAME = "givenergy_local_predbat"
+PREDBAT_FILENAME_RE = re.compile(r"^predbat_givenergy_\d+\.yaml$")
+_PREDBAT_DOCS_URL = "https://springfall2008.github.io/batpred/"
+
+
+def predbat_dir(hass: HomeAssistant) -> Path:
+    """Directory holding generated Predbat apps.yaml templates."""
+    return Path(hass.config.path(PREDBAT_DIR_NAME))
+
+
+def predbat_landing_path(filename: str) -> str:
+    return f"/api/{DOMAIN}/predbat/{filename}"
+
+
+def predbat_download_path(filename: str) -> str:
+    return f"/api/{DOMAIN}/predbat/{filename}/download"
+
+
+def build_predbat_notification_url(hass: HomeAssistant, filename: str) -> str:
+    """Signed landing-page URL for the persistent notification link (path-only)."""
+    return _sign(hass, predbat_landing_path(filename))
+
+
+class PredbatConfigLandingView(HomeAssistantView):
+    """Landing page for a generated Predbat apps.yaml: inspect + download."""
+
+    url = "/api/" + DOMAIN + "/predbat/{filename}"
+    name = f"api:{DOMAIN}:predbat"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def get(self, request: web.Request, filename: str) -> web.StreamResponse:
+        if not _authorized(self.hass, request):
+            return web.Response(status=403)
+        if not PREDBAT_FILENAME_RE.match(filename):
+            return web.Response(status=404)
+        path = predbat_dir(self.hass) / filename
+        content = await self.hass.async_add_executor_job(_read_if_present, path)
+        if content is None:
+            return web.Response(status=404)
+        page = _PREDBAT_LANDING_TEMPLATE.format(
+            body=html.escape(content),
+            download_url=html.escape(_sign(self.hass, predbat_download_path(filename)), quote=True),
+            docs_url=html.escape(_PREDBAT_DOCS_URL, quote=True),
+        )
+        return web.Response(text=page, content_type="text/html")
+
+
+class PredbatConfigDownloadView(HomeAssistantView):
+    """Serve a generated Predbat config as an ``apps.yaml`` download."""
+
+    url = "/api/" + DOMAIN + "/predbat/{filename}/download"
+    name = f"api:{DOMAIN}:predbat:download"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+
+    async def get(self, request: web.Request, filename: str) -> web.StreamResponse:
+        if not _authorized(self.hass, request):
+            return web.Response(status=403)
+        if not PREDBAT_FILENAME_RE.match(filename):
+            return web.Response(status=404)
+        path = predbat_dir(self.hass) / filename
+        content = await self.hass.async_add_executor_job(_read_if_present, path)
+        if content is None:
+            return web.Response(status=404)
+        return web.Response(
+            text=content,
+            content_type="text/yaml",
+            headers={"Content-Disposition": 'attachment; filename="apps.yaml"'},
+        )
+
+
+_PREDBAT_LANDING_TEMPLATE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GivEnergy Local — Predbat config</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; margin: 1.5rem; max-width: 70rem; }}
+  h1 {{ font-size: 1.3rem; }}
+  pre {{ background: #f5f5f5; padding: 1rem; overflow-x: auto; border-radius: 6px;
+         white-space: pre-wrap; word-break: break-all; }}
+  .actions a {{ display: inline-block; margin-right: 1rem; padding: 0.5rem 1rem;
+                background: #03a9f4; color: #fff; text-decoration: none;
+                border-radius: 6px; }}
+  .actions a.docs {{ background: #37474f; }}
+  .note {{ background: #fff8e1; border-left: 4px solid #ffb300; padding: 0.75rem 1rem;
+           border-radius: 4px; }}
+</style>
+</head>
+<body>
+<h1>GivEnergy Local — Predbat <code>apps.yaml</code></h1>
+
+<p class="note">This is a <b>starting template</b> with your entity IDs resolved from the
+live registry. You still need to complete the tariff, rates, solcast and other Predbat
+settings — see the comments in the file and the Predbat docs. Regenerate any time after
+renaming entities.</p>
+
+<p class="actions">
+  <a href="{download_url}">Download apps.yaml</a>
+  <a class="docs" href="{docs_url}" target="_blank" rel="noopener">Predbat setup guide</a>
+</p>
+
+<pre>{body}</pre>
+</body>
+</html>
+"""
+
+
 _LANDING_TEMPLATE = """\
 <!DOCTYPE html>
 <html lang="en">

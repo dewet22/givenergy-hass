@@ -49,6 +49,7 @@ from .const import (
     SERVICE_CALIBRATE_BATTERY_SOC,
     SERVICE_CAPTURE_FRAMES,
     SERVICE_EXPOSE_RECOMMENDED_ENTITIES,
+    SERVICE_GENERATE_PREDBAT_CONFIG,
     SERVICE_REBOOT_INVERTER,
     SERVICE_REDETECT_PLANT,
     SERVICE_SET_SYSTEM_DATETIME,
@@ -60,8 +61,12 @@ from .coordinator import GivEnergyUpdateCoordinator, missing_devices
 from .http import (
     CaptureDownloadView,
     CaptureLandingView,
+    PredbatConfigDownloadView,
+    PredbatConfigLandingView,
     build_capture_notification_url,
+    build_predbat_notification_url,
     capture_dir,
+    predbat_dir,
     write_capture,
 )
 from .migrations import (
@@ -75,6 +80,7 @@ from .migrations import (
     _reconcile_readability_gated_controls,
     _remove_retired_battery_discharge_year,
 )
+from .predbat import generate_apps_yaml
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -89,7 +95,7 @@ _STRATEGY_URL = f"/{DOMAIN}/{_STRATEGY_FILENAME}"
 # served from the same package dir so they resolve offline without a CDN.
 _FONTS_DIRNAME = "fonts"
 _FONTS_URL = f"/{DOMAIN}/{_FONTS_DIRNAME}"
-_STRATEGY_VERSION = "14"
+_STRATEGY_VERSION = "15"
 
 # Per-config-entry topology cache. PlantCapabilities is persisted as
 # `to_dict()` directly (no envelope) following HA Core's Store convention —
@@ -350,11 +356,14 @@ async def _async_register_capture_http(hass: HomeAssistant) -> None:
     the directory is shared across config entries, so neither belongs per-entry.
     """
     await hass.async_add_executor_job(lambda: capture_dir(hass).mkdir(mode=0o700, exist_ok=True))
+    await hass.async_add_executor_job(lambda: predbat_dir(hass).mkdir(mode=0o700, exist_ok=True))
     if hass.http is None:
         # No web server (e.g. a minimal test harness) — nothing to serve from.
         return
     hass.http.register_view(CaptureLandingView(hass))
     hass.http.register_view(CaptureDownloadView(hass))
+    hass.http.register_view(PredbatConfigLandingView(hass))
+    hass.http.register_view(PredbatConfigDownloadView(hass))
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -880,11 +889,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 notification_id=f"givenergy_exposed_{target_entry_id}",
             )
 
+        async def handle_generate_predbat_config(call: ServiceCall) -> None:
+            # Resolve every Predbat field from the live registry (rename-proof),
+            # build the apps.yaml, write it out and notify with a signed
+            # inspect/download link — same delivery model as frame captures (#289).
+            ent_reg = er.async_get(hass)
+            dev_reg = dr.async_get(hass)
+            yaml_text = generate_apps_yaml(
+                list(ent_reg.entities.values()), list(dev_reg.devices.values())
+            )
+            epoch = int(dt_util.utcnow().timestamp())
+            filename = f"predbat_givenergy_{epoch}.yaml"
+            directory = predbat_dir(hass)
+            await hass.async_add_executor_job(partial(directory.mkdir, mode=0o700, exist_ok=True))
+            await hass.async_add_executor_job(write_capture, directory / filename, yaml_text)
+            landing_url = build_predbat_notification_url(hass, filename)
+            _LOGGER.info("Generated Predbat apps.yaml at %s", filename)
+            async_create_notification(
+                hass,
+                (
+                    "Your Predbat starting config is ready.\n\n"
+                    f'<a href="{landing_url}" target="_blank">Open it</a> to review and '
+                    "download apps.yaml. You'll still need to fill in the tariff and the "
+                    "other Predbat settings."
+                ),
+                title="Predbat config generated",
+                notification_id="givenergy_predbat_config",
+            )
+
         hass.services.async_register(
             DOMAIN,
             SERVICE_CAPTURE_FRAMES,
             handle_capture_frames,
             SERVICE_CAPTURE_FRAMES_SCHEMA,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_GENERATE_PREDBAT_CONFIG,
+            handle_generate_predbat_config,
         )
         hass.services.async_register(
             DOMAIN,
@@ -920,6 +962,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_remove(DOMAIN, SERVICE_CALIBRATE_BATTERY_SOC)
         hass.services.async_remove(DOMAIN, SERVICE_SET_SYSTEM_DATETIME)
         hass.services.async_remove(DOMAIN, SERVICE_CAPTURE_FRAMES)
+        hass.services.async_remove(DOMAIN, SERVICE_GENERATE_PREDBAT_CONFIG)
         hass.services.async_remove(DOMAIN, SERVICE_REDETECT_PLANT)
         hass.services.async_remove(DOMAIN, SERVICE_EXPOSE_RECOMMENDED_ENTITIES)
 
