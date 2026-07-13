@@ -224,14 +224,21 @@
     }
     return Promise.all(
       names.map(function (name) {
-        if (customElements.get(name)) return null; // already registered -- no wait
-        return new Promise(function (resolve) {
-          var timer = setTimeout(resolve, timeoutMs);
-          customElements.whenDefined(name).then(function () {
-            clearTimeout(timer);
-            resolve();
-          }, function () {});
-        });
+        try {
+          if (customElements.get(name)) return null; // already registered -- no wait
+          return new Promise(function (resolve) {
+            var timer = setTimeout(resolve, timeoutMs);
+            customElements.whenDefined(name).then(function () {
+              clearTimeout(timer);
+              resolve();
+            }, function () {});
+          });
+        } catch (e) {
+          // Pathological environment (e.g. a browser that throws on the lookup) --
+          // proceed without waiting; the later haveCard() check fails closed to
+          // the placeholder, matching its own defensive try/catch.
+          return null;
+        }
       })
     );
   }
