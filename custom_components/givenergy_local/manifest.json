@@ -13,7 +13,7 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/dewet22/givenergy-hass/issues",
   "requirements": [
-    "givenergy-modbus==2.12.2"
+    "givenergy-modbus==2.13.0"
   ],
   "version": "1.1.0"
 }

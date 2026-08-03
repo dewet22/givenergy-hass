@@ -418,6 +418,61 @@ def _reconcile_per_cell_entities(hass: HomeAssistant, entry: ConfigEntry) -> Non
             registry.async_remove(ent.entity_id)
 
 
+def _reconcile_pv_string_vi_sensors(
+    hass: HomeAssistant, coordinator: GivEnergyUpdateCoordinator
+) -> None:
+    """Remove per-string PV voltage/current rows where PV is metered AC-side (#281).
+
+    Introduced: v1.4.10 (2026-08). Ongoing while the suppression exists (cheap
+    no-op once rows are gone).
+
+    givenergy-modbus 2.13.0 returns None for v_pv1/v_pv2/i_pv1/i_pv2 on AC-coupled
+    and All-in-One models, where the registers carry an AC-side measurement rather
+    than a DC string (modbus#414). The sensor platform's skip_if_none gate stops
+    creating them, but on an upgraded entry HA keeps the pre-existing rows — four
+    permanently-unknown orphans reporting a mains voltage under a PV-string name,
+    which is exactly the mislabelling the suppression exists to end.
+
+    Reuses the platform's own gate rather than re-deriving the model logic, so a
+    later upstream widening (AC_3PH is deliberately not covered today) needs no
+    change here.
+    """
+    # Local imports: the platform imports from this package, so a module-scope import
+    # risks a load-order cycle (Model follows the convention used above).
+    from givenergy_modbus.model.inverter import Model
+
+    from .sensor import _PV_STRING_VI_KEYS, INVERTER_SENSORS, _include_inverter_sensor
+
+    # A partial seed poll serves last-good with last_partial_failures set, so a None
+    # read may be a transient bank failure rather than structural absence — removing
+    # rows then would destroy history on a healthy DC hybrid. Reconcile only on a
+    # clean seed, mirroring _reconcile_readability_gated_controls.
+    if coordinator.last_partial_failures:
+        return
+
+    capabilities = coordinator.data.capabilities
+    is_three_phase = bool(capabilities) and capabilities.is_three_phase
+    is_aio = bool(capabilities) and capabilities.device_type is Model.ALL_IN_ONE
+    inverter = coordinator.data.inverter
+    serial = coordinator.data.inverter_serial_number
+    registry = er.async_get(hass)
+    for description in INVERTER_SENSORS:
+        if description.key not in _PV_STRING_VI_KEYS:
+            continue
+        if _include_inverter_sensor(
+            description, inverter, is_three_phase, is_aio, coordinator.data.ems is not None
+        ):
+            continue
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{serial}_{description.key}")
+        if entity_id is not None:
+            _LOGGER.info(
+                "Removing %s: this model meters PV on the AC side, so the per-string "
+                "voltage/current is not a string measurement (#281)",
+                entity_id,
+            )
+            registry.async_remove(entity_id)
+
+
 def _reconcile_ac_coupled_dc_limits(
     hass: HomeAssistant, coordinator: GivEnergyUpdateCoordinator
 ) -> None:
