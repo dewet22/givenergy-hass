@@ -108,7 +108,8 @@ def _build_plant(entities: Iterable[Any], devices: Iterable[Any]) -> _Plant:
 # Single-inverter (hybrid / AC-coupled). Resolved against the inverter's keys, with
 # the battery device's keys merged in for soc. AC-coupled rate maps to the AC pair
 # (HR313/314); on a pure hybrid that key is absent so the line auto-omits (its rate
-# control is the HR111/112 C-rate — a #281 follow-up). PV auto-omits on AC-coupled.
+# control is the HR111/112 C-rate — a #281 follow-up). PV wires on both topologies —
+# an AC-coupled unit meters generation AC-side rather than from a DC string (#281).
 _SINGLE_INVERTER_MAP: tuple[tuple[str, str], ...] = (
     ("soc_percent", "battery_soc"),
     ("soc_kw", "soc_kwh"),
@@ -276,17 +277,23 @@ def generate_apps_yaml(
         pv_note: list[str] = []
         unmappable: dict[str, str] = {}
         if ac:
-            # An AC-coupled unit has no PV of its own; don't wire its ~0 readings.
-            mapping = tuple(
-                (f, k) for (f, k) in _SINGLE_INVERTER_MAP if f not in ("pv_power", "pv_today")
-            )
+            # PV IS wired on AC-coupled, contrary to the original assumption (#281).
+            # These units have no DC string, but they do meter generation on the AC
+            # side and report it through the PV registers: across the fixture corpus
+            # v_pv1 tracks v_ac1 to within a volt on every AC/AIO unit (243.1 vs
+            # 242.7, 245.7 vs 245.7) while a genuine DC hybrid reads an independent
+            # 325-372 V, and their lifetime e_pv_total figures are large and real.
+            # Confirmed live on a GIV-AC3.0 (hass#281): 1355 W at 244.0 V / 5.5 A.
+            # An install with no generation CT fitted reads zero — hence the caveat
+            # rather than an unconditional wiring.
             pv_note = [
-                "  # An AC-coupled inverter has no PV of its own — point these at your SEPARATE",
-                "  # PV inverter's sensors:",
-                "  # pv_today:",
-                "  # - sensor.<your_pv_inverter>_energy_today",
-                "  # pv_power:",
-                "  # - sensor.<your_pv_inverter>_power",
+                "  # NB: this inverter has no DC PV string — the figures above are generation",
+                "  # metered on the AC side, which is why the reported string voltage tracks",
+                "  # your mains voltage. They are real; sanity-check them against your solar",
+                "  # inverter once. If they stay at zero WHILE your solar inverter is",
+                "  # generating, no generation CT is fitted on your install — point",
+                "  # pv_today/pv_power at your separate PV inverter instead. (Zero overnight",
+                "  # is simply zero generation, not a missing CT.)",
             ]
         else:
             # Hybrid rate is the HR111/112 C-rate — omit with an explanatory comment

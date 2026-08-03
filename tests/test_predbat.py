@@ -93,7 +93,7 @@ def test_single_hybrid_maps_controls_and_telemetry():
     assert "# discharge_rate_percent: hybrid rate is the HR111/112 C-rate" in out
 
 
-def test_ac_coupled_wires_rate_to_ac_pair_and_flags_pv():
+def test_ac_coupled_wires_rate_to_ac_pair_and_caveats_pv():
     keys = _HYBRID_INV_KEYS + _AC_EXTRA_KEYS
     ents = _entities("AC1", keys, "dev_inv") + _entities("BAT1", _BAT_KEYS, "dev_bat")
     devs = [_dev("dev_inv", "AC1"), _dev("dev_bat", "BAT1", via="dev_inv")]
@@ -103,15 +103,26 @@ def test_ac_coupled_wires_rate_to_ac_pair_and_flags_pv():
     # rate% maps to the AC pair (HR313/314)
     assert "charge_rate_percent:\n  - sensor.giv_ac1_battery_charge_limit_ac" in out
     assert "discharge_rate_percent:\n  - sensor.giv_ac1_battery_discharge_limit_ac" in out
-    # PV is not wired from the AC unit; the user is pointed at their PV inverter
-    assert "AC-coupled inverter has no PV of its own" in out
-    assert "sensor.giv_ac1_e_pv_day" not in out  # not wired
+    # PV IS wired on AC-coupled (#281): these units meter generation AC-side, so the
+    # readings are real — carrying a caveat for installs with no generation CT fitted.
+    assert "pv_today:\n  - sensor.giv_ac1_e_pv_day" in out
+    assert "pv_power:\n  - sensor.giv_ac1_p_pv" in out
+    # the caveat must carry BOTH halves: what the figures are, and what to do when
+    # they read zero (no generation CT fitted) — either half can regress alone.
+    assert "metered on the AC side" in out
+    assert "no generation CT is fitted" in out
+    assert "separate PV inverter" in out
+    # and the zero reading must stay qualified: zero overnight is just zero
+    # generation, so an unqualified "zero means no CT" would send users to rip out
+    # a perfectly good mapping.
+    assert "WHILE your solar inverter is" in out
+    assert "Zero overnight" in out
 
 
 def test_ac_coupled_detected_even_when_rate_entity_disabled():
     # battery_charge_limit_ac present but DISABLED: topology must still read as
-    # AC-coupled from the full key set, so PV isn't wired to the AC unit's ~0 sensors
-    # and the hybrid C-rate path isn't taken.
+    # AC-coupled from the full key set, so the AC PV caveat is emitted and the
+    # hybrid C-rate path isn't taken.
     ents = _entities("AC1", _HYBRID_INV_KEYS, "dev_inv")
     ents.append(_ent("AC1", "battery_charge_limit_ac", "dev_inv", disabled=True))
     ents.append(_ent("AC1", "battery_discharge_limit_ac", "dev_inv", disabled=True))
@@ -120,9 +131,10 @@ def test_ac_coupled_detected_even_when_rate_entity_disabled():
 
     out = generate_apps_yaml(ents, devs)
 
-    assert "AC-coupled inverter has no PV of its own" in out  # took the AC path
+    assert "metered on the AC side" in out  # took the AC path
+    assert "no generation CT is fitted" in out  # with the zero-reading fallback
     assert "HR111/112 C-rate" not in out  # not the hybrid path
-    assert "sensor.giv_ac1_e_pv_day" not in out  # PV not wired
+    assert "pv_today:\n  - sensor.giv_ac1_e_pv_day" in out  # PV wired
 
 
 def test_soc_falls_back_to_battery_device_when_inverter_soc_disabled():
