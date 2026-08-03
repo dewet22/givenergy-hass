@@ -8,6 +8,8 @@ __pycache__/
 dist/
 *.egg-info/
 .env
+# direnv: .envrc is checked in and must stay secret-free; local values live here.
+.envrc.local
 .DS_Store
 
 .coverage
