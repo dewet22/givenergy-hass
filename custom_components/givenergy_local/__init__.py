@@ -79,6 +79,7 @@ from .migrations import (
     _reconcile_per_cell_entities,
     _reconcile_pv_string_vi_sensors,
     _reconcile_readability_gated_controls,
+    _reconcile_reclassified_single_phase_sensors,
     _remove_retired_battery_discharge_year,
 )
 from .predbat import generate_apps_yaml
@@ -648,6 +649,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # current sensors report a mains-derived figure under a PV name; the library now
     # returns None for them and the platform skips them — remove the stale rows (#281).
     _reconcile_pv_string_vi_sensors(hass, coordinator)
+
+    # An 8102 now decodes single-phase rather than three-phase, so the sensors only the
+    # three-phase decode populated are no longer created — remove those rows too (#295).
+    _reconcile_reclassified_single_phase_sensors(hass, coordinator)
 
     # When per-cell exposure is off, remove any individual per-cell rows a prior
     # version (or a prior opt-in) created, so the toggle cleans up rather than
