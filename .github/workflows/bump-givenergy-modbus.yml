@@ -45,13 +45,18 @@ jobs:
             exit 1
           fi
           # Route the PR to the branch whose dependency range that minor
-          # version belongs to. Convention: hass v1.0 tracks modbus v2.0,
-          # hass main tracks every later 2.x minor. A 3.x major fails the
-          # routing on purpose — that bump deserves a deliberate decision.
+          # version belongs to. Every 2.x minor now goes to main: the v1.0
+          # maintenance line (which tracked modbus 2.0.x) was retired in
+          # 2026-08, its last release being v1.0.4 in May. A 2.0.x bump is
+          # therefore no longer routable, and a 3.x major fails the routing on
+          # purpose — that bump deserves a deliberate decision.
           major="${NEW%%.*}"
           minor="${NEW#*.}"; minor="${minor%%.*}"
           case "$major.$minor" in
-            2.0) base=v1.0 ;;
+            2.0)
+              echo "::error::givenergy-modbus 2.0.x targeted the retired hass v1.0 line (last release v1.0.4); no branch tracks it"
+              exit 1
+              ;;
             2.*) base=main ;;
             *)
               echo "::error::no target branch configured for givenergy-modbus ${major}.${minor}.x (version $NEW)"
