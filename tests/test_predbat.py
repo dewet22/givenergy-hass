@@ -112,6 +112,11 @@ def test_ac_coupled_wires_rate_to_ac_pair_and_caveats_pv():
     assert "metered on the AC side" in out
     assert "no generation CT is fitted" in out
     assert "separate PV inverter" in out
+    # and the zero reading must stay qualified: zero overnight is just zero
+    # generation, so an unqualified "zero means no CT" would send users to rip out
+    # a perfectly good mapping.
+    assert "WHILE your solar inverter is" in out
+    assert "Zero overnight" in out
 
 
 def test_ac_coupled_detected_even_when_rate_entity_disabled():

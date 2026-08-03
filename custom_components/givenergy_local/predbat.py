@@ -290,8 +290,10 @@ def generate_apps_yaml(
                 "  # NB: this inverter has no DC PV string — the figures above are generation",
                 "  # metered on the AC side, which is why the reported string voltage tracks",
                 "  # your mains voltage. They are real; sanity-check them against your solar",
-                "  # inverter once. If they read zero, no generation CT is fitted on your",
-                "  # install — point pv_today/pv_power at your separate PV inverter instead.",
+                "  # inverter once. If they stay at zero WHILE your solar inverter is",
+                "  # generating, no generation CT is fitted on your install — point",
+                "  # pv_today/pv_power at your separate PV inverter instead. (Zero overnight",
+                "  # is simply zero generation, not a missing CT.)",
             ]
         else:
             # Hybrid rate is the HR111/112 C-rate — omit with an explanatory comment
