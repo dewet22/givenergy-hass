@@ -107,7 +107,11 @@ def test_ac_coupled_wires_rate_to_ac_pair_and_caveats_pv():
     # readings are real — carrying a caveat for installs with no generation CT fitted.
     assert "pv_today:\n  - sensor.giv_ac1_e_pv_day" in out
     assert "pv_power:\n  - sensor.giv_ac1_p_pv" in out
+    # the caveat must carry BOTH halves: what the figures are, and what to do when
+    # they read zero (no generation CT fitted) — either half can regress alone.
     assert "metered on the AC side" in out
+    assert "no generation CT is fitted" in out
+    assert "separate PV inverter" in out
 
 
 def test_ac_coupled_detected_even_when_rate_entity_disabled():
@@ -123,6 +127,7 @@ def test_ac_coupled_detected_even_when_rate_entity_disabled():
     out = generate_apps_yaml(ents, devs)
 
     assert "metered on the AC side" in out  # took the AC path
+    assert "no generation CT is fitted" in out  # with the zero-reading fallback
     assert "HR111/112 C-rate" not in out  # not the hybrid path
     assert "pv_today:\n  - sensor.giv_ac1_e_pv_day" in out  # PV wired
 
