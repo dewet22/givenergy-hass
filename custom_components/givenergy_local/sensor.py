@@ -504,6 +504,16 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda inv: inv.p_pv2,
     ),
+    # The four per-string voltage/current sensors are skip_if_none because
+    # givenergy-modbus 2.13.0 returns None for them on AC-coupled and All-in-One
+    # models: those units have no DC string, and the registers carry an AC-side
+    # measurement instead (the "string" voltage is mains — bit-identical to v_ac1
+    # across an entire AIO capture, while i_pv1 sits pinned as power swings, so
+    # p_pv1 != v_pv1 x i_pv1 there). See hass#281 / modbus#414. The power and
+    # energy members stay live on those models — the generation they report is
+    # real, just metered AC-side. NB the library's suppression does not cover
+    # AC_3PH (its routing lives on SinglePhaseInverter), so a three-phase
+    # AC-coupled install would still surface a mains-derived voltage here.
     GivEnergyInverterSensorDescription(
         key="v_pv1",
         name="PV String 1 Voltage",
@@ -512,6 +522,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda inv: inv.v_pv1,
         entity_category=EntityCategory.DIAGNOSTIC,
+        skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
         key="v_pv2",
@@ -521,6 +532,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda inv: inv.v_pv2,
         entity_category=EntityCategory.DIAGNOSTIC,
+        skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
         key="i_pv1",
@@ -530,6 +542,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda inv: inv.i_pv1,
         entity_category=EntityCategory.DIAGNOSTIC,
+        skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
         key="i_pv2",
@@ -539,6 +552,7 @@ INVERTER_SENSORS: tuple[GivEnergyInverterSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda inv: inv.i_pv2,
         entity_category=EntityCategory.DIAGNOSTIC,
+        skip_if_none=True,
     ),
     GivEnergyInverterSensorDescription(
         key="e_pv_day",
@@ -2440,6 +2454,12 @@ COORDINATOR_SENSORS: tuple[GivEnergyCoordinatorSensorDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
 )
+
+
+# Per-string voltage/current sensors, suppressed where the library reports None
+# because PV is metered AC-side rather than from a DC string (hass#281). Shared
+# with _reconcile_pv_string_vi_sensors so the key set is declared once.
+_PV_STRING_VI_KEYS = frozenset({"v_pv1", "v_pv2", "i_pv1", "i_pv2"})
 
 
 def _include_inverter_sensor(

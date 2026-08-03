@@ -418,6 +418,123 @@ def _reconcile_per_cell_entities(hass: HomeAssistant, entry: ConfigEntry) -> Non
             registry.async_remove(ent.entity_id)
 
 
+def _reconcile_reclassified_single_phase_sensors(
+    hass: HomeAssistant, coordinator: GivEnergyUpdateCoordinator
+) -> None:
+    """Remove three-phase leftovers on a reclassified HYBRID_HV_GEN3 (#295).
+
+    Introduced: v1.4.10 (2026-08, givenergy-modbus 2.13.0). Removal candidate:
+    when upgrades of an 8102 entry from before that pin are presumed extinct.
+
+    givenergy-modbus 2.13.0 reclassified DTC 81 as single-phase, so `plant.inverter`
+    on these units decodes as a `SinglePhaseInverter` where it previously decoded as
+    a `ThreePhaseInverter`. That changes which sensors the platform creates in both
+    directions: six are gained, and seven the three-phase decode populated are no
+    longer included (`battery_maintenance_mode`, `e_battery_charge_total`,
+    `e_battery_discharge_total`, `e_load_total`, `export_power_rate`,
+    `inverter_output_today`, `inverter_output_total` — verified by replaying the
+    reporter's capture through both inclusion paths). Their old values were non-None,
+    so an existing entry registered all seven, and HA keeps the rows when the
+    platform stops adding them — seven permanently-unavailable orphans.
+
+    Scoped to the one reclassified model rather than sweeping every model's
+    no-longer-included sensors: a blanket sweep would delete history wherever a
+    field merely reads None, which is a much larger blast radius than this
+    correction needs. The key set is derived from the platform's own gate rather
+    than hardcoded, so it stays correct if upstream changes which fields decode.
+    """
+    # Local imports: the platform imports from this package, so a module-scope import
+    # risks a load-order cycle (Model follows the convention used above).
+    from givenergy_modbus.model.inverter import Model
+
+    from .sensor import INVERTER_SENSORS, _include_inverter_sensor
+
+    # A partial seed serves last-good, so a None read may be a transient bank failure
+    # rather than the reclassification — removing rows then would destroy history.
+    if coordinator.last_partial_failures:
+        return
+
+    capabilities = coordinator.data.capabilities
+    if capabilities is None or capabilities.device_type is not Model.HYBRID_HV_GEN3:
+        return
+
+    inverter = coordinator.data.inverter
+    serial = coordinator.data.inverter_serial_number
+    registry = er.async_get(hass)
+    for description in INVERTER_SENSORS:
+        if _include_inverter_sensor(
+            description,
+            inverter,
+            capabilities.is_three_phase,
+            False,
+            coordinator.data.ems is not None,
+        ):
+            continue
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{serial}_{description.key}")
+        if entity_id is not None:
+            _LOGGER.info(
+                "Removing %s: this model is single-phase, so the three-phase decode "
+                "that populated it no longer applies (#295)",
+                entity_id,
+            )
+            registry.async_remove(entity_id)
+
+
+def _reconcile_pv_string_vi_sensors(
+    hass: HomeAssistant, coordinator: GivEnergyUpdateCoordinator
+) -> None:
+    """Remove per-string PV voltage/current rows where PV is metered AC-side (#281).
+
+    Introduced: v1.4.10 (2026-08). Ongoing while the suppression exists (cheap
+    no-op once rows are gone).
+
+    givenergy-modbus 2.13.0 returns None for v_pv1/v_pv2/i_pv1/i_pv2 on AC-coupled
+    and All-in-One models, where the registers carry an AC-side measurement rather
+    than a DC string (modbus#414). The sensor platform's skip_if_none gate stops
+    creating them, but on an upgraded entry HA keeps the pre-existing rows — four
+    permanently-unknown orphans reporting a mains voltage under a PV-string name,
+    which is exactly the mislabelling the suppression exists to end.
+
+    Reuses the platform's own gate rather than re-deriving the model logic, so a
+    later upstream widening (AC_3PH is deliberately not covered today) needs no
+    change here.
+    """
+    # Local imports: the platform imports from this package, so a module-scope import
+    # risks a load-order cycle (Model follows the convention used above).
+    from givenergy_modbus.model.inverter import Model
+
+    from .sensor import _PV_STRING_VI_KEYS, INVERTER_SENSORS, _include_inverter_sensor
+
+    # A partial seed poll serves last-good with last_partial_failures set, so a None
+    # read may be a transient bank failure rather than structural absence — removing
+    # rows then would destroy history on a healthy DC hybrid. Reconcile only on a
+    # clean seed, mirroring _reconcile_readability_gated_controls.
+    if coordinator.last_partial_failures:
+        return
+
+    capabilities = coordinator.data.capabilities
+    is_three_phase = bool(capabilities) and capabilities.is_three_phase
+    is_aio = bool(capabilities) and capabilities.device_type is Model.ALL_IN_ONE
+    inverter = coordinator.data.inverter
+    serial = coordinator.data.inverter_serial_number
+    registry = er.async_get(hass)
+    for description in INVERTER_SENSORS:
+        if description.key not in _PV_STRING_VI_KEYS:
+            continue
+        if _include_inverter_sensor(
+            description, inverter, is_three_phase, is_aio, coordinator.data.ems is not None
+        ):
+            continue
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{serial}_{description.key}")
+        if entity_id is not None:
+            _LOGGER.info(
+                "Removing %s: this model meters PV on the AC side, so the per-string "
+                "voltage/current is not a string measurement (#281)",
+                entity_id,
+            )
+            registry.async_remove(entity_id)
+
+
 def _reconcile_ac_coupled_dc_limits(
     hass: HomeAssistant, coordinator: GivEnergyUpdateCoordinator
 ) -> None:

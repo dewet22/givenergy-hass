@@ -1227,3 +1227,126 @@ async def test_reconcile_per_cell_entities_keeps_cells_when_enabled(hass):
     _reconcile_per_cell_entities(hass, entry)
 
     assert registry.async_get_entity_id("sensor", DOMAIN, "BT1234A001_v_cell_01") is not None
+
+
+async def test_upgrade_removes_pv_string_vi_rows_when_pv_is_ac_metered(
+    hass, mock_client, mock_plant, mock_inverter, mock_config_entry
+):
+    """#281: on AC-coupled/AIO models givenergy-modbus 2.13.0 reports the per-string
+    voltage/current as None, because those registers carry an AC-side measurement
+    rather than a DC string. Suppressing creation alone leaves four orphans on an
+    upgraded entry, each reporting a mains-derived figure under a PV-string name."""
+    mock_inverter.v_pv1 = None
+    mock_inverter.v_pv2 = None
+    mock_inverter.i_pv1 = None
+    mock_inverter.i_pv2 = None
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    seeded = ("v_pv1", "v_pv2", "i_pv1", "i_pv2", "p_pv1", "e_pv_day")
+    for key in seeded:
+        registry.async_get_or_create(
+            "sensor", DOMAIN, f"SA1234G123_{key}", config_entry=mock_config_entry
+        )
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    def _present(key: str) -> bool:
+        return registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is not None
+
+    for key in ("v_pv1", "v_pv2", "i_pv1", "i_pv2"):
+        assert not _present(key), f"{key} should be removed where PV is metered AC-side"
+    # The power and energy members are untouched upstream by design: the generation
+    # they report is real, just measured on the AC side. They must survive.
+    assert _present("p_pv1")
+    assert _present("e_pv_day")
+
+
+async def test_pv_string_vi_rows_survive_a_partial_seed(hass, setup_integration):
+    """A partial poll serves last-good, so a None read may be a transient bank failure
+    rather than an AC-metered model — removing rows then would destroy a healthy DC
+    hybrid's history. Mirrors the readability-gated guard."""
+    from custom_components.givenergy_local import _reconcile_pv_string_vi_sensors
+
+    coordinator = hass.data[DOMAIN][setup_integration.entry_id]
+    coordinator.last_partial_failures = [object()]  # partial seed
+    coordinator.data.inverter.v_pv1 = None  # reads None (transient)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_v_pv1", config_entry=setup_integration
+    )
+
+    _reconcile_pv_string_vi_sensors(hass, coordinator)
+
+    assert registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_v_pv1") is not None
+
+
+async def test_pv_string_vi_sensors_kept_on_a_dc_hybrid(hass, setup_integration):
+    """The default (DC hybrid) fixture reports real string voltages and currents, so
+    all four must survive — the suppression is model-scoped, not blanket."""
+    registry = er.async_get(hass)
+    for key in ("v_pv1", "v_pv2", "i_pv1", "i_pv2"):
+        assert registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is not None, (
+            f"{key} should survive on a DC hybrid with real strings"
+        )
+
+
+async def test_upgrade_removes_three_phase_rows_on_a_reclassified_8102(
+    hass, mock_client, mock_plant, mock_inverter, mock_config_entry
+):
+    """#295: givenergy-modbus 2.13.0 reclassified DTC 81 as single-phase, so the
+    sensors only the three-phase decode populated are no longer created. Suppressing
+    creation alone leaves them as permanently-unavailable orphans on an upgraded entry.
+    """
+    from givenergy_modbus.model.inverter import Model
+    from givenergy_modbus.model.plant import PlantCapabilities
+
+    mock_client.plant.capabilities = PlantCapabilities(
+        device_type=Model.HYBRID_HV_GEN3,
+        inverter_address=0x11,
+        meter_addresses=[],
+        lv_battery_addresses=[],
+        bcu_stacks=[],
+    )
+    # Fields the three-phase decode populated but the single-phase one does not.
+    mock_inverter.export_power_rate = None
+    mock_inverter.e_load_total = None
+
+    mock_config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    seeded = ("export_power_rate", "e_load_total", "battery_soc")
+    for key in seeded:
+        registry.async_get_or_create(
+            "sensor", DOMAIN, f"SA1234G123_{key}", config_entry=mock_config_entry
+        )
+
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    def _present(key: str) -> bool:
+        return registry.async_get_entity_id("sensor", DOMAIN, f"SA1234G123_{key}") is not None
+
+    assert not _present("export_power_rate"), "three-phase-only row should be removed"
+    assert not _present("e_load_total"), "three-phase-only row should be removed"
+    # A sensor the single-phase decode still populates must survive.
+    assert _present("battery_soc")
+
+
+async def test_reclassified_rows_survive_a_partial_seed(hass, setup_integration):
+    """Same clean-seed guard as the sibling reconcilers: a partial poll's None read is
+    a transient bank failure, not a reclassification."""
+    from custom_components.givenergy_local import _reconcile_reclassified_single_phase_sensors
+
+    coordinator = hass.data[DOMAIN][setup_integration.entry_id]
+    coordinator.last_partial_failures = [object()]
+    coordinator.data.inverter.export_power_rate = None
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "sensor", DOMAIN, "SA1234G123_export_power_rate", config_entry=setup_integration
+    )
+
+    _reconcile_reclassified_single_phase_sensors(hass, coordinator)
+
+    assert (
+        registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_export_power_rate") is not None
+    )
