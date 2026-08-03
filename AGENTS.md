@@ -80,8 +80,9 @@ Public-text rules apply: these issues are public OSS, so draft the body and get 
 before filing, and redact real serial numbers / network details from captures.
 
 ## Release track
+
 - **`main`** — the only release line. Each release exact-pins a givenergy-modbus
-  version (`==X.Y.Z`); `pyproject.toml` is the current one. Pre-releases use
+  version (`==X.Y.Z`); the current pin is in `pyproject.toml`. Pre-releases use
   `rcN`/`aN`/`bN` suffixes.
 
 The **`v1.0`** maintenance line (1.0.x, pinned to givenergy-modbus 2.0.x) was retired

@@ -45,11 +45,11 @@ jobs:
             exit 1
           fi
           # Route the PR to the branch whose dependency range that minor
-          # version belongs to. Every 2.x minor now goes to main: the v1.0
-          # maintenance line (which tracked modbus 2.0.x) was retired in
-          # 2026-08, its last release being v1.0.4 in May. A 2.0.x bump is
-          # therefore no longer routable, and a 3.x major fails the routing on
-          # purpose — that bump deserves a deliberate decision.
+          # version belongs to. Every 2.x minor except 2.0 goes to main. The
+          # v1.0 maintenance line (which tracked modbus 2.0.x) was retired in
+          # 2026-08, its last release being v1.0.4 in May, so a 2.0.x bump is
+          # no longer routable and fails below. A 3.x major fails the routing
+          # on purpose too — that bump deserves a deliberate decision.
           major="${NEW%%.*}"
           minor="${NEW#*.}"; minor="${minor%%.*}"
           case "$major.$minor" in
