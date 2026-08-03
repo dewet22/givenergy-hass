@@ -79,9 +79,16 @@ the hass-side change and wait for the sister repo's pre-release before wiring it
 Public-text rules apply: these issues are public OSS, so draft the body and get sign-off
 before filing, and redact real serial numbers / network details from captures.
 
-## Release tracks
-- **`main`** — 1.1.x line, pinned to givenergy-modbus 2.1.x. Pre-releases use `rcN`/`aN`/`bN` suffixes.
-- **`v1.0`** branch — 1.0.x stable/maintenance line, pinned to givenergy-modbus 2.0.x.
+## Release track
+
+- **`main`** — the only release line. Each release exact-pins a givenergy-modbus
+  version (`==X.Y.Z`); the current pin is in `pyproject.toml`. Pre-releases use
+  `rcN`/`aN`/`bN` suffixes.
+
+The **`v1.0`** maintenance line (1.0.x, pinned to givenergy-modbus 2.0.x) was retired
+in August 2026, its last release being v1.0.4 in May. Its tags and releases stay
+published, so existing installs are unaffected — there is simply no branch to cut
+further 1.0.x patches from, and the dependency bumper no longer routes to one.
 
 Releases are **tag-driven**: push an annotated `v*` tag and `release.yml` builds and
 publishes the HACS zip. The tag message becomes the release blurb. A lightweight
