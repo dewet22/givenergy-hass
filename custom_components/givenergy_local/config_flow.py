@@ -21,14 +21,18 @@ from .const import (
     CONF_EXPERIMENTAL,
     CONF_EXPOSE_PER_CELL,
     CONF_PASSIVE,
+    CONF_RECONNECT_BACKOFF,
     CONF_SCAN_INTERVAL,
     CONF_WARN_CLOCK_DRIFT,
     DEFAULT_BATTERY_DATA_ONLY,
     DEFAULT_PORT,
+    DEFAULT_RECONNECT_BACKOFF,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_WARN_CLOCK_DRIFT,
     DOMAIN,
     EXPERIMENTAL_FEATURES,
+    MAX_RECONNECT_BACKOFF,
+    MIN_RECONNECT_BACKOFF,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -209,6 +213,15 @@ class GivEnergyLocalOptionsFlow(OptionsFlowWithReload):
         existing_exp: dict[str, Any] = self.config_entry.options.get(CONF_EXPERIMENTAL) or {}
         section_schema: dict[Any, Any] = {
             vol.Optional(CONF_PASSIVE, default=existing_exp.get(CONF_PASSIVE, False)): bool,
+            # Reconnect quiet window (#95): floor 120s, not clamped — an out-of-range
+            # value is refused so the user sees the bound rather than a silent adjustment.
+            vol.Optional(
+                CONF_RECONNECT_BACKOFF,
+                default=existing_exp.get(CONF_RECONNECT_BACKOFF, DEFAULT_RECONNECT_BACKOFF),
+            ): vol.All(
+                vol.Coerce(int),
+                vol.Range(min=MIN_RECONNECT_BACKOFF, max=MAX_RECONNECT_BACKOFF),
+            ),
         }
         section_schema.update(
             {

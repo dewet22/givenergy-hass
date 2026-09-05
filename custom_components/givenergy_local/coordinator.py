@@ -21,7 +21,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from .const import DEFAULT_RECONNECT_BACKOFF, DOMAIN
 
 InverterModel = SinglePhaseInverter | ThreePhaseInverter
 
@@ -103,7 +103,10 @@ RECONNECT_PROBE_RETRIES = 1
 # given the evidence for a specific duration is thin; the Dongle Hangs / Reconnect
 # Backoffs diagnostics let us tune it on real data.
 BACKOFF_AFTER_PROBE_FAILURES = 2
-RECONNECT_BACKOFF_FLOOR = 120.0  # seconds
+# Single source of truth is const.DEFAULT_RECONNECT_BACKOFF (the options-flow
+# default and floor); this alias keeps the coordinator usable without the
+# options plumbing (tests, direct construction).
+RECONNECT_BACKOFF_FLOOR = float(DEFAULT_RECONNECT_BACKOFF)  # seconds
 
 # When detect() reports a DEVICE LOSS (a previously-known battery/meter/stack
 # stopped answering), re-probe a few times before believing it — a slow BMS
@@ -184,6 +187,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         port: int,
         scan_interval: int,
         passive: bool = False,
+        reconnect_backoff_seconds: float = RECONNECT_BACKOFF_FLOOR,
         experimental_client_kwargs: dict[str, Any] | None = None,
         timeout_tolerance: int = 3,
         retries: int = 1,
@@ -206,6 +210,8 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
         # default; an Advanced-features opt-in for a side-by-side rig (e.g. GivTCP
         # actively polling a marginal Gateway dongle while we only listen).
         self.passive = passive
+        # Quiet-window floor for the reconnect backoff (#95, user-tunable per entry).
+        self.reconnect_backoff_seconds = reconnect_backoff_seconds
         # Resolved opt-in givenergy-modbus client kwargs (empty by default, so
         # Client(host, port) is unchanged). Splatted at every (re)connect.
         self._experimental_client_kwargs = experimental_client_kwargs or {}
@@ -636,7 +642,7 @@ class GivEnergyUpdateCoordinator(DataUpdateCoordinator[Plant]):
                             self.update_interval.total_seconds() if self.update_interval else 0.0
                         )
                         self._reconnect_backoff_until = asyncio.get_running_loop().time() + max(
-                            RECONNECT_BACKOFF_FLOOR, interval
+                            self.reconnect_backoff_seconds, interval
                         )
                     raise TimeoutError("inverter did not answer the reconnect liveness probe")
                 # Probe answered: the dongle is alive. Clear the hang state now —

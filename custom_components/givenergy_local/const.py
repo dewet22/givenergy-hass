@@ -108,6 +108,14 @@ CONF_EXPERIMENTAL = "experimental"
 # coordinator flag, not a Client(...) kwarg — so it's read directly, not via
 # resolve_experimental_client_kwargs. Off by default (#280/#256 revival).
 CONF_PASSIVE = "passive"
+# Reconnect quiet window (#95): seconds to hold off reconnecting after two
+# consecutive failed liveness probes, so a marginal dongle can recover. Lives in
+# the same section as a tunable number; 120s is both the default and the floor
+# (below that a 60s-polled Gateway would get no real breather).
+CONF_RECONNECT_BACKOFF = "reconnect_backoff_seconds"
+DEFAULT_RECONNECT_BACKOFF = 120
+MIN_RECONNECT_BACKOFF = 120
+MAX_RECONNECT_BACKOFF = 3600
 
 
 @dataclass(frozen=True)

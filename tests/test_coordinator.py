@@ -1643,3 +1643,25 @@ async def test_experimental_kwargs_forwarded_to_client(hass):
         "port": 8899,
         "demo_kwarg": 5.0,
     }
+
+
+async def test_backoff_window_honours_configured_quiet_seconds(hass, mock_plant):
+    """#95: the quiet window is tunable per entry. A configured 300s must widen the
+    backoff beyond the 120s default (and beyond the poll interval)."""
+    coordinator = GivEnergyUpdateCoordinator(
+        hass, "192.168.1.1", 8899, 30, reconnect_backoff_seconds=300
+    )
+    coordinator.data = mock_plant  # reconnect path
+
+    with patch("custom_components.givenergy_local.coordinator.Client") as mock_cls:
+        client = AsyncMock()
+        client.connected = True
+        client.plant = mock_plant
+        client.probe_alive = AsyncMock(return_value=False)  # hung dongle
+        mock_cls.return_value = client
+
+        await coordinator._async_update_data()
+        before = asyncio.get_running_loop().time()
+        await coordinator._async_update_data()  # second hang arms the backoff
+
+    assert coordinator._reconnect_backoff_until >= before + 300

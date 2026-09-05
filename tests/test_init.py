@@ -1350,3 +1350,16 @@ async def test_reclassified_rows_survive_a_partial_seed(hass, setup_integration)
     assert (
         registry.async_get_entity_id("sensor", DOMAIN, "SA1234G123_export_power_rate") is not None
     )
+
+
+async def test_reconnect_backoff_option_reaches_coordinator(hass, mock_client, mock_config_entry):
+    """#95: the Advanced-features quiet window is threaded from options to the coordinator."""
+    mock_config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        mock_config_entry, options={"experimental": {"reconnect_backoff_seconds": 300}}
+    )
+    assert await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    coordinator = hass.data[DOMAIN][mock_config_entry.entry_id]
+    assert coordinator.reconnect_backoff_seconds == 300
