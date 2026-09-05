@@ -169,3 +169,24 @@ def test_smart_load_slot_getter_returns_none_when_field_absent():
 
     getter = _smart_load_slot_getter(1)
     assert getter(_ModelWithoutSmartLoad()) is None
+
+
+async def test_set_cleared_charge_slot_still_writes(
+    hass, mock_client, mock_plant, mock_inverter, mock_config_entry
+):
+    """#315: a valid-but-unset slot decodes to None (raw-60 sentinel). The write must
+    still go out — the register exists — or a cleared slot can never be set again."""
+    mock_inverter.charge_slot_1 = None
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    entity_id = _entity_id(hass, "SA1234G123_charge_slot_1_start")
+    assert hass.states.get(entity_id).state == "unknown"
+
+    await hass.services.async_call(
+        "time", "set_value", {"entity_id": entity_id, "time": "23:35:00"}, blocking=True
+    )
+    mock_client.one_shot_command.assert_called_once()
+    (cmd,) = mock_client.one_shot_command.call_args[0][0]
+    assert (cmd.register, cmd.value) == (94, 2335)  # HR94 = charge slot 1 start, HHMM
