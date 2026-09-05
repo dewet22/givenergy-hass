@@ -96,10 +96,14 @@ publishes the HACS zip. The tag message becomes the release blurb. A lightweight
 explicit user confirmation — do not do either without it.
 
 ## PR workflow
-- PRs are automatically reviewed by **Codex** (`dewet22-codex`). Do not merge before
-  its review lands — absence of feedback is not approval.
-- When reviewers leave inline comments, use the `/address-review` skill to work through
-  them (reply to each thread and resolve) rather than ad-hoc `gh api` calls.
+- Every PR gets a local adversarial review before merge: run the `adversarial-review`
+  skill with both backends (`codex exec` and `ocr review`) against the branch, and work
+  through every finding — fix it or rebut it with evidence — until both come back clear.
+  That is the review; do not wait on the Codex bot's in-PR review (it is unreliable and
+  no longer the gate).
+- If a bot reviewer (Codex, CodeRabbit) does leave inline comments, use the
+  `/address-review` skill to work through them (reply to each thread and resolve) rather
+  than ad-hoc `gh api` calls.
 - For any text posted in public under the user's name (issue comments, tag messages, PR
   bodies), show a draft and wait for explicit sign-off before posting or creating the
   artefact.
