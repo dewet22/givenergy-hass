@@ -360,7 +360,11 @@ async def test_options_flow_persists_experimental_toggle(hass, mock_client, setu
         await hass.async_block_till_done()
 
     assert result["type"] == "create_entry"
-    assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": True, "passive": False}
+    assert setup_integration.options[CONF_EXPERIMENTAL] == {
+        "demo": True,
+        "passive": False,
+        "reconnect_backoff_seconds": 120,
+    }
 
 
 async def test_options_flow_preserves_experimental_when_section_omitted(
@@ -391,7 +395,11 @@ async def test_options_flow_preserves_experimental_when_section_omitted(
     assert result["type"] == "create_entry"
     assert setup_integration.options[CONF_BATTERY_DATA_ONLY] is True
     # The experimental flag must survive the second save unmodified.
-    assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": True, "passive": False}
+    assert setup_integration.options[CONF_EXPERIMENTAL] == {
+        "demo": True,
+        "passive": False,
+        "reconnect_backoff_seconds": 120,
+    }
 
 
 async def test_options_flow_explicit_false_disables_experimental_flag(
@@ -421,7 +429,11 @@ async def test_options_flow_explicit_false_disables_experimental_flag(
         await hass.async_block_till_done()
 
     assert result["type"] == "create_entry"
-    assert setup_integration.options[CONF_EXPERIMENTAL] == {"demo": False, "passive": False}
+    assert setup_integration.options[CONF_EXPERIMENTAL] == {
+        "demo": False,
+        "passive": False,
+        "reconnect_backoff_seconds": 120,
+    }
 
 
 async def test_options_flow_renders_section_with_only_passive_when_no_features(
@@ -484,3 +496,33 @@ async def test_options_flow_saves_without_touching_experimental_section(
         await hass.async_block_till_done()
     assert result["type"] == "create_entry"
     assert setup_integration.options[CONF_BATTERY_DATA_ONLY] is True
+
+
+async def test_options_flow_persists_reconnect_backoff_seconds(
+    hass, mock_client, setup_integration
+):
+    """#95: the reconnect quiet window is an Advanced-features number, saved in the section."""
+    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_BATTERY_DATA_ONLY: False, CONF_EXPERIMENTAL: {"reconnect_backoff_seconds": 300}},
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert setup_integration.options[CONF_EXPERIMENTAL]["reconnect_backoff_seconds"] == 300
+
+
+async def test_options_flow_rejects_reconnect_backoff_below_floor(
+    hass, mock_client, setup_integration
+):
+    """#95: 120s is the floor — a shorter window is refused, not silently clamped."""
+    import pytest
+    from homeassistant.data_entry_flow import InvalidData
+
+    result = await hass.config_entries.options.async_init(setup_integration.entry_id)
+    with pytest.raises(InvalidData):
+        await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {CONF_BATTERY_DATA_ONLY: False, CONF_EXPERIMENTAL: {"reconnect_backoff_seconds": 60}},
+        )

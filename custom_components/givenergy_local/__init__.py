@@ -36,11 +36,13 @@ from .const import (
     CONF_BATTERY_DATA_ONLY,
     CONF_EXPERIMENTAL,
     CONF_PASSIVE,
+    CONF_RECONNECT_BACKOFF,
     CONF_RETRIES,
     CONF_SCAN_INTERVAL,
     CONF_TIMEOUT_TOLERANCE,
     CONF_WARN_CLOCK_DRIFT,
     DEFAULT_BATTERY_DATA_ONLY,
+    DEFAULT_RECONNECT_BACKOFF,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_WARN_CLOCK_DRIFT,
     DOMAIN,
@@ -564,7 +566,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     experimental_client_kwargs = resolve_experimental_client_kwargs(entry.options)
     # Passive (listen-only) mode is an Advanced-features opt-in in the same section,
     # but a coordinator flag rather than a client kwarg, so read it directly (#280).
-    passive = bool((entry.options.get(CONF_EXPERIMENTAL) or {}).get(CONF_PASSIVE, False))
+    experimental_section = entry.options.get(CONF_EXPERIMENTAL) or {}
+    passive = bool(experimental_section.get(CONF_PASSIVE, False))
+    reconnect_backoff_seconds = int(
+        experimental_section.get(CONF_RECONNECT_BACKOFF, DEFAULT_RECONNECT_BACKOFF)
+    )
 
     coordinator = GivEnergyUpdateCoordinator(
         hass=hass,
@@ -572,6 +578,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         port=entry.data[CONF_PORT],
         scan_interval=entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
         passive=passive,
+        reconnect_backoff_seconds=reconnect_backoff_seconds,
         experimental_client_kwargs=experimental_client_kwargs,
         prior_capabilities=prior_capabilities,
         on_topology_changed=_on_topology_changed,
