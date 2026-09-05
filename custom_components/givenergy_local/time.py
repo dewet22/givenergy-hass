@@ -322,9 +322,12 @@ class GivEnergyTimeEntity(CoordinatorEntity[GivEnergyUpdateCoordinator], TimeEnt
         client = self.coordinator._client
         if client is None or not client.connected:
             return
+        # No gate on slot_fn: a cleared slot decodes to None (raw-60 sentinel)
+        # exactly like an absent register, and refusing the write would make a
+        # cleared slot unrecoverable (#315). Where presence is checked at all it's
+        # decided at creation time (skip_if_none/readable_fn; Smart Load slots are
+        # created unconditionally, #273); the setter writes only the target register.
         inverter = self.coordinator.data.inverter
-        if self.entity_description.slot_fn(inverter) is None:
-            return
         await client.one_shot_command(self.entity_description.setter_fn(value, inverter))
         await self.coordinator.async_request_refresh()
 
